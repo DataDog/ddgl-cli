@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import pytest
+
+from ddgl.config import Config, ConfigError, load_config
+
+
+class TestConfig:
+    def test_api_url(self) -> None:
+        cfg = Config(gitlab_url="https://gitlab.example.com", private_token="tok")
+        assert cfg.api_url == "https://gitlab.example.com/api/v4"
+
+    def test_api_url_strips_trailing_slash(self) -> None:
+        cfg = Config(gitlab_url="https://gitlab.example.com/", private_token="tok")
+        assert cfg.api_url == "https://gitlab.example.com/api/v4"
+
+    def test_project_id_defaults_to_none(self) -> None:
+        cfg = Config(gitlab_url="https://gitlab.example.com", private_token="tok")
+        assert cfg.project_id is None
+
+
+class TestLoadConfig:
+    def test_loads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITLAB_PRIVATE_TOKEN", "my-token")
+        monkeypatch.setenv("GITLAB_URL", "https://my-gitlab.internal")
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "123")
+
+        cfg = load_config()
+        assert cfg.private_token == "my-token"
+        assert cfg.gitlab_url == "https://my-gitlab.internal"
+        assert cfg.project_id == "123"
+
+    def test_default_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITLAB_PRIVATE_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+
+        cfg = load_config()
+        assert cfg.gitlab_url == "https://gitlab.com"
+
+    def test_missing_token_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITLAB_PRIVATE_TOKEN", raising=False)
+
+        with pytest.raises(ConfigError, match="GITLAB_PRIVATE_TOKEN"):
+            load_config()
