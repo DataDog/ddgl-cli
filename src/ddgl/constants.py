@@ -4,6 +4,8 @@ from enum import StrEnum
 
 DEFAULT_GITLAB_URL = "https://gitlab.ddbuild.io"
 
+MAX_PAGES = 50
+
 
 class PipelineStatus(StrEnum):
     CREATED = "created"

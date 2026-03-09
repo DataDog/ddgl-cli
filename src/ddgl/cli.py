@@ -30,13 +30,13 @@ async def _pipelines(ref: str | None, count: int) -> None:
         ref = await get_current_branch()
 
     async with GitLabClient(config) as client:
-        items = await client.get_pipelines(ref=ref, per_page=count)
+        page = await client.fetch_pipelines(ref=ref, per_page=count)
 
-    if not items:
+    if not page.items:
         click.echo(f"No pipelines found for ref '{ref}'.")
         return
 
-    for p in items:
+    for p in page.items:
         click.echo(f"#{p.id:<12} {p.status:<12} {p.ref}")
 
 
