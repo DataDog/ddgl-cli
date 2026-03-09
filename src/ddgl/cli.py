@@ -37,9 +37,7 @@ async def _pipelines(ref: str | None, count: int) -> None:
         return
 
     for p in items:
-        status = p["status"]
-        pid = p["id"]
-        click.echo(f"#{pid:<12} {status:<12} {p.get('ref', '')}")
+        click.echo(f"#{p.id:<12} {p.status:<12} {p.ref}")
 
 
 @main.command()

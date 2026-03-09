@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from ddgl.constants import JobStatus, PipelineStatus
+from ddgl.model.job import Job
+from ddgl.model.log import JobLog
+from ddgl.model.pipeline import Pipeline
+
+
+class TestPipeline:
+    def _make(self, **overrides: object) -> Pipeline:
+        defaults: dict[str, object] = {
+            "id": 1, "ref": "main",
+            "status": PipelineStatus.SUCCESS, "sha": "abc",
+        }
+        return Pipeline(**(defaults | overrides))
+
+    def test_from_api(self) -> None:
+        data = {
+            "id": 1, "ref": "main", "status": "success", "sha": "abc",
+            "web_url": "https://example.com", "duration": 120,
+            "extra_field": "ignored",
+        }
+        p = Pipeline.from_api(data)
+        assert p.id == 1
+        assert p.status is PipelineStatus.SUCCESS
+        assert p.duration == 120
+
+    def test_is_running(self) -> None:
+        p = self._make(status=PipelineStatus.RUNNING)
+        assert p.is_running is True
+        assert p.is_finished is False
+
+    def test_is_finished(self) -> None:
+        p = self._make(status=PipelineStatus.SUCCESS)
+        assert p.is_finished is True
+        assert p.is_running is False
+
+    def test_elapsed_finished(self) -> None:
+        p = self._make(
+            created_at="2025-01-01T00:00:00+00:00",
+            finished_at="2025-01-01T00:05:00+00:00",
+        )
+        assert p.elapsed is not None
+        assert p.elapsed.total_seconds() == 300
+
+    def test_elapsed_none_without_created_at(self) -> None:
+        p = self._make(created_at="")
+        assert p.elapsed is None
+
+
+class TestJob:
+    def _make(self, **overrides: object) -> Job:
+        defaults: dict[str, object] = {
+            "id": 1, "name": "build", "stage": "build",
+            "status": JobStatus.SUCCESS, "ref": "main",
+        }
+        return Job(**(defaults | overrides))
+
+    def test_from_api(self) -> None:
+        data = {
+            "id": 10, "name": "test", "stage": "test",
+            "status": "failed", "ref": "main",
+            "failure_reason": "script_failure",
+            "pipeline": {"id": 1},  # extra nested data ignored
+        }
+        j = Job.from_api(data)
+        assert j.name == "test"
+        assert j.status is JobStatus.FAILED
+        assert j.failure_reason == "script_failure"
+
+    def test_is_running(self) -> None:
+        j = self._make(status=JobStatus.RUNNING)
+        assert j.is_running is True
+
+    def test_has_failed(self) -> None:
+        j = self._make(status=JobStatus.FAILED)
+        assert j.has_failed is True
+
+    def test_not_failed_when_success(self) -> None:
+        j = self._make(status=JobStatus.SUCCESS)
+        assert j.has_failed is False
+
+
+class TestJobLog:
+    def test_ansi_stripping(self) -> None:
+        raw = "\x1b[32mGreen text\x1b[0m normal"
+        log = JobLog(raw)
+        assert log.clean == "Green text normal"
+
+    def test_lines(self) -> None:
+        log = JobLog("line1\nline2\nline3")
+        assert log.lines == ["line1", "line2", "line3"]
+
+    def test_section_parsing(self) -> None:
+        raw = (
+            "section_start:1234:my_section\r\x1b[0K\n"
+            "doing work\n"
+            "more work\n"
+            "section_end:1235:my_section\r\x1b[0K\n"
+        )
+        log = JobLog(raw)
+        sections = log.sections
+        assert len(sections) == 1
+        assert sections[0].name == "my_section"
+        assert "doing work" in sections[0].lines
+
+    def test_multiple_sections(self) -> None:
+        raw = (
+            "section_start:1:build\r\n"
+            "compiling\n"
+            "section_end:2:build\r\n"
+            "section_start:3:test\r\n"
+            "testing\n"
+            "section_end:4:test\r\n"
+        )
+        log = JobLog(raw)
+        assert len(log.sections) == 2
+        assert log.sections[0].name == "build"
+        assert log.sections[1].name == "test"
+
+    def test_empty_log(self) -> None:
+        log = JobLog("")
+        assert log.clean == ""
+        assert log.sections == []
+        assert log.lines == []

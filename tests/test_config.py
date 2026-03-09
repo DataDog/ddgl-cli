@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from ddgl.config import Config, ConfigError, load_config
@@ -21,7 +23,7 @@ class TestConfig:
 
 class TestLoadConfig:
     def test_loads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GITLAB_PRIVATE_TOKEN", "my-token")
+        monkeypatch.setenv("GITLAB_TOKEN", "my-token")
         monkeypatch.setenv("GITLAB_URL", "https://my-gitlab.internal")
         monkeypatch.setenv("GITLAB_PROJECT_ID", "123")
 
@@ -31,14 +33,47 @@ class TestLoadConfig:
         assert cfg.project_id == "123"
 
     def test_default_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GITLAB_PRIVATE_TOKEN", "tok")
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
         monkeypatch.delenv("GITLAB_URL", raising=False)
 
         cfg = load_config()
-        assert cfg.gitlab_url == "https://gitlab.com"
+        assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
 
-    def test_missing_token_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GITLAB_PRIVATE_TOKEN", raising=False)
+    def test_ddtool_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
 
-        with pytest.raises(ConfigError, match="GITLAB_PRIVATE_TOKEN"):
+        mock_result = type(
+            "Result", (), {"returncode": 0, "stdout": "ddtool-token\n"}
+        )()
+        with patch("ddgl.config.subprocess.run", return_value=mock_result):
+            cfg = load_config()
+
+        assert cfg.private_token == "ddtool-token"
+
+    def test_ddtool_failure_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+
+        mock_result = type(
+            "Result", (), {"returncode": 1, "stdout": ""}
+        )()
+        with (
+            patch("ddgl.config.subprocess.run", return_value=mock_result),
+            pytest.raises(ConfigError, match="No GitLab token found"),
+        ):
+            load_config()
+
+    def test_ddtool_not_found_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+
+        with (
+            patch(
+                "ddgl.config.subprocess.run",
+                side_effect=FileNotFoundError,
+            ),
+            pytest.raises(ConfigError, match="No GitLab token found"),
+        ):
             load_config()

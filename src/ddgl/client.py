@@ -6,6 +6,8 @@ from urllib.parse import quote
 import httpx
 
 from ddgl.config import Config
+from ddgl.model.job import Job
+from ddgl.model.pipeline import Pipeline
 
 
 class GitLabClient:
@@ -32,7 +34,8 @@ class GitLabClient:
         pid = project_id or self._config.project_id
         if pid is None:
             raise ValueError(
-                "No project ID configured. Set GITLAB_PROJECT_ID or pass project_id."
+                "No project ID configured. "
+                "Set GITLAB_PROJECT_ID or pass project_id."
             )
         return f"/projects/{quote(pid, safe='')}"
 
@@ -53,34 +56,37 @@ class GitLabClient:
         ref: str | None = None,
         project_id: str | None = None,
         per_page: int = 20,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Pipeline]:
         """List pipelines, optionally filtered by git ref."""
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
             params["ref"] = ref
-        return await self._get(f"{base}/pipelines", **params)
+        data = await self._get(f"{base}/pipelines", **params)
+        return [Pipeline.from_api(p) for p in data]
 
     async def get_pipeline(
         self,
         pipeline_id: int,
         project_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> Pipeline:
         """Get details of a single pipeline."""
         base = self._project_path(project_id)
-        return await self._get(f"{base}/pipelines/{pipeline_id}")
+        data = await self._get(f"{base}/pipelines/{pipeline_id}")
+        return Pipeline.from_api(data)
 
     async def get_jobs(
         self,
         pipeline_id: int,
         project_id: str | None = None,
         per_page: int = 100,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Job]:
         """List jobs for a pipeline."""
         base = self._project_path(project_id)
-        return await self._get(
+        data = await self._get(
             f"{base}/pipelines/{pipeline_id}/jobs", per_page=per_page
         )
+        return [Job.from_api(j) for j in data]
 
     async def get_job_log(
         self,
