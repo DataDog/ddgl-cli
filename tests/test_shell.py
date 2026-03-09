@@ -4,7 +4,8 @@ import logging
 
 import pytest
 
-from ddgl.shell import ShellError, get_logger, run, run_async, setup_logging
+from ddgl.cli import setup_logging
+from ddgl.shell import ShellError, get_logger, run, run_async
 
 
 @pytest.fixture(autouse=True)
