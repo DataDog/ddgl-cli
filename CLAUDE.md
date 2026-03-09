@@ -1,0 +1,4 @@
+- Instead of manually trying to fix linter issues, just run `uv run ruff check --fix`.
+- Every time you write a plan, a TODO, or when the user suggests implementing something later, put it in an appropriately-named Markdown file in `plans/`
+- Try to make small changes before letting the user answer. Each "change" should be individually commitable, and prompt the user for review of your changes and an eventual commit every time you feel a single "unit" of work has been done.
+- When implementing, start by designing the high-level interfaces and code structure ; only then worry about implementation details, or refactoring usages.
