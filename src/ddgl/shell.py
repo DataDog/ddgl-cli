@@ -7,13 +7,7 @@ import time
 
 from ddgl.exceptions import ShellError
 
-
-def get_logger(name: str) -> logging.Logger:
-    """Return a logger under the ddgl namespace."""
-    return logging.getLogger(name)
-
-# Module-level logger (can't use forward ref trick, just call get_logger)
-logger = get_logger("ddgl.shell")
+logger = logging.getLogger("ddgl.shell")
 
 
 def run(

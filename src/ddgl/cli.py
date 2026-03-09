@@ -12,6 +12,8 @@ from ddgl.config import load_config
 from ddgl.exceptions import ConfigError
 from ddgl.git import get_current_branch
 
+_logger = logging.getLogger("ddgl")
+
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 
@@ -68,7 +70,12 @@ def pipelines(ref: str | None, count: int) -> None:
 
 
 async def _pipelines(ref: str | None, count: int) -> None:
-    config = await load_config()
+    try:
+        config = await load_config()
+    except ConfigError as e:
+        _logger.critical("%s", e)
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     if ref is None:
         ref = await get_current_branch()
 
@@ -94,6 +101,7 @@ async def _logs(job_id: int) -> None:
     try:
         config = await load_config()
     except ConfigError as e:
+        _logger.critical("%s", e)
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
@@ -7,9 +8,9 @@ from dataclasses import dataclass
 from ddgl.constants import DEFAULT_GITLAB_URL
 from ddgl.exceptions import ConfigError, ShellError
 from ddgl.git import detect_project_path
-from ddgl.shell import get_logger, run
+from ddgl.shell import run
 
-logger = get_logger("ddgl")
+logger = logging.getLogger("ddgl")
 
 
 @dataclass(frozen=True)

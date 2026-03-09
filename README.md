@@ -22,7 +22,7 @@ Optionally set `GITLAB_PROJECT_ID` (e.g. `my-group/my-project`) or let ddgl dete
 from ddgl.config import load_config
 from ddgl.client import GitLabClient
 
-config = load_config()
+config = await load_config()
 
 async with GitLabClient(config) as client:
     pipeline = await client.get_pipeline(12345)

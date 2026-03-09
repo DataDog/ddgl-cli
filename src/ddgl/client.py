@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 from urllib.parse import quote
@@ -12,11 +13,10 @@ from ddgl.exceptions import PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
-from ddgl.shell import get_logger
 
 T = TypeVar("T")
 
-logger = get_logger("ddgl.http")
+logger = logging.getLogger("ddgl.http")
 
 
 class GitLabClient:
