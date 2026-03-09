@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ddgl.constants import DEFAULT_GITLAB_URL
 from ddgl.exceptions import ConfigError, ShellError
+from ddgl.git import detect_project_path
 from ddgl.shell import get_logger, run
 
 logger = get_logger("ddgl")
@@ -49,21 +50,31 @@ def _resolve_token() -> str:
     )
 
 
-def load_config() -> Config:
-    """Load configuration from environment variables.
+async def load_config() -> Config:
+    """Load configuration from environment variables with git remote auto-detection.
 
     Token resolution (first match wins):
         1. GITLAB_TOKEN env var
         2. `ddtool auth gitlab token` command
 
+    Project ID resolution (first match wins):
+        1. GITLAB_PROJECT_ID env var
+        2. GitLab remote URL in current repo
+        3. GitHub remote URL in current repo (codesync: same org/repo path on GitLab)
+
     Optional:
-        GITLAB_URL         — GitLab instance URL (default: gitlab.ddbuild.io)
-        GITLAB_PROJECT_ID  — Default project ID to operate on
+        GITLAB_URL  — GitLab instance URL (default: gitlab.ddbuild.io)
     """
+    project_id = os.environ.get("GITLAB_PROJECT_ID")
+    if project_id is None:
+        project_id = await detect_project_path()
+        if project_id is not None:
+            logger.debug("Project ID detected from git remote: %s", project_id)
+
     config = Config(
         gitlab_url=os.environ.get("GITLAB_URL", DEFAULT_GITLAB_URL),
         private_token=_resolve_token(),
-        project_id=os.environ.get("GITLAB_PROJECT_ID"),
+        project_id=project_id,
     )
     logger.debug(
         "Config loaded: url=%s project_id=%s",

@@ -68,7 +68,7 @@ def pipelines(ref: str | None, count: int) -> None:
 
 
 async def _pipelines(ref: str | None, count: int) -> None:
-    config = load_config()
+    config = await load_config()
     if ref is None:
         ref = await get_current_branch()
 
@@ -92,7 +92,7 @@ def logs(job_id: int) -> None:
 
 async def _logs(job_id: int) -> None:
     try:
-        config = load_config()
+        config = await load_config()
     except ConfigError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
