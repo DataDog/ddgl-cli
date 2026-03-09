@@ -8,12 +8,15 @@ import click
 from ddgl.client import GitLabClient
 from ddgl.config import ConfigError, load_config
 from ddgl.git import get_current_branch
+from ddgl.shell import setup_logging
 
 
 @click.group()
 @click.version_option(package_name="ddgl")
-def main() -> None:
+@click.option("-v", "--verbose", count=True, help="Increase verbosity (-v/-vv).")
+def main(verbose: int) -> None:
     """ddgl — Terminal-based GitLab client."""
+    setup_logging(verbose)
 
 
 @main.command()

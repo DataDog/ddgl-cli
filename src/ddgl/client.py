@@ -11,8 +11,11 @@ from ddgl.constants import MAX_PAGES
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
+from ddgl.shell import get_logger
 
 T = TypeVar("T")
+
+logger = get_logger("ddgl.http")
 
 
 class PaginationLimitError(Exception):
@@ -60,12 +63,16 @@ class GitLabClient:
 
     async def _get(self, path: str, **params: Any) -> Any:
         """Fetch a single JSON object (non-paginated)."""
+        logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
+        logger.debug("GET %s -> %d", path, resp.status_code)
         resp.raise_for_status()
         return resp.json()
 
     async def _get_text(self, path: str) -> str:
+        logger.debug("GET %s", path)
         resp = await self._http.get(path)
+        logger.debug("GET %s -> %d", path, resp.status_code)
         resp.raise_for_status()
         return resp.text
 
@@ -76,7 +83,9 @@ class GitLabClient:
         **params: Any,
     ) -> Page[T]:
         """Fetch a single page of paginated results."""
+        logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
+        logger.debug("GET %s -> %d", path, resp.status_code)
         resp.raise_for_status()
         return Page.from_response(resp, item_factory)
 
@@ -95,6 +104,10 @@ class GitLabClient:
             )
             yield page
             pages_fetched += 1
+            logger.debug(
+                "Page %d/%s fetched (%d items)",
+                pages_fetched, page.total_pages or "?", len(page.items),
+            )
             if not page.has_next:
                 break
             if pages_fetched >= MAX_PAGES:
@@ -122,6 +135,7 @@ class GitLabClient:
         per_page: int = 20,
     ) -> Page[Pipeline]:
         """Fetch a single page of pipelines."""
+        logger.info("Fetching pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
@@ -137,6 +151,7 @@ class GitLabClient:
         per_page: int = 20,
     ) -> AsyncIterator[Page[Pipeline]]:
         """Stream pages of pipelines."""
+        logger.info("Streaming pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
@@ -155,6 +170,7 @@ class GitLabClient:
         per_page: int = 20,
     ) -> list[Pipeline]:
         """Get all pipelines (exhausts pagination)."""
+        logger.info("Getting all pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
@@ -171,6 +187,7 @@ class GitLabClient:
         project_id: str | None = None,
     ) -> Pipeline:
         """Get details of a single pipeline."""
+        logger.info("Getting pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         data = await self._get(f"{base}/pipelines/{pipeline_id}")
         return Pipeline.from_api(data)
@@ -184,6 +201,7 @@ class GitLabClient:
         per_page: int = 100,
     ) -> Page[Job]:
         """Fetch a single page of jobs for a pipeline."""
+        logger.info("Fetching jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         return await self._get_page(
             f"{base}/pipelines/{pipeline_id}/jobs",
@@ -198,6 +216,7 @@ class GitLabClient:
         per_page: int = 100,
     ) -> AsyncIterator[Page[Job]]:
         """Stream pages of jobs for a pipeline."""
+        logger.info("Streaming jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         async for page in self._paginate(
             f"{base}/pipelines/{pipeline_id}/jobs",
@@ -213,6 +232,7 @@ class GitLabClient:
         per_page: int = 100,
     ) -> list[Job]:
         """Get all jobs for a pipeline (exhausts pagination)."""
+        logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
@@ -226,6 +246,7 @@ class GitLabClient:
         project_id: str | None = None,
     ) -> Job:
         """Get details of a single job."""
+        logger.info("Getting job %d", job_id)
         base = self._project_path(project_id)
         data = await self._get(f"{base}/jobs/{job_id}")
         return Job.from_api(data)
@@ -236,5 +257,6 @@ class GitLabClient:
         project_id: str | None = None,
     ) -> str:
         """Get the raw log output of a job."""
+        logger.info("Getting log for job %d", job_id)
         base = self._project_path(project_id)
         return await self._get_text(f"{base}/jobs/{job_id}/trace")

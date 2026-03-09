@@ -5,6 +5,9 @@ import subprocess
 from dataclasses import dataclass
 
 from ddgl.constants import DEFAULT_GITLAB_URL
+from ddgl.shell import ShellError, get_logger, run
+
+logger = get_logger("ddgl")
 
 
 @dataclass(frozen=True)
@@ -28,18 +31,19 @@ def _resolve_token() -> str:
     """Resolve a GitLab token: env var first, then ddtool."""
     token = os.environ.get("GITLAB_TOKEN", "")
     if token:
+        logger.info("Token resolved via GITLAB_TOKEN env var")
         return token
 
     try:
-        result = subprocess.run(
-            ["ddtool", "auth", "gitlab", "token"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        stdout, _ = run(
+            "ddtool", "auth", "gitlab", "token",
+            check=True,
+            timeout=10.0,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if stdout:
+            logger.info("Token resolved via ddtool")
+            return stdout
+    except (FileNotFoundError, ShellError, subprocess.TimeoutExpired):
         pass
 
     raise ConfigError(
@@ -59,8 +63,13 @@ def load_config() -> Config:
         GITLAB_URL         — GitLab instance URL (default: gitlab.ddbuild.io)
         GITLAB_PROJECT_ID  — Default project ID to operate on
     """
-    return Config(
+    config = Config(
         gitlab_url=os.environ.get("GITLAB_URL", DEFAULT_GITLAB_URL),
         private_token=_resolve_token(),
         project_id=os.environ.get("GITLAB_PROJECT_ID"),
     )
+    logger.debug(
+        "Config loaded: url=%s project_id=%s",
+        config.gitlab_url, config.project_id,
+    )
+    return config

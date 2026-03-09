@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from ddgl.config import Config, ConfigError, load_config
+from ddgl.shell import ShellError
 
 
 class TestConfig:
@@ -42,36 +43,33 @@ class TestLoadConfig:
     def test_ddtool_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
 
-        mock_result = type(
-            "Result", (), {"returncode": 0, "stdout": "ddtool-token\n"}
-        )()
-        with patch("ddgl.config.subprocess.run", return_value=mock_result):
+        with patch("ddgl.config.run", return_value=("ddtool-token", "")):
             cfg = load_config()
 
         assert cfg.private_token == "ddtool-token"
 
     def test_ddtool_failure_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
-
-        mock_result = type(
-            "Result", (), {"returncode": 1, "stdout": ""}
-        )()
-        with (
-            patch("ddgl.config.subprocess.run", return_value=mock_result),
-            pytest.raises(ConfigError, match="No GitLab token found"),
-        ):
-            load_config()
-
-    def test_ddtool_not_found_raises(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
 
         with (
             patch(
-                "ddgl.config.subprocess.run",
+                "ddgl.config.run",
+                side_effect=ShellError(["ddtool"], 1, "fail"),
+            ),
+            pytest.raises(ConfigError, match="No GitLab token found"),
+        ):
+            load_config()
+
+    def test_ddtool_not_found_raises(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+
+        with (
+            patch(
+                "ddgl.config.run",
                 side_effect=FileNotFoundError,
             ),
             pytest.raises(ConfigError, match="No GitLab token found"),

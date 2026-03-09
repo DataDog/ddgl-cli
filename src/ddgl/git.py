@@ -1,34 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import re
 from urllib.parse import urlparse
+
+from ddgl.shell import run_async
 
 
 async def get_current_branch() -> str:
     """Return the current git branch name."""
-    proc = await asyncio.create_subprocess_exec(
-        "git", "rev-parse", "--abbrev-ref", "HEAD",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"git rev-parse failed: {stderr.decode().strip()}")
-    return stdout.decode().strip()
+    stdout, _ = await run_async("git", "rev-parse", "--abbrev-ref", "HEAD")
+    return stdout
 
 
 async def get_remote_url(remote: str = "origin") -> str:
     """Return the URL of the given git remote."""
-    proc = await asyncio.create_subprocess_exec(
-        "git", "remote", "get-url", remote,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"git remote get-url failed: {stderr.decode().strip()}")
-    return stdout.decode().strip()
+    stdout, _ = await run_async("git", "remote", "get-url", remote)
+    return stdout
 
 
 def parse_project_path(remote_url: str) -> str:
