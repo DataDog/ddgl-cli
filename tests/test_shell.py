@@ -5,7 +5,8 @@ import logging
 import pytest
 
 from ddgl.cli import setup_logging
-from ddgl.shell import ShellError, get_logger, run, run_async
+from ddgl.exceptions import ShellError
+from ddgl.shell import get_logger, run, run_async
 
 
 @pytest.fixture(autouse=True)
@@ -50,14 +51,16 @@ class TestSetupLogging:
         assert logging.getLogger("ddgl").level == logging.DEBUG
 
     def test_verbose_overrides_env_var(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("DDGL_LOG_LEVEL", "DEBUG")
         setup_logging(1)
         assert logging.getLogger("ddgl").level == logging.INFO
 
     def test_invalid_env_var_defaults_to_warning(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("DDGL_LOG_LEVEL", "NONSENSE")
         setup_logging(0)
@@ -106,7 +109,8 @@ class TestRunAsync:
         await run_async("false", check=False)
 
     async def test_logs_command(
-        self, caplog: pytest.LogCaptureFixture,
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         with caplog.at_level(logging.DEBUG, logger="ddgl"):
             await run_async("echo", "hi")

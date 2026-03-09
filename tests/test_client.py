@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
-from ddgl.client import GitLabClient, PaginationLimitError
+from ddgl.client import GitLabClient
 from ddgl.config import Config
+from ddgl.exceptions import PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline

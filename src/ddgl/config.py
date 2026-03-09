@@ -5,7 +5,8 @@ import subprocess
 from dataclasses import dataclass
 
 from ddgl.constants import DEFAULT_GITLAB_URL
-from ddgl.shell import ShellError, get_logger, run
+from ddgl.exceptions import ConfigError, ShellError
+from ddgl.shell import get_logger, run
 
 logger = get_logger("ddgl")
 
@@ -21,10 +22,6 @@ class Config:
     @property
     def api_url(self) -> str:
         return f"{self.gitlab_url.rstrip('/')}/api/v4"
-
-
-class ConfigError(Exception):
-    """Raised when required configuration is missing."""
 
 
 def _resolve_token() -> str:

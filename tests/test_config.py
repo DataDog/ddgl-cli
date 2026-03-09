@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from ddgl.config import Config, ConfigError, load_config
-from ddgl.shell import ShellError
+from ddgl.config import Config, load_config
+from ddgl.exceptions import ConfigError, ShellError
 
 
 class TestConfig:

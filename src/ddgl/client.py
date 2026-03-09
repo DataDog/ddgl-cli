@@ -8,6 +8,7 @@ import httpx
 
 from ddgl.config import Config
 from ddgl.constants import MAX_PAGES
+from ddgl.exceptions import PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -16,18 +17,6 @@ from ddgl.shell import get_logger
 T = TypeVar("T")
 
 logger = get_logger("ddgl.http")
-
-
-class PaginationLimitError(Exception):
-    """Raised when pagination exceeds the maximum allowed pages."""
-
-    def __init__(self, max_pages: int, total_pages: int | None) -> None:
-        self.max_pages = max_pages
-        self.total_pages = total_pages
-        total = f"/{total_pages}" if total_pages else ""
-        super().__init__(
-            f"Pagination limit reached: fetched {max_pages}{total} pages"
-        )
 
 
 class GitLabClient:

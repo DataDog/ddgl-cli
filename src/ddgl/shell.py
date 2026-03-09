@@ -5,23 +5,12 @@ import logging
 import subprocess
 import time
 
+from ddgl.exceptions import ShellError
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a logger under the ddgl namespace."""
     return logging.getLogger(name)
-
-
-class ShellError(Exception):
-    """A subprocess exited with a non-zero return code."""
-
-    def __init__(self, cmd: list[str], returncode: int, stderr: str) -> None:
-        self.cmd = cmd
-        self.returncode = returncode
-        self.stderr = stderr
-        super().__init__(
-            f"Command {cmd} failed (rc={returncode}): {stderr}"
-        )
-
 
 # Module-level logger (can't use forward ref trick, just call get_logger)
 logger = get_logger("ddgl.shell")
@@ -62,7 +51,10 @@ def run(
     if result.returncode != 0:
         logger.debug(
             '$ %s -> rc=%d "%s" (%.0fms)',
-            cmd_str, result.returncode, stderr, elapsed_ms,
+            cmd_str,
+            result.returncode,
+            stderr,
+            elapsed_ms,
         )
         if check:
             raise ShellError(list(cmd), result.returncode, stderr)
@@ -93,7 +85,8 @@ async def run_async(
     )
     try:
         stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout,
+            proc.communicate(),
+            timeout=timeout,
         )
     except TimeoutError:
         proc.kill()
@@ -109,7 +102,10 @@ async def run_async(
     if rc != 0:
         logger.debug(
             '$ %s -> rc=%d "%s" (%.0fms)',
-            cmd_str, rc, stderr, elapsed_ms,
+            cmd_str,
+            rc,
+            stderr,
+            elapsed_ms,
         )
         if check:
             raise ShellError(list(cmd), rc, stderr)
