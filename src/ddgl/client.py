@@ -9,7 +9,7 @@ import httpx
 
 from ddgl.config import Config
 from ddgl.constants import MAX_PAGES
-from ddgl.exceptions import PaginationLimitError
+from ddgl.exceptions import ConfigError, PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -42,9 +42,9 @@ class GitLabClient:
     def _project_path(self, project_id: str | None = None) -> str:
         pid = project_id or self._config.project_id
         if pid is None:
-            raise ValueError(
+            raise ConfigError(
                 "No project ID configured. "
-                "Set GITLAB_PROJECT_ID or pass project_id."
+                "Set GITLAB_PROJECT_ID or let ddgl detect it from the git remote."
             )
         return f"/projects/{quote(pid, safe='')}"
 

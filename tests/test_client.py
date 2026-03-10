@@ -6,7 +6,7 @@ import respx
 
 from ddgl.client import GitLabClient
 from ddgl.config import Config
-from ddgl.exceptions import PaginationLimitError
+from ddgl.exceptions import ConfigError, PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -280,7 +280,7 @@ class TestClientErrors:
             project_id=None,
         )
         async with GitLabClient(config) as c:
-            with pytest.raises(ValueError, match="No project ID"):
+            with pytest.raises(ConfigError, match="No project ID"):
                 await c.fetch_pipelines()
 
     async def test_auth_header_sent(

@@ -46,7 +46,7 @@ def _is_gitlab_url(url: str) -> bool:
 
 
 def _is_github_url(url: str) -> bool:
-    return "github.com" in url.lower()
+    return "github" in url.lower()
 
 
 async def detect_project_path() -> str | None:
