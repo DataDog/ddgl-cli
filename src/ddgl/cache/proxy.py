@@ -49,19 +49,23 @@ class _NamespaceProxy:
             return self._prefix + raw
         return self._prefix + (raw,)
 
+    def _full_key(self, key: str | int | Key) -> Key:
+        """Extend the prefix with *key* and wrap in the key class NamedTuple."""
+        return self._key_class(*self._extend(key))  # type: ignore[return-value]
+
     def __getitem__(self, key: str | int | Key) -> _NamespaceProxy | object | None:
-        full_key = self._extend(key)
-        if len(full_key) < self._arity:
+        extended = self._extend(key)
+        if len(extended) < self._arity:
             return _NamespaceProxy(
-                self._backend, self._bypass, self._key_class, full_key
+                self._backend, self._bypass, self._key_class, extended
             )
         if self._bypass:
             return None
-        return self._backend.get(full_key)
+        return self._backend.get(self._full_key(key))
 
     def set(self, key: str | int | Key, value: object, ttl: float) -> None:
         """Write *value* at *key* with an explicit TTL (in seconds)."""
-        self._backend.set(self._extend(key), value, ttl)
+        self._backend.set(self._full_key(key), value, ttl)
 
     def get_all(self, cls: type | None = None) -> Sequence[object]:
         """Return all cached values matching the current key prefix.
