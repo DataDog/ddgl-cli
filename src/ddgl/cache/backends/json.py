@@ -31,7 +31,7 @@ class JsonBackend:
         atexit.register(self.close)
 
     def get(self, key: Key) -> object | None:
-        k = str(key[0])
+        k = str(key)
         entry = self._data.get(k)
         if entry is None:
             logger.debug("get(%r) miss", k)
@@ -45,7 +45,7 @@ class JsonBackend:
         return entry["value"]
 
     def set(self, key: Key, value: object, ttl: float) -> None:
-        k = str(key[0])
+        k = str(key)
         self._data[k] = {
             "value": value,
             "expires_at": time.time() + ttl,

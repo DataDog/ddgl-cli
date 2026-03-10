@@ -147,6 +147,10 @@ class StructSqliteBackend(_SqliteBackend):
             return None
 
     def get(self, key: Key, cls: type | None = None) -> object | None:  # type: ignore[override]
+        if len(key) != 3:
+            raise ValueError(
+                f"StructSqliteBackend requires a 3-tuple key, got {len(key)}"
+            )
         table_name = str(key[0])
         project_id = str(key[1])
         object_id = str(key[2])
@@ -178,6 +182,10 @@ class StructSqliteBackend(_SqliteBackend):
         return result
 
     def set(self, key: Key, value: object, ttl: float) -> None:
+        if len(key) != 3:
+            raise ValueError(
+                f"StructSqliteBackend requires a 3-tuple key, got {len(key)}"
+            )
         if not isinstance(value, msgspec.Struct):
             raise TypeError(f"Expected msgspec.Struct, got {type(value)}")
         table_name = str(key[0])

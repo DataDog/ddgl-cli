@@ -13,13 +13,22 @@ from typing import NamedTuple
 class ProjectKey(NamedTuple):
     git_root_path: str
 
+    def __str__(self) -> str:
+        return self.git_root_path
+
 
 class TokenKey(NamedTuple):
     gitlab_url: str
 
+    def __str__(self) -> str:
+        return self.gitlab_url
+
 
 class ApiResponseKey(NamedTuple):
     request_hash: str
+
+    def __str__(self) -> str:
+        return self.request_hash
 
 
 class ObjectKey(NamedTuple):
@@ -27,9 +36,15 @@ class ObjectKey(NamedTuple):
     project_id: str
     object_id: int
 
+    def __str__(self) -> str:
+        return f"{self.table_name}/{self.project_id}/{self.object_id}"
+
 
 class LogKey(NamedTuple):
     job_id: str
+
+    def __str__(self) -> str:
+        return self.job_id
 
 
 # ---------------------------------------------------------------------------

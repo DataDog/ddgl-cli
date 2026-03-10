@@ -28,20 +28,22 @@ class KvSqliteBackend(_SqliteBackend):
         self._conn.commit()
 
     def get(self, key: Key) -> object | None:
+        k = str(key)
         row = self._conn.execute(
             "SELECT value FROM kv WHERE key = ? AND expires_at > ?",
-            (str(key[0]), time.time()),
+            (k, time.time()),
         ).fetchone()
         if row:
-            logger.debug("get(%r) hit", key[0])
+            logger.debug("get(%r) hit", k)
             return row[0]
-        logger.debug("get(%r) miss", key[0])
+        logger.debug("get(%r) miss", k)
         return None
 
     def set(self, key: Key, value: object, ttl: float) -> None:
-        logger.debug("set(%r) ttl=%.0fs", key[0], ttl)
+        k = str(key)
+        logger.debug("set(%r) ttl=%.0fs", k, ttl)
         self._conn.execute(
             "INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)",
-            (str(key[0]), str(value), time.time() + ttl),
+            (k, str(value), time.time() + ttl),
         )
         self._conn.commit()
