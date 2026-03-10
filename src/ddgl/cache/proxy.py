@@ -21,6 +21,8 @@ class _NamespaceProxy:
 
     Bypass semantics: reads return ``None`` when bypass is active; writes
     always go through.
+
+    All writes require an explicit TTL — use ``.set(key, value, ttl)``.
     """
 
     def __init__(
@@ -48,14 +50,13 @@ class _NamespaceProxy:
     def __getitem__(self, key: str | int | Key) -> _NamespaceProxy | object | None:
         full_key = self._extend(key)
         if len(full_key) < self._arity:
-            return _NamespaceProxy(self._backend, self._bypass, self._key_class, full_key)
+            return _NamespaceProxy(
+                self._backend, self._bypass, self._key_class, full_key
+            )
         if self._bypass:
             return None
         return self._backend.get(full_key)
 
-    def __setitem__(self, key: str | int | Key, value: object) -> None:
-        self._backend.set(self._extend(key), value)
-
-    def set(self, key: str | int | Key, value: object, ttl: float | None = None) -> None:
-        """Write with an explicit TTL."""
-        self._backend.set(self._extend(key), value, ttl=ttl)
+    def set(self, key: str | int | Key, value: object, ttl: float) -> None:
+        """Write *value* at *key* with an explicit TTL (in seconds)."""
+        self._backend.set(self._extend(key), value, ttl)

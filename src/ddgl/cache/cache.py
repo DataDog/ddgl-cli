@@ -22,7 +22,6 @@ class Cache:
         with Cache.open(Path("~/.cache/ddgl").expanduser()) as cache:
             # JSON (projects, tokens)
             entry  = cache[CacheNS.PROJECTS]["git_root"]
-            cache[CacheNS.PROJECTS]["git_root"] = {"project_path": "..."}
             cache[CacheNS.TOKENS].set(gitlab_url, token, ttl=CACHE_TTL_DDTOOL_TOKEN)
 
             # KV SQLite (API responses)
@@ -32,12 +31,14 @@ class Cache:
             # Struct SQLite (pipelines / jobs)
             pipeline = cache[CacheNS.OBJECTS][("pipelines", project_id, pipeline_id)]
             cache[CacheNS.OBJECTS].set(
-                ("pipelines", project_id, pipeline_id), pipeline, ttl=CACHE_TTL_FINISHED_PIPELINE
+                ("pipelines", project_id, pipeline_id),
+                pipeline,
+                ttl=CACHE_TTL_FINISHED_PIPELINE,
             )
 
             # Text files (logs)
             log = cache[CacheNS.LOGS][str(job_id)]
-            cache[CacheNS.LOGS][str(job_id)] = log_text
+            cache[CacheNS.LOGS].set(str(job_id), log_text, ttl=CACHE_TTL_FINISHED_JOB)
     """
 
     _instance: Cache | None = None
@@ -61,7 +62,9 @@ class Cache:
         abs_path = str(self._cache_dir / ns.value.filename)
         if abs_path not in self._handles:
             self._handles[abs_path] = open_backend(ns, self._cache_dir)
-        return _NamespaceProxy(self._handles[abs_path], bypass=self._bypass, key_class=ns.value.key_class)
+        return _NamespaceProxy(
+            self._handles[abs_path], bypass=self._bypass, key_class=ns.value.key_class
+        )
 
     def close(self) -> None:
         for handle in self._handles.values():

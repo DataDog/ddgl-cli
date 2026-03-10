@@ -45,13 +45,13 @@ class MockBackend:
 
     def __init__(self) -> None:
         self.store: dict[Key, object] = {}
-        self.set_calls: list[tuple[Key, object, float | None]] = []
+        self.set_calls: list[tuple[Key, object, float]] = []
         self.closed = False
 
     def get(self, key: Key) -> object | None:
         return self.store.get(key)
 
-    def set(self, key: Key, value: object, ttl: float | None = None) -> None:
+    def set(self, key: Key, value: object, ttl: float) -> None:
         self.store[key] = value
         self.set_calls.append((key, value, ttl))
 
@@ -78,20 +78,15 @@ class TestNamespaceProxyFlat:
         _, proxy = self._proxy()
         assert proxy["missing"] is None
 
-    def test_setitem_writes(self) -> None:
+    def test_set_writes(self) -> None:
         backend, proxy = self._proxy()
-        proxy["git_root"] = "value"
+        proxy.set("git_root", "value", ttl=3600.0)
         assert backend.store[("git_root",)] == "value"
 
     def test_set_with_ttl(self) -> None:
         backend, proxy = self._proxy()
         proxy.set("git_root", "value", ttl=3600.0)
         assert backend.set_calls == [(("git_root",), "value", 3600.0)]
-
-    def test_set_without_ttl(self) -> None:
-        backend, proxy = self._proxy()
-        proxy.set("git_root", "value")
-        assert backend.set_calls == [(("git_root",), "value", None)]
 
     def test_bypass_read_returns_none(self) -> None:
         backend, proxy = self._proxy(bypass=True)
@@ -100,7 +95,7 @@ class TestNamespaceProxyFlat:
 
     def test_bypass_write_goes_through(self) -> None:
         backend, proxy = self._proxy(bypass=True)
-        proxy["git_root"] = "value"
+        proxy.set("git_root", "value", ttl=3600.0)
         assert backend.store[("git_root",)] == "value"
 
 
@@ -142,11 +137,6 @@ class TestNamespaceProxyNested:
         assert isinstance(sub, _NamespaceProxy)
         assert sub._prefix == ("pipelines", "my-project")
 
-    def test_chained_write(self) -> None:
-        backend, proxy = self._proxy()
-        proxy["pipelines"]["my-project"][42] = "pipeline"
-        assert backend.store[("pipelines", "my-project", 42)] == "pipeline"
-
     def test_chained_set_with_ttl(self) -> None:
         backend, proxy = self._proxy()
         proxy["pipelines"]["my-project"].set(42, "pipeline", ttl=604800.0)
@@ -160,7 +150,7 @@ class TestNamespaceProxyNested:
 
     def test_bypass_write_goes_through(self) -> None:
         backend, proxy = self._proxy(bypass=True)
-        proxy["pipelines"]["my-project"][42] = "pipeline"
+        proxy["pipelines"]["my-project"].set(42, "pipeline", ttl=604800.0)
         assert backend.store[("pipelines", "my-project", 42)] == "pipeline"
 
 
@@ -250,5 +240,5 @@ class TestCacheBypass:
         self, tmp_path: Path, mock_backend: MockBackend
     ) -> None:
         with Cache.open(tmp_path, bypass=True) as cache:
-            cache[MockNS.FLAT]["git_root"] = "value"
+            cache[MockNS.FLAT].set("git_root", "value", ttl=3600.0)
         assert mock_backend.store[("git_root",)] == "value"

@@ -5,8 +5,11 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from ddgl.cache.backends.struct_sqlite import StructSqliteBackend, _schema_hash, _sqlite_type
-
+from ddgl.cache.backends.struct_sqlite import (
+    StructSqliteBackend,
+    _schema_hash,
+    _sqlite_type,
+)
 
 # ---------------------------------------------------------------------------
 # Local stub structs — hermetic, not imported from production code
@@ -113,11 +116,6 @@ class TestStructSqliteBackend:
         result = b.get(KEY, cls=Widget)
         assert isinstance(result, Widget)
         assert result == WIDGET
-
-    def test_set_without_ttl_raises(self, tmp_path: Path) -> None:
-        b = make_backend(tmp_path)
-        with pytest.raises(ValueError, match="TTL"):
-            b.set(KEY, WIDGET)
 
     def test_expired_entry_returns_none(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)

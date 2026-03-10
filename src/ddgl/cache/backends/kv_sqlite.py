@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from ddgl.cache.backends.base import Key
 from ddgl.cache.backends.sqlite_base import _SqliteBackend
+
+logger = logging.getLogger(__name__)
 
 
 class KvSqliteBackend(_SqliteBackend):
@@ -11,7 +14,7 @@ class KvSqliteBackend(_SqliteBackend):
 
     Keys are 1-tuples of strings (typically a request hash).
     Values are raw strings (JSON-serialised API responses).
-    TTL is required; entries without an expiry are not accepted.
+    TTL is required on every write.
     """
 
     def _create_tables(self) -> None:
@@ -29,11 +32,14 @@ class KvSqliteBackend(_SqliteBackend):
             "SELECT value FROM kv WHERE key = ? AND expires_at > ?",
             (str(key[0]), time.time()),
         ).fetchone()
-        return row[0] if row else None
+        if row:
+            logger.debug("get(%r) hit", key[0])
+            return row[0]
+        logger.debug("get(%r) miss", key[0])
+        return None
 
-    def set(self, key: Key, value: object, ttl: float | None = None) -> None:
-        if ttl is None:
-            raise ValueError("KvSqliteBackend requires a TTL")
+    def set(self, key: Key, value: object, ttl: float) -> None:
+        logger.debug("set(%r) ttl=%.0fs", key[0], ttl)
         self._conn.execute(
             "INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)",
             (str(key[0]), str(value), time.time() + ttl),

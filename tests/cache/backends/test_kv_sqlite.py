@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from ddgl.cache.backends.kv_sqlite import KvSqliteBackend
 
 
@@ -16,11 +14,6 @@ class TestKvSqliteBackend:
         b = KvSqliteBackend(tmp_path / "kv.db")
         b.set(("k",), "hello", ttl=60.0)
         assert b.get(("k",)) == "hello"
-
-    def test_set_without_ttl_raises(self, tmp_path: Path) -> None:
-        b = KvSqliteBackend(tmp_path / "kv.db")
-        with pytest.raises(ValueError, match="TTL"):
-            b.set(("k",), "v")
 
     def test_expired_entry_returns_none(self, tmp_path: Path) -> None:
         b = KvSqliteBackend(tmp_path / "kv.db")
