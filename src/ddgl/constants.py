@@ -6,6 +6,12 @@ DEFAULT_GITLAB_URL = "https://gitlab.ddbuild.io"
 
 MAX_PAGES = 50
 
+CACHE_TTL_DDTOOL_TOKEN = 3600.0            # 1 h   — ddtool-issued GitLab tokens
+CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change
+CACHE_TTL_FINISHED_JOB = 604800.0         # 1 w   — finished jobs don't change
+CACHE_TTL_API_RESPONSE_SINGLE = 300.0     # 5 min — single-resource GETs (/pipelines/123)
+CACHE_TTL_API_RESPONSE_LIST = 30.0        # 30 s  — list endpoints (/pipelines, /jobs)
+
 
 class PipelineStatus(StrEnum):
     CREATED = "created"
