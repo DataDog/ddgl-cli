@@ -2,3 +2,5 @@
 - Every time you write a plan, a TODO, or when the user suggests implementing something later, put it in an appropriately-named Markdown file in `plans/`
 - Try to make small changes before letting the user answer. Each "change" should be individually commitable, and prompt the user for review of your changes and an eventual commit every time you feel a single "unit" of work has been done.
 - When implementing, start by designing the high-level interfaces and code structure ; only then worry about implementation details, or refactoring usages.
+- Keep tests hermetic: define local stubs/fakes for types used only as test scaffolding instead of importing production types. A test should not break because an unrelated production definition changed.
+- Mirror the source tree in tests: `tests/foo/test_bar.py` tests `src/ddgl/foo/bar.py`. Keep one test file per source module.
