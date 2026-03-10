@@ -4,6 +4,7 @@ import hashlib
 import logging
 import time
 import types
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin
 
@@ -113,16 +114,44 @@ class StructSqliteBackend(_SqliteBackend):
         self._known_hashes[table_name] = current_hash
         logger.debug("_ensure_table(%r) — table created/recreated", table_name)
 
+    _EXCLUDED_COLS = frozenset({"project_id", "object_id", "expires_at"})
+
+    def _table_exists(self, table_name: str) -> bool:
+        return bool(
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone()
+        )
+
+    def _row_to_dict(
+        self, col_names: list[str], row: tuple[Any, ...]
+    ) -> dict[str, object]:
+        return {
+            col: val
+            for col, val in zip(col_names, row)
+            if col not in self._EXCLUDED_COLS
+        }
+
+    def _deserialize(
+        self, row_dict: dict[str, object], cls: type, table_name: str
+    ) -> object | None:
+        try:
+            return msgspec.convert(row_dict, cls, strict=False)
+        except (msgspec.ValidationError, TypeError):
+            logger.warning(
+                "Failed to deserialize row from %r into %s — treating as cache miss",
+                table_name,
+                cls.__name__,
+            )
+            return None
+
     def get(self, key: Key, cls: type | None = None) -> object | None:  # type: ignore[override]
         table_name = str(key[0])
         project_id = str(key[1])
         object_id = str(key[2])
 
-        exists = self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,),
-        ).fetchone()
-        if not exists:
+        if not self._table_exists(table_name):
             logger.debug("get(%r) — table does not exist", table_name)
             return None
 
@@ -133,31 +162,20 @@ class StructSqliteBackend(_SqliteBackend):
         )
         row = cursor.fetchone()
         if row is None:
-            logger.debug("get(%r, %s, %s) miss", table_name, project_id, object_id)
+            logger.debug("get(%r/%s/%s) miss", table_name, project_id, object_id)
             return None
 
         col_names = [desc[0] for desc in cursor.description]
-        row_dict = {
-            col: val
-            for col, val in zip(col_names, row)
-            if col not in ("project_id", "object_id", "expires_at")
-        }
+        row_dict = self._row_to_dict(col_names, row)
 
         if cls is None:
             logger.debug("get(%r/%s/%s) hit (dict)", table_name, project_id, object_id)
             return row_dict
 
-        try:
-            result: object = msgspec.convert(row_dict, cls, strict=False)
+        result = self._deserialize(row_dict, cls, table_name)
+        if result is not None:
             logger.debug("get(%r/%s/%s) hit (%s)", table_name, project_id, object_id, cls.__name__)  # noqa: E501
-            return result
-        except (msgspec.ValidationError, TypeError):
-            logger.warning(
-                "Failed to deserialize row from %r into %s — treating as cache miss",
-                table_name,
-                cls.__name__,
-            )
-            return None
+        return result
 
     def set(self, key: Key, value: object, ttl: float) -> None:
         if not isinstance(value, msgspec.Struct):
@@ -184,3 +202,47 @@ class StructSqliteBackend(_SqliteBackend):
         )
         self._conn.commit()
         logger.debug("set(%r/%s/%s) ttl=%.0fs", table_name, project_id, object_id, ttl)
+
+    def get_many(
+        self, key_prefix: Key, cls: type | None = None
+    ) -> Sequence[object]:
+        """Return all rows matching *key_prefix* as a list.
+
+        ``key_prefix[0]`` is the table name.  Additional components filter on
+        ``project_id`` (index 1) and ``object_id`` (index 2) respectively.
+        Rows that fail deserialisation into *cls* are logged and skipped.
+        """
+        table_name = str(key_prefix[0])
+
+        if not self._table_exists(table_name):
+            logger.debug("get_many(%r) — table does not exist", table_name)
+            return []
+
+        conditions: list[str] = ["expires_at > ?"]
+        params: list[object] = [time.time()]
+        if len(key_prefix) > 1:
+            conditions.insert(0, "project_id = ?")
+            params.insert(0, str(key_prefix[1]))
+        if len(key_prefix) > 2:
+            conditions.insert(1, "object_id = ?")
+            params.insert(1, str(key_prefix[2]))
+
+        where = " AND ".join(conditions)
+        cursor = self._conn.execute(
+            f"SELECT * FROM {table_name} WHERE {where}",  # noqa: S608
+            params,
+        )
+        col_names = [desc[0] for desc in cursor.description]
+
+        results: list[object] = []
+        for row in cursor.fetchall():
+            row_dict = self._row_to_dict(col_names, row)
+            if cls is None:
+                results.append(row_dict)
+            else:
+                result = self._deserialize(row_dict, cls, table_name)
+                if result is not None:
+                    results.append(result)
+
+        logger.debug("get_many(%r) returned %d rows", table_name, len(results))
+        return results

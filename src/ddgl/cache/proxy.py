@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from ddgl.cache.backends.base import Key, _CacheBackend
+from collections.abc import Sequence
+
+from ddgl.cache.backends.base import Key, _BulkBackend, _CacheBackend
 from ddgl.cache.cache_config import _KeyClass
 
 
@@ -60,3 +62,22 @@ class _NamespaceProxy:
     def set(self, key: str | int | Key, value: object, ttl: float) -> None:
         """Write *value* at *key* with an explicit TTL (in seconds)."""
         self._backend.set(self._extend(key), value, ttl)
+
+    def get_all(self, cls: type | None = None) -> Sequence[object]:
+        """Return all cached values matching the current key prefix.
+
+        Only available for backends that implement ``_BulkBackend`` (e.g.
+        ``StructSqliteBackend``).  The current prefix must contain at least the
+        table-name component.
+
+        Bypass mode returns an empty list without querying the backend.
+        """
+        if self._bypass:
+            return []
+        if not self._prefix:
+            raise ValueError("get_all() requires at least a table-name prefix")
+        if not isinstance(self._backend, _BulkBackend):
+            raise NotImplementedError(
+                f"{type(self._backend).__name__} does not support bulk reads"
+            )
+        return self._backend.get_many(self._prefix, cls)

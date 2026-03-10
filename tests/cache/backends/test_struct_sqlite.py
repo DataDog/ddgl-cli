@@ -213,3 +213,58 @@ class TestStructSqliteBackend:
     def test_close_is_safe(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)
         b.close()  # should not raise
+
+
+class TestStructSqliteBackendGetMany:
+    @staticmethod
+    def _w(name: str, count: int, active: bool) -> Widget:
+        return Widget(name=name, count=count, score=1.0, active=active)
+
+    def _populate(self, b: StructSqliteBackend) -> None:
+        b.set(("widgets", "proj1", 1), self._w("a", 1, True), ttl=TTL)
+        b.set(("widgets", "proj1", 2), self._w("b", 2, False), ttl=TTL)
+        b.set(("widgets", "proj2", 3), self._w("c", 3, True), ttl=TTL)
+
+    def test_get_many_all_rows_in_table(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        self._populate(b)
+        results = b.get_many(("widgets",), cls=Widget)
+        assert len(results) == 3
+
+    def test_get_many_filter_by_project(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        self._populate(b)
+        results = b.get_many(("widgets", "proj1"), cls=Widget)
+        assert len(results) == 2
+        names = {r.name for r in results}  # type: ignore[union-attr]
+        assert names == {"a", "b"}
+
+    def test_get_many_filter_by_object(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        self._populate(b)
+        results = b.get_many(("widgets", "proj1", 1), cls=Widget)
+        assert len(results) == 1
+        expected = Widget(name="a", count=1, score=1.0, active=True)
+        assert results[0] == expected  # type: ignore[comparison-overlap]
+
+    def test_get_many_missing_table_returns_empty(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        assert b.get_many(("nonexistent",)) == []
+
+    def test_get_many_excludes_expired(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        old = Widget(name="old", count=0, score=0.0, active=False)
+        fresh = Widget(name="fresh", count=1, score=1.0, active=True)
+        b.set(("widgets", "proj1", 1), old, ttl=-1.0)
+        b.set(("widgets", "proj1", 2), fresh, ttl=TTL)
+        results = b.get_many(("widgets", "proj1"), cls=Widget)
+        assert len(results) == 1
+        assert results[0].name == "fresh"  # type: ignore[union-attr]
+
+    def test_get_many_raw_dict_without_cls(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        b.set(KEY, WIDGET, ttl=TTL)
+        results = b.get_many(("widgets",))
+        assert len(results) == 1
+        assert isinstance(results[0], dict)
+        assert results[0]["name"] == "sprocket"  # type: ignore[index]
