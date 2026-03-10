@@ -15,6 +15,7 @@ class _SqliteBackend:
     """
 
     def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
