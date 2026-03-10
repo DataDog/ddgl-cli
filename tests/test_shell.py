@@ -6,7 +6,7 @@ import pytest
 
 from ddgl.cli import setup_logging
 from ddgl.exceptions import ShellError
-from ddgl.shell import get_logger, run, run_async
+from ddgl.shell import run, run_async
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +42,7 @@ class TestSetupLogging:
 
     def test_child_logger_inherits(self) -> None:
         setup_logging(1)
-        child = get_logger("ddgl.test")
+        child = logging.getLogger("ddgl.test")
         assert child.getEffectiveLevel() == logging.INFO
 
     def test_env_var_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
