@@ -13,6 +13,16 @@ async def get_current_branch() -> str:
     return stdout
 
 
+async def get_recent_shas(depth: int = 10) -> list[str]:
+    """Return the last `depth` commit SHAs starting from HEAD (HEAD first).
+
+    Uses: git log --format=%H -n {depth}
+    Raises ShellError if not in a git repo.
+    """
+    stdout, _ = await run_async("git", "log", "--format=%H", f"-n{depth}")
+    return [sha for sha in stdout.splitlines() if sha]
+
+
 async def get_remote_url(remote: str = "origin") -> str:
     """Return the URL of the given git remote."""
     stdout, _ = await run_async("git", "remote", "get-url", remote)

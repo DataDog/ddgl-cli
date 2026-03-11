@@ -9,6 +9,7 @@ import pytest
 from ddgl.git import (
     detect_project_path,
     get_current_branch,
+    get_recent_shas,
     get_remote_url,
     parse_project_path,
 )
@@ -47,6 +48,48 @@ class TestGitIntegration:
     async def test_get_remote_url(self) -> None:
         url = await get_remote_url()
         assert url == "git@gitlab.com:my-group/my-project.git"
+
+
+class TestGetRecentShas:
+    """Tests for get_recent_shas()."""
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Repo with 3 commits."""
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True,
+                       env=env, capture_output=True)
+        for i in range(3):
+            (tmp_path / f"file{i}.txt").write_text(str(i))
+            subprocess.run(["git", "add", "."], cwd=tmp_path, check=True,
+                           capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"commit {i}"], cwd=tmp_path,
+                           check=True, env=env, capture_output=True)
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    async def test_returns_shas(self, repo: Path) -> None:
+        shas = await get_recent_shas(depth=3)
+        assert len(shas) == 3
+        assert all(len(s) == 40 for s in shas)
+
+    async def test_depth_limits_results(self, repo: Path) -> None:
+        shas = await get_recent_shas(depth=2)
+        assert len(shas) == 2
+
+    async def test_depth_larger_than_history(self, repo: Path) -> None:
+        shas = await get_recent_shas(depth=100)
+        assert len(shas) == 3  # only 3 commits in repo
+
+    async def test_head_first(self, repo: Path) -> None:
+        shas = await get_recent_shas(depth=3)
+        # HEAD is first — get HEAD sha via git
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True,
+        )
+        head_sha = result.stdout.decode().strip()
+        assert shas[0] == head_sha
 
 
 class TestDetectProjectPath:
