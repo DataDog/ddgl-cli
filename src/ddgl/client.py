@@ -50,19 +50,47 @@ class GitLabClient:
 
     # -- Low-level helpers --
 
+    def _raise_for_status(self, resp: httpx.Response) -> None:
+        """Translate HTTP errors into typed exceptions.
+
+        Raises:
+            NotFoundError: HTTP 404.
+            GitLabAPIError: any other HTTP error status.
+        """
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if resp.status_code == 404:
+                raise NotFoundError(resp.request.url.path, "") from exc
+            raise GitLabAPIError(
+                resp.status_code, "GET", resp.request.url.path,
+                resp.text[:200] if resp.text else "",
+            ) from exc
+
     async def _get(self, path: str, **params: Any) -> Any:
-        """Fetch a single JSON object (non-paginated)."""
+        """Fetch a single JSON object (non-paginated).
+
+        Raises:
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status.
+        """
         logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     async def _get_text(self, path: str) -> str:
+        """Fetch a plain-text response body.
+
+        Raises:
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status.
+        """
         logger.debug("GET %s", path)
         resp = await self._http.get(path)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.text
 
     async def _get_page(
@@ -71,7 +99,12 @@ class GitLabClient:
         item_factory: Callable[[dict], T],
         **params: Any,
     ) -> Page[T]:
-        """Fetch a single page of paginated results."""
+        """Fetch a single page of paginated results.
+
+        Raises:
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status.
+        """
         logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
         logger.debug("GET %s -> %d", path, resp.status_code)
@@ -175,10 +208,18 @@ class GitLabClient:
         pipeline_id: int,
         project_id: str | None = None,
     ) -> Pipeline:
-        """Get details of a single pipeline."""
+        """Get details of a single pipeline.
+
+        Raises:
+            NotFoundError: pipeline does not exist.
+            GitLabAPIError: other HTTP error.
+        """
         logger.info("Getting pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        data = await self._get(f"{base}/pipelines/{pipeline_id}")
+        try:
+            data = await self._get(f"{base}/pipelines/{pipeline_id}")
+        except NotFoundError:
+            raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
 
     # -- Jobs --
@@ -234,10 +275,18 @@ class GitLabClient:
         job_id: int,
         project_id: str | None = None,
     ) -> Job:
-        """Get details of a single job."""
+        """Get details of a single job.
+
+        Raises:
+            NotFoundError: job does not exist.
+            GitLabAPIError: other HTTP error.
+        """
         logger.info("Getting job %d", job_id)
         base = self._project_path(project_id)
-        data = await self._get(f"{base}/jobs/{job_id}")
+        try:
+            data = await self._get(f"{base}/jobs/{job_id}")
+        except NotFoundError:
+            raise NotFoundError("job", job_id)
         return Job.from_api(data)
 
     async def get_job_log(
@@ -245,7 +294,15 @@ class GitLabClient:
         job_id: int,
         project_id: str | None = None,
     ) -> str:
-        """Get the raw log output of a job."""
+        """Get the raw log output of a job.
+
+        Raises:
+            NotFoundError: job does not exist.
+            GitLabAPIError: other HTTP error.
+        """
         logger.info("Getting log for job %d", job_id)
         base = self._project_path(project_id)
-        return await self._get_text(f"{base}/jobs/{job_id}/trace")
+        try:
+            return await self._get_text(f"{base}/jobs/{job_id}/trace")
+        except NotFoundError:
+            raise NotFoundError("job", job_id)

@@ -29,6 +29,32 @@ class PaginationLimitError(Exception):
         )
 
 
+class NoPipelineFoundError(Exception):
+    """Raised when no pipeline can be found for a ref after walking commit history."""
+
+    def __init__(self, ref: str, depth: int) -> None:
+        self.ref = ref
+        self.depth = depth
+        super().__init__(
+            f"No pipeline found in the last {depth} commits on '{ref}'."
+        )
+
+
+class NotFoundError(Exception):
+    """Raised when a specific resource is requested by ID but does not exist (HTTP 404).
+
+    Distinct from GitLabAPIError: the API behaved correctly — the resource
+    simply doesn't exist.  Callers that request resources by explicit ID should
+    treat this as a hard failure; callers applying filters to a list should
+    treat an empty result as valid.
+    """
+
+    def __init__(self, resource: str, resource_id: int | str) -> None:
+        self.resource = resource
+        self.resource_id = resource_id
+        super().__init__(f"{resource} {resource_id!r} not found")
+
+
 class GitLabAPIError(Exception):
     """Raised when a GitLab API request fails.
 
