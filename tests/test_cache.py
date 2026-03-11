@@ -67,7 +67,12 @@ class BulkMockBackend(MockBackend):
         super().__init__()
         self.bulk_store: list[object] = []
 
-    def get_many(self, _key_prefix: Key, _cls: type | None = None) -> Sequence[object]:
+    def get_many(
+        self,
+        _key_prefix: Key,
+        _ids: Sequence[int | str],
+        _cls: type | None = None,
+    ) -> Sequence[object]:
         return list(self.bulk_store)
 
 
@@ -257,49 +262,52 @@ class TestCacheBypass:
 
 
 # ---------------------------------------------------------------------------
-# _NamespaceProxy.get_all
+# _NamespaceProxy.get_many
 # ---------------------------------------------------------------------------
 
 
-class TestNamespaceProxyGetAll:
+class TestNamespaceProxyGetMany:
     def _proxy(
         self, backend: MockBackend, bypass: bool = False
     ) -> _NamespaceProxy:
         return _NamespaceProxy(backend, bypass=bypass, key_class=NestedKey)
 
-    def test_get_all_delegates_to_backend(self) -> None:
+    def test_get_many_delegates_to_backend(self) -> None:
         backend = BulkMockBackend()
         backend.bulk_store = ["a", "b", "c"]
         proxy = self._proxy(backend)
-        result = proxy["pipelines"].get_all()
+        result = proxy["pipelines"].get_many([1, 2, 3])
         assert result == ["a", "b", "c"]
 
-    def test_get_all_passes_prefix(self) -> None:
+    def test_get_many_passes_prefix_and_ids(self) -> None:
         received: list[tuple] = []
 
         class CapturingBulkBackend(MockBackend):
             def get_many(
-                self, key_prefix: Key, _cls: type | None = None
+                self,
+                key_prefix: Key,
+                ids: Sequence[int | str],
+                _cls: type | None = None,
             ) -> Sequence[object]:
-                received.append(key_prefix)
+                received.append((key_prefix, list(ids)))
                 return []
 
         proxy = self._proxy(CapturingBulkBackend())
-        proxy["pipelines"]["proj1"].get_all()
-        assert received == [("pipelines", "proj1")]
+        proxy["pipelines"]["proj1"].get_many([10, 20])
+        assert received == [(("pipelines", "proj1"), [10, 20])]
 
-    def test_get_all_bypass_returns_empty(self) -> None:
+    def test_get_many_bypass_returns_empty(self) -> None:
         backend = BulkMockBackend()
         backend.bulk_store = ["x"]
         proxy = self._proxy(backend, bypass=True)
-        assert proxy["pipelines"].get_all() == []
+        assert proxy["pipelines"].get_many([1]) == []
 
-    def test_get_all_empty_prefix_raises(self) -> None:
+    def test_get_many_empty_prefix_raises(self) -> None:
         proxy = self._proxy(BulkMockBackend())
         with pytest.raises(ValueError, match="prefix"):
-            proxy.get_all()
+            proxy.get_many([1])
 
-    def test_get_all_non_bulk_backend_raises(self) -> None:
+    def test_get_many_non_bulk_backend_raises(self) -> None:
         proxy = self._proxy(MockBackend())
         with pytest.raises(NotImplementedError):
-            proxy["pipelines"].get_all()
+            proxy["pipelines"].get_many([1])

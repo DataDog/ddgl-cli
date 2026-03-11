@@ -212,28 +212,39 @@ class StructSqliteBackend(_SqliteBackend):
         logger.debug("set(%r/%s/%s) ttl=%.0fs", table_name, project_id, object_id, ttl)
 
     def get_many(
-        self, key_prefix: Key, cls: type | None = None
+        self,
+        key_prefix: Key,
+        ids: Sequence[int | str],
+        cls: type | None = None,
     ) -> Sequence[object]:
-        """Return all rows matching *key_prefix* as a list.
+        """Bulk-fetch rows by ID list using a single SQL query.
 
-        ``key_prefix[0]`` is the table name.  Additional components filter on
-        ``project_id`` (index 1) and ``object_id`` (index 2) respectively.
+        ``key_prefix[0]`` is the table name (required).
+        ``key_prefix[1]`` is the project_id (optional, adds a WHERE filter).
+        ``ids`` are the object_id values to fetch.
+
+        Generates: ``SELECT * FROM {table} WHERE object_id IN (?, ...)
+        [AND project_id = ?] AND expires_at > ?``
+
         Rows that fail deserialisation into *cls* are logged and skipped.
         """
+        if not ids:
+            return []
+
         table_name = str(key_prefix[0])
 
         if not self._table_exists(table_name):
             logger.debug("get_many(%r) — table does not exist", table_name)
             return []
 
-        conditions: list[str] = ["expires_at > ?"]
-        params: list[object] = [time.time()]
+        placeholders = ", ".join("?" * len(ids))
+        conditions: list[str] = [f"object_id IN ({placeholders})", "expires_at > ?"]
+        params: list[object] = [str(i) for i in ids]
+        params.append(time.time())
+
         if len(key_prefix) > 1:
             conditions.insert(0, "project_id = ?")
             params.insert(0, str(key_prefix[1]))
-        if len(key_prefix) > 2:
-            conditions.insert(1, "object_id = ?")
-            params.insert(1, str(key_prefix[2]))
 
         where = " AND ".join(conditions)
         cursor = self._conn.execute(
@@ -252,5 +263,7 @@ class StructSqliteBackend(_SqliteBackend):
                 if result is not None:
                     results.append(result)
 
-        logger.debug("get_many(%r) returned %d rows", table_name, len(results))
+        logger.debug(
+            "get_many(%r, %d ids) returned %d rows", table_name, len(ids), len(results)
+        )
         return results

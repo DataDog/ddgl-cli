@@ -25,16 +25,17 @@ class _CacheBackend(Protocol):
 
 @runtime_checkable
 class _BulkBackend(Protocol):
-    """Optional extension for backends that support multi-row reads.
+    """Optional extension for backends that support bulk reads by ID.
 
-    ``key_prefix`` is a partial key tuple.  The backend filters rows that
-    match all provided prefix components and returns every matching row.
+    ``key_prefix`` is a partial key tuple (at minimum the table name).
+    ``ids`` are the object_id values to fetch.  The backend generates a
+    single ``WHERE object_id IN (...)`` query rather than N individual reads.
 
     Implementations of ``_CacheBackend`` that also implement ``_BulkBackend``
     advertise bulk-read support; those that don't will cause
-    ``_NamespaceProxy.get_all`` to raise ``NotImplementedError``.
+    ``_NamespaceProxy.get_many`` to raise ``NotImplementedError``.
     """
 
     def get_many(
-        self, key_prefix: Key, cls: type | None = None
+        self, key_prefix: Key, ids: Sequence[int | str], cls: type | None = None
     ) -> Sequence[object]: ...

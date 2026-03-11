@@ -225,31 +225,46 @@ class TestStructSqliteBackendGetMany:
         b.set(("widgets", "proj1", 2), self._w("b", 2, False), ttl=TTL)
         b.set(("widgets", "proj2", 3), self._w("c", 3, True), ttl=TTL)
 
-    def test_get_many_all_rows_in_table(self, tmp_path: Path) -> None:
+    def test_get_many_by_ids(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)
         self._populate(b)
-        results = b.get_many(("widgets",), cls=Widget)
-        assert len(results) == 3
-
-    def test_get_many_filter_by_project(self, tmp_path: Path) -> None:
-        b = make_backend(tmp_path)
-        self._populate(b)
-        results = b.get_many(("widgets", "proj1"), cls=Widget)
+        results = b.get_many(("widgets", "proj1"), [1, 2], cls=Widget)
         assert len(results) == 2
         names = {r.name for r in results}  # type: ignore[union-attr]
         assert names == {"a", "b"}
 
-    def test_get_many_filter_by_object(self, tmp_path: Path) -> None:
+    def test_get_many_partial_ids(self, tmp_path: Path) -> None:
+        """Only requested IDs are returned, even if more exist in the table."""
         b = make_backend(tmp_path)
         self._populate(b)
-        results = b.get_many(("widgets", "proj1", 1), cls=Widget)
+        results = b.get_many(("widgets", "proj1"), [1], cls=Widget)
         assert len(results) == 1
-        expected = Widget(name="a", count=1, score=1.0, active=True)
-        assert results[0] == expected  # type: ignore[comparison-overlap]
+        assert results[0].name == "a"  # type: ignore[union-attr]
+
+    def test_get_many_cross_project_isolation(self, tmp_path: Path) -> None:
+        """project_id filter prevents returning rows from another project."""
+        b = make_backend(tmp_path)
+        self._populate(b)
+        # id=3 exists but belongs to proj2, not proj1
+        results = b.get_many(("widgets", "proj1"), [1, 3], cls=Widget)
+        assert len(results) == 1
+        assert results[0].name == "a"  # type: ignore[union-attr]
+
+    def test_get_many_without_project_filter(self, tmp_path: Path) -> None:
+        """Prefix with only table name: no project_id filter applied."""
+        b = make_backend(tmp_path)
+        self._populate(b)
+        results = b.get_many(("widgets",), [1, 3], cls=Widget)
+        assert len(results) == 2
+
+    def test_get_many_empty_ids_returns_empty(self, tmp_path: Path) -> None:
+        b = make_backend(tmp_path)
+        self._populate(b)
+        assert b.get_many(("widgets", "proj1"), []) == []
 
     def test_get_many_missing_table_returns_empty(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)
-        assert b.get_many(("nonexistent",)) == []
+        assert b.get_many(("nonexistent",), [1, 2]) == []
 
     def test_get_many_excludes_expired(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)
@@ -257,14 +272,14 @@ class TestStructSqliteBackendGetMany:
         fresh = Widget(name="fresh", count=1, score=1.0, active=True)
         b.set(("widgets", "proj1", 1), old, ttl=-1.0)
         b.set(("widgets", "proj1", 2), fresh, ttl=TTL)
-        results = b.get_many(("widgets", "proj1"), cls=Widget)
+        results = b.get_many(("widgets", "proj1"), [1, 2], cls=Widget)
         assert len(results) == 1
         assert results[0].name == "fresh"  # type: ignore[union-attr]
 
     def test_get_many_raw_dict_without_cls(self, tmp_path: Path) -> None:
         b = make_backend(tmp_path)
         b.set(KEY, WIDGET, ttl=TTL)
-        results = b.get_many(("widgets",))
+        results = b.get_many(("widgets",), [42])
         assert len(results) == 1
         assert isinstance(results[0], dict)
         assert results[0]["name"] == "sprocket"  # type: ignore[index]

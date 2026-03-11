@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from ddgl.cache.backends.base import Key, _BulkBackend, _CacheBackend
 from ddgl.cache.cache_config import _KeyClass
@@ -51,9 +52,9 @@ class _NamespaceProxy:
 
     def _full_key(self, key: str | int | Key) -> Key:
         """Extend the prefix with *key* and wrap in the key class NamedTuple."""
-        return self._key_class(*self._extend(key))  # type: ignore[return-value]
+        return self._key_class(*self._extend(key))  # type: ignore[return-value, arg-type]
 
-    def __getitem__(self, key: str | int | Key) -> _NamespaceProxy | object | None:
+    def __getitem__(self, key: str | int | Key) -> Any:
         extended = self._extend(key)
         if len(extended) < self._arity:
             return _NamespaceProxy(
@@ -67,21 +68,24 @@ class _NamespaceProxy:
         """Write *value* at *key* with an explicit TTL (in seconds)."""
         self._backend.set(self._full_key(key), value, ttl)
 
-    def get_all(self, cls: type | None = None) -> Sequence[object]:
-        """Return all cached values matching the current key prefix.
+    def get_many(
+        self, ids: Sequence[int | str], cls: type | None = None
+    ) -> Sequence[object]:
+        """Bulk-fetch cached values for the given IDs.
 
         Only available for backends that implement ``_BulkBackend`` (e.g.
         ``StructSqliteBackend``).  The current prefix must contain at least the
         table-name component.
 
-        Bypass mode returns an empty list without querying the backend.
+        Generates a single ``WHERE object_id IN (...)`` query instead of N
+        individual reads.  Bypass mode returns an empty list.
         """
         if self._bypass:
             return []
         if not self._prefix:
-            raise ValueError("get_all() requires at least a table-name prefix")
+            raise ValueError("get_many() requires at least a table-name prefix")
         if not isinstance(self._backend, _BulkBackend):
             raise NotImplementedError(
                 f"{type(self._backend).__name__} does not support bulk reads"
             )
-        return self._backend.get_many(self._prefix, cls)
+        return self._backend.get_many(self._prefix, ids, cls)
