@@ -8,8 +8,8 @@ from urllib.parse import quote
 import httpx
 
 from ddgl.config import Config
-from ddgl.constants import MAX_PAGES
-from ddgl.exceptions import ConfigError, PaginationLimitError
+from ddgl.constants import MAX_PAGES, JobStatus, PipelineScope
+from ddgl.exceptions import ConfigError, GitLabAPIError, NotFoundError, PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -108,7 +108,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return Page.from_response(resp, item_factory)
 
     async def _paginate(
@@ -155,6 +155,7 @@ class GitLabClient:
         ref: str | None = None,
         project_id: str | None = None,
         per_page: int = 20,
+        scope: PipelineScope | None = None,
     ) -> Page[Pipeline]:
         """Fetch a single page of pipelines."""
         logger.info("Fetching pipelines (ref=%s)", ref or "all")
@@ -162,6 +163,8 @@ class GitLabClient:
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
             params["ref"] = ref
+        if scope is not None:
+            params["scope"] = scope
         return await self._get_page(
             f"{base}/pipelines", Pipeline.from_api, **params
         )
@@ -171,6 +174,7 @@ class GitLabClient:
         ref: str | None = None,
         project_id: str | None = None,
         per_page: int = 20,
+        scope: PipelineScope | None = None,
     ) -> AsyncIterator[Page[Pipeline]]:
         """Stream pages of pipelines."""
         logger.info("Streaming pipelines (ref=%s)", ref or "all")
@@ -178,6 +182,8 @@ class GitLabClient:
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
             params["ref"] = ref
+        if scope is not None:
+            params["scope"] = scope
         async for page in self._paginate(
             f"{base}/pipelines",
             Pipeline.from_api,
@@ -190,6 +196,7 @@ class GitLabClient:
         ref: str | None = None,
         project_id: str | None = None,
         per_page: int = 20,
+        scope: PipelineScope | None = None,
     ) -> list[Pipeline]:
         """Get all pipelines (exhausts pagination)."""
         logger.info("Getting all pipelines (ref=%s)", ref or "all")
@@ -197,6 +204,8 @@ class GitLabClient:
         params: dict[str, Any] = {"per_page": per_page}
         if ref:
             params["ref"] = ref
+        if scope is not None:
+            params["scope"] = scope
         return await self._get_all(
             f"{base}/pipelines",
             Pipeline.from_api,
@@ -229,14 +238,18 @@ class GitLabClient:
         pipeline_id: int,
         project_id: str | None = None,
         per_page: int = 100,
+        scope: JobStatus | None = None,
     ) -> Page[Job]:
         """Fetch a single page of jobs for a pipeline."""
         logger.info("Fetching jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
+        params: dict[str, Any] = {"per_page": per_page}
+        if scope is not None:
+            params["scope"] = scope
         return await self._get_page(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            per_page=per_page,
+            **params,
         )
 
     async def iter_jobs(
@@ -244,14 +257,18 @@ class GitLabClient:
         pipeline_id: int,
         project_id: str | None = None,
         per_page: int = 100,
+        scope: JobStatus | None = None,
     ) -> AsyncIterator[Page[Job]]:
         """Stream pages of jobs for a pipeline."""
         logger.info("Streaming jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
+        params: dict[str, Any] = {"per_page": per_page}
+        if scope is not None:
+            params["scope"] = scope
         async for page in self._paginate(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            per_page=per_page,
+            **params,
         ):
             yield page
 
@@ -260,14 +277,18 @@ class GitLabClient:
         pipeline_id: int,
         project_id: str | None = None,
         per_page: int = 100,
+        scope: JobStatus | None = None,
     ) -> list[Job]:
         """Get all jobs for a pipeline (exhausts pagination)."""
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
+        params: dict[str, Any] = {"per_page": per_page}
+        if scope is not None:
+            params["scope"] = scope
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            per_page=per_page,
+            **params,
         )
 
     async def get_job(

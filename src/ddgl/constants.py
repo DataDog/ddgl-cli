@@ -13,6 +13,20 @@ CACHE_TTL_API_RESPONSE_SINGLE = 300.0     # 5 min — single-resource GETs (/pip
 CACHE_TTL_API_RESPONSE_LIST = 30.0        # 30 s  — list endpoints (/pipelines, /jobs)
 
 
+class PipelineScope(StrEnum):
+    """Valid values for the `scope` query parameter on GET /projects/:id/pipelines.
+
+    Note: despite sharing the name, the job endpoint uses a *different* scope
+    vocabulary (see JobStatus).  GitLab models these as two unrelated parameters.
+    """
+
+    RUNNING = "running"
+    PENDING = "pending"
+    FINISHED = "finished"
+    BRANCHES = "branches"
+    TAGS = "tags"
+
+
 class PipelineStatus(StrEnum):
     CREATED = "created"
     WAITING = "waiting_for_resource"
@@ -28,14 +42,25 @@ class PipelineStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
+    """Job status values — also used as the `scope[]` filter on GET /projects/:id/pipelines/:id/jobs.
+
+    Note: despite sharing the name, the pipeline list endpoint uses a *different*
+    scope vocabulary (see PipelineScope).  GitLab models these as two unrelated parameters.
+    """
+
     CREATED = "created"
     PENDING = "pending"
+    PREPARING = "preparing"
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
     CANCELED = "canceled"
+    CANCELING = "canceling"
     SKIPPED = "skipped"
     MANUAL = "manual"
+    SCHEDULED = "scheduled"
+    WAITING_FOR_RESOURCE = "waiting_for_resource"
+    WAITING_FOR_CALLBACK = "waiting_for_callback"
 
 
 PIPELINE_RUNNING = frozenset(
