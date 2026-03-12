@@ -1,26 +1,18 @@
 from __future__ import annotations
 
-from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, LoadingIndicator
+from textual.widgets import Footer, Header, LoadingIndicator
 
 from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import list_jobs
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
-from ddgl.tui.widgets.status import status_color, status_icon
-
-
-def _fmt_duration(seconds: float | None) -> str:
-    if seconds is None:
-        return "—"
-    total = int(seconds)
-    return f"{total // 60}m {total % 60}s"
 
 
 class PipelineViewer(App[None]):
@@ -44,7 +36,6 @@ class PipelineViewer(App[None]):
         self._pipeline = pipeline
         self._client = client
         self._cache = cache
-        self._all_jobs: list[Job] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -52,20 +43,12 @@ class PipelineViewer(App[None]):
             yield PipelineInfoPanel(id="pipeline-info")
             with Vertical(id="job-panel"):
                 yield LoadingIndicator(id="loading")
-                yield DataTable(id="job-table")
+                yield JobListPanel(id="job-table")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(PipelineInfoPanel).pipeline = self._pipeline
-
-        table = self.query_one("#job-table", DataTable)
-        table.add_column("", key="icon", width=3)
-        table.add_column("Name", key="name")
-        table.add_column("Stage", key="stage")
-        table.add_column("Status", key="status")
-        table.add_column("Duration", key="duration", width=10)
-        table.display = False
-
+        self.query_one(JobListPanel).display = False
         self.load_jobs()
 
     @work(exclusive=True)
@@ -74,26 +57,11 @@ class PipelineViewer(App[None]):
         async for job in list_jobs(self._client, self._pipeline.id, cache=self._cache):
             jobs.append(job)
 
-        self._all_jobs = sorted(jobs, key=lambda j: (j.stage, j.name))
-
         loading = self.query_one("#loading", LoadingIndicator)
-        table = self.query_one("#job-table", DataTable)
+        job_list = self.query_one(JobListPanel)
         loading.display = False
-        table.display = True
-        self._populate_table()
-
-    def _populate_table(self) -> None:
-        table = self.query_one("#job-table", DataTable)
-        table.clear()
-        for job in self._all_jobs:
-            color = status_color(job.status)
-            table.add_row(
-                Text(status_icon(job.status), style=color),
-                job.name,
-                job.stage,
-                Text(str(job.status), style=color),
-                _fmt_duration(job.duration),
-            )
+        job_list.display = True
+        job_list.jobs = jobs
 
     def action_focus_search(self) -> None:
         pass  # wired in commit 4
