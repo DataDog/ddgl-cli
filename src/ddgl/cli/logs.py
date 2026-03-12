@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import rich_click as click
@@ -21,6 +22,8 @@ from ddgl.core.jobs import filter_jobs, get_job, list_jobs
 from ddgl.core.logs import get_log
 from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.render._console import console
+from ddgl.render.log import render_log_section, strip_ansi
 
 
 @click.command()
@@ -73,8 +76,16 @@ def logs(
         click.echo(json.dumps(dict(results)))
         return
 
-    for name, text in results:
-        _write_log(name, text, output_path)
+    if output_path is not None:
+        for name, text in results:
+            _write_log_to_path(name, text, output_path)
+        return
+
+    use_pager = not no_pager and console.is_terminal
+    with console.pager(styles=True) if use_pager else nullcontext():
+        for name, text in results:
+            render_log_section(name, text)
+            console.print()
 
 
 async def _fetch_logs(
@@ -130,15 +141,12 @@ async def _await_with_name(name: str, task: asyncio.Task[str]) -> tuple[str, str
     return name, await task
 
 
-def _write_log(name: str, text: str, output_path: str | None) -> None:
-    """Write a single job log to its destination."""
-    if output_path is not None:
-        out = Path(output_path)
-        if out.is_dir():
-            (out / f"{name}.log").write_text(text)
-        else:
-            with open(out, "a") as f:
-                f.write(f"─── {name} ───\n{text}\n")
-        return
-    click.echo(f"─── {name} ───")
-    click.echo(text)
+def _write_log_to_path(name: str, text: str, output_path: str) -> None:
+    """Write a single job log to a file or directory path (ANSI stripped)."""
+    out = Path(output_path)
+    clean = strip_ansi(text)
+    if out.is_dir():
+        (out / f"{name}.log").write_text(clean)
+    else:
+        with open(out, "a") as f:
+            f.write(f"─── {name} ───\n{clean}\n")
