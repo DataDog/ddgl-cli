@@ -37,6 +37,13 @@ def logs(
     With --job: fetch a single job log by ID.
     Otherwise: resolve the pipeline, filter jobs, fetch all matching logs.
     """
+    # No filters at all: warn the user this will fetch every job's log.
+    has_filters = job_id is not None or failed_only or stage or name_pattern
+    if not has_filters and sys.stdin.isatty():
+        click.confirm(
+            "No job filter specified — this will fetch logs for every job in the pipeline. Continue?",
+            abort=True,
+        )
     asyncio.run(_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, output_path))
 
 
@@ -72,6 +79,7 @@ async def _logs(
                     client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
                 )
                 scope = JobStatus.FAILED if failed_only else None
+
                 # Fire a log-fetch task for each matching job as the iterator
                 # streams in, without materialising all jobs into a list.
                 log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
@@ -87,11 +95,8 @@ async def _logs(
                     )
 
                 if not log_tasks:
-                    msg = (
-                        "No jobs match the given filters."
-                        if (failed_only or stage or name_pattern)
-                        else "No jobs found."
-                    )
+                    has_filters = failed_only or stage or name_pattern
+                    msg = "No jobs match the given filters." if has_filters else "No jobs found."
                     click.echo(msg)
                     return
 
