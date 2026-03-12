@@ -9,7 +9,12 @@ import httpx
 
 from ddgl.config import Config
 from ddgl.constants import MAX_PAGES, JobStatus, PipelineScope
-from ddgl.exceptions import ConfigError, GitLabAPIError, NotFoundError, PaginationLimitError
+from ddgl.exceptions import (
+    ConfigError,
+    GitLabAPIError,
+    NotFoundError,
+    PaginationLimitError,
+)
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -54,16 +59,25 @@ class GitLabClient:
         """Translate HTTP errors into typed exceptions.
 
         Raises:
-            NotFoundError: HTTP 404.
+            ConfigError: HTTP 404 when the project itself is not found.
+            NotFoundError: HTTP 404 on a sub-resource.
             GitLabAPIError: any other HTTP error status.
         """
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            path = str(resp.request.url.path)
             if resp.status_code == 404:
-                raise NotFoundError(resp.request.url.path, "") from exc
+                body = resp.text[:200] if resp.text else ""
+                if "Project Not Found" in body:
+                    pid = self._config.project_id or "unknown"
+                    raise ConfigError(
+                        f"GitLab project '{pid}' not found. "
+                        "Check GITLAB_PROJECT_ID or your git remote configuration."
+                    ) from exc
+                raise NotFoundError(path, "") from exc
             raise GitLabAPIError(
-                resp.status_code, "GET", resp.request.url.path,
+                resp.status_code, "GET", path,
                 resp.text[:200] if resp.text else "",
             ) from exc
 
