@@ -77,7 +77,9 @@ class PipelineViewer(App[None]):
 
     def watch_pipeline(self, value: Pipeline | None) -> None:
         if value is not None:
-            self.query_one(PipelineInfoPanel).pipeline = value
+            info = self.query_one(PipelineInfoPanel)
+            info.pipeline = value
+            info.job_stats = []
 
     def load_pipeline(self, pipeline: Pipeline) -> None:
         """Switch to a new pipeline: update info panel and reload jobs."""
@@ -148,6 +150,9 @@ class PipelineViewer(App[None]):
         stages = sorted({j.stage for j in jobs})
         self.query_one("#status-filter", FilterButton).update_options(statuses)
         self.query_one("#stage-filter", FilterButton).update_options(stages)
+
+        # Update pipeline info panel with job stats.
+        self.query_one(PipelineInfoPanel).job_stats = jobs
 
         # Record the update time and schedule auto-refresh if pipeline is live.
         self._last_updated = datetime.datetime.now()
