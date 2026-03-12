@@ -53,7 +53,8 @@ def pipelines_list(
         click.echo(msgspec.json.encode(result).decode())
         return
 
-    use_pager = not no_pager and console.is_terminal
+    # +5: title line, table header, separator, bottom border, shell prompt
+    use_pager = not no_pager and console.is_terminal and len(result) + 5 > console.height
     with console.pager(styles=True) if use_pager else nullcontext():
         render_pipeline_table(result, ref=resolved_ref)
 
@@ -93,9 +94,7 @@ def pipelines_get(
         click.echo(msgspec.json.encode(pipeline).decode())
         return
 
-    use_pager = not no_pager and console.is_terminal
-    with console.pager(styles=True) if use_pager else nullcontext():
-        render_pipeline_detail(pipeline)
+    render_pipeline_detail(pipeline)  # always short (~10 field lines), no pager needed
 
 
 async def _get(ref: str | None, pipeline_id: int | None, depth: int, *, quiet: bool = False):

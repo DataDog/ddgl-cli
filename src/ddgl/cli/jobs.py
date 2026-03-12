@@ -66,7 +66,9 @@ def jobs_list(
         click.echo(msgspec.json.encode(result).decode())
         return
 
-    use_pager = not no_pager and console.is_terminal
+    # Skip pager when filters are active — result is likely short.
+    has_filters = bool(failed_only or stage or name_pattern)
+    use_pager = not no_pager and console.is_terminal and not has_filters
     with console.pager(styles=True) if use_pager else nullcontext():
         render_job_table(result, pipeline=pipeline)
 
@@ -150,7 +152,9 @@ def jobs_get(
         click.echo(msgspec.json.encode(matched).decode())
         return
 
-    use_pager = not no_pager and console.is_terminal
+    # Skip pager when any filter narrows the result.
+    has_filters = bool(failed_only or stage or name_pattern or job_id is not None)
+    use_pager = not no_pager and console.is_terminal and not has_filters
     with console.pager(styles=True) if use_pager else nullcontext():
         for j in matched:
             render_job_detail(j)
