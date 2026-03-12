@@ -27,12 +27,9 @@ class PipelineInfoPanel(Static):
         return _render(self._pipeline)
 
     def watch_pipeline(self, value: Pipeline | None) -> None:
-        # Store under a private name to avoid clashing with the reactive descriptor.
+        # render() reads _pipeline directly to avoid the reactive descriptor proxy.
         self._pipeline = value
         self.refresh()
-
-    def on_mount(self) -> None:
-        self._pipeline: Pipeline | None = None
 
 
 def _render(p: Pipeline) -> Text:
