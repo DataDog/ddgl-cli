@@ -12,6 +12,7 @@ from ddgl.config import load_config
 from ddgl.constants import PipelineScope
 from ddgl.core.pipeline import list_pipelines, resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.render.pipeline import render_pipeline_detail, render_pipeline_table
 
 
 @click.group()
@@ -30,15 +31,23 @@ def pipelines() -> None:
 )
 def pipelines_list(ref: str | None, count: int, scope: str | None) -> None:
     """List recent pipelines for a ref."""
-    asyncio.run(_list(ref, count, PipelineScope(scope) if scope else None))
-
-
-async def _list(ref: str | None, count: int, scope: PipelineScope | None) -> None:
     try:
-        config = await load_config()
+        result, resolved_ref = asyncio.run(_list(ref, count, PipelineScope(scope) if scope else None))
     except ConfigError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+    if not result:
+        click.echo(f"No pipelines found for ref '{resolved_ref}'.")
+        return
+
+    render_pipeline_table(result, ref=resolved_ref)
+
+
+async def _list(
+    ref: str | None, count: int, scope: PipelineScope | None
+) -> tuple[list, str]:
+    config = await load_config()
 
     if ref is None:
         from ddgl.git import get_current_branch
@@ -48,49 +57,26 @@ async def _list(ref: str | None, count: int, scope: PipelineScope | None) -> Non
         async with GitLabClient(config) as client:
             result = await list_pipelines(client, ref, scope=scope, count=count, cache=cache)
 
-    if not result:
-        click.echo(f"No pipelines found for ref '{ref}'.")
-        return
-
-    for p in result:
-        click.echo(f"#{p.id:<10} {p.status:<12} {p.ref}")
+    return result, ref
 
 
 @pipelines.command("get")
 @pipeline_resolution_options
 def pipelines_get(ref: str | None, pipeline_id: int | None, depth: int) -> None:
     """Resolve and display the latest pipeline (or a specific one by ID)."""
-    asyncio.run(_get(ref, pipeline_id, depth))
-
-
-async def _get(ref: str | None, pipeline_id: int | None, depth: int) -> None:
     try:
-        config = await load_config()
-    except ConfigError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-    try:
-        with Cache.open(CACHE_DIR) as cache:
-            async with GitLabClient(config) as client:
-                p = await resolve_pipeline(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
-                )
+        pipeline = asyncio.run(_get(ref, pipeline_id, depth))
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    elapsed = p.elapsed
-    if elapsed:
-        total = int(elapsed.total_seconds())
-        duration_str = f"{total // 60}m {total % 60}s"
-    else:
-        duration_str = "—"
+    render_pipeline_detail(pipeline)
 
-    click.echo(f"Pipeline #{p.id}")
-    click.echo(f"  Status:   {p.status}")
-    click.echo(f"  Ref:      {p.ref}")
-    click.echo(f"  SHA:      {p.sha[:12] if p.sha else '—'}")
-    click.echo(f"  Duration: {duration_str}")
-    if p.web_url:
-        click.echo(f"  URL:      {p.web_url}")
+
+async def _get(ref: str | None, pipeline_id: int | None, depth: int):
+    config = await load_config()
+    with Cache.open(CACHE_DIR) as cache:
+        async with GitLabClient(config) as client:
+            return await resolve_pipeline(
+                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+            )
