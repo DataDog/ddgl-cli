@@ -51,9 +51,13 @@ def setup_logging(verbosity: int = 0) -> None:
 @click.group()
 @click.version_option(package_name="ddgl")
 @click.option("-v", "--verbose", count=True, help="Increase verbosity (-v/-vv).")
-def main(verbose: int) -> None:
+@click.option("-y", "--yes", is_flag=True, default=False, help="Skip confirmation prompts.")
+@click.pass_context
+def main(ctx: click.Context, verbose: int, yes: bool) -> None:
     """ddgl — Terminal-based GitLab client."""
     setup_logging(verbose)
+    ctx.ensure_object(dict)
+    ctx.obj["yes"] = yes
 
 
 main.add_command(pipelines)

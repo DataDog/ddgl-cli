@@ -22,7 +22,9 @@ from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 @job_filter_options
 @click.option("--job", "job_id", default=None, type=int, help="Fetch log for a specific job by ID.")
 @click.option("--output", "output_path", default=None, type=click.Path(), help="Output path (file or directory).")
+@click.pass_context
 def logs(
+    ctx: click.Context,
     ref: str | None,
     pipeline_id: int | None,
     depth: int,
@@ -38,8 +40,9 @@ def logs(
     Otherwise: resolve the pipeline, filter jobs, fetch all matching logs.
     """
     # No filters at all: warn the user this will fetch every job's log.
+    skip_confirm = (ctx.obj or {}).get("yes", False)
     has_filters = job_id is not None or failed_only or stage or name_pattern
-    if not has_filters and sys.stdin.isatty():
+    if not has_filters and not skip_confirm and sys.stdin.isatty():
         click.confirm(
             "No job filter specified — this will fetch logs for every job in the pipeline. Continue?",
             abort=True,

@@ -98,7 +98,9 @@ async def _jobs_list(
     "--job", "job_id", default=None, type=int,
     help="Show a specific job by ID.",
 )
+@click.pass_context
 def jobs_get(
+    ctx: click.Context,
     ref: str | None,
     pipeline_id: int | None,
     depth: int,
@@ -112,8 +114,9 @@ def jobs_get(
     With --job: show a single job by ID.
     Otherwise: resolve the pipeline, filter jobs, show details for all matches.
     """
+    skip_confirm = (ctx.obj or {}).get("yes", False)
     has_filters = job_id is not None or failed_only or stage or name_pattern
-    if not has_filters and sys.stdin.isatty():
+    if not has_filters and not skip_confirm and sys.stdin.isatty():
         click.confirm(
             "No job filter specified — this will show details"
             " for every job in the pipeline. Continue?",
