@@ -19,8 +19,10 @@ from ddgl.core.pipeline import get_pipeline
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
+from ddgl.tui.widgets.help import HelpModal
 from ddgl.tui.widgets.job_list import JobListPanel, SortMode
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
+from ddgl.tui.widgets.pipeline_switcher import PipelineSwitcherModal
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
 
 _REFRESH_INTERVAL = 20  # seconds between auto-refreshes for running pipelines
@@ -47,6 +49,8 @@ class PipelineViewer(App[None]):
         Binding("ctrl+k", "clear_search", "Clear search"),
         Binding("r", "refresh", "Refresh"),
         Binding("o", "open_url", "Open URL"),
+        Binding("p", "switch_pipeline", "Switch pipeline"),
+        Binding("question_mark", "help", "Help", key_display="?"),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -247,6 +251,23 @@ class PipelineViewer(App[None]):
     def on_sort_button_sort_changed(self, message: SortButton.SortChanged) -> None:
         """Apply a sort mode selected by clicking the sort button."""
         self.query_one(JobListPanel).sort_mode = message.mode
+
+    def action_switch_pipeline(self) -> None:
+        def _on_dismiss(result: Pipeline | None) -> None:
+            if result is not None:
+                self.load_pipeline(result)
+
+        self.push_screen(
+            PipelineSwitcherModal(
+                self._client,
+                self._cache,
+                current_ref=self.pipeline.ref if self.pipeline else "",
+            ),
+            _on_dismiss,
+        )
+
+    def action_help(self) -> None:
+        self.push_screen(HelpModal())
 
     def action_open_url(self) -> None:
         # Prefer the selected job's URL; fall back to the pipeline URL.

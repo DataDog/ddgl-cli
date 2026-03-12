@@ -54,3 +54,41 @@ FilterButton.-active {
     width: auto;
     min-width: 18;
 }
+
+PipelineSwitcherModal {
+    align: center middle;
+}
+
+#switcher {
+    width: 80%;
+    height: 70%;
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+}
+
+#switcher Input {
+    margin-bottom: 1;
+}
+
+#pipeline-table {
+    height: 1fr;
+}
+
+#pipeline-table > .datatable--cursor {
+    background: $primary 60%;
+    color: $text;
+}
+
+HelpModal {
+    align: center middle;
+}
+
+#help {
+    width: 62;
+    height: auto;
+    max-height: 85%;
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+}
