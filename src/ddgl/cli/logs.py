@@ -138,29 +138,30 @@ async def _fetch_logs(
                         asyncio.create_task(get_log(client, job.id, cache=cache)),
                     )
 
-    if not log_tasks:
-        return []
+            if not log_tasks:
+                return []
 
-    results: list[tuple[str, str]] = []
-    futures = [_await_with_name(name, task) for _, (name, task) in log_tasks.items()]
+            # Tasks must be awaited while the client is still open.
+            results: list[tuple[str, str]] = []
+            futures = [_await_with_name(name, task) for _, (name, task) in log_tasks.items()]
 
-    if quiet:
-        for coro in asyncio.as_completed(futures):
-            results.append(await coro)
-    else:
-        from ddgl.render._console import err_console
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            console=err_console,
-            transient=True,
-        ) as progress:
-            task_id = progress.add_task("Fetching logs", total=len(futures))
-            for coro in asyncio.as_completed(futures):
-                results.append(await coro)
-                progress.advance(task_id)
+            if quiet:
+                for coro in asyncio.as_completed(futures):
+                    results.append(await coro)
+            else:
+                from ddgl.render._console import err_console
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    console=err_console,
+                    transient=True,
+                ) as progress:
+                    task_id = progress.add_task("Fetching logs", total=len(futures))
+                    for coro in asyncio.as_completed(futures):
+                        results.append(await coro)
+                        progress.advance(task_id)
 
     return results
 
