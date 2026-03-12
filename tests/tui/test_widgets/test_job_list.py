@@ -6,12 +6,18 @@ import pytest
 from ddgl.constants import JobStatus
 from ddgl.tui.widgets.job_list import (
     SortMode,
+    _GroupRow,
+    _JobRow,
     _apply_filter,
     _apply_sort,
     _fmt_duration,
+    _group_jobs,
     _sort_alphabetical,
     _sort_by_stage,
     _sort_by_start_time,
+    _sum_duration,
+    _worst_status,
+    matrix_base_name,
 )
 from ddgl.tui.widgets.search_bar import FilterSpec
 
@@ -241,3 +247,131 @@ def test_apply_filter_stage_case_insensitive() -> None:
 
 def test_apply_filter_empty_jobs() -> None:
     assert _apply_filter([], FilterSpec(statuses={"failed"})) == []
+
+
+# ---------------------------------------------------------------------------
+# matrix_base_name
+# ---------------------------------------------------------------------------
+
+
+def test_matrix_base_name_no_suffix() -> None:
+    assert matrix_base_name("build") == "build"
+
+
+def test_matrix_base_name_space_bracket() -> None:
+    assert matrix_base_name("build [x86]") == "build"
+
+
+def test_matrix_base_name_colon_space_bracket() -> None:
+    assert matrix_base_name("test: [py3.9, py3.10]") == "test"
+
+
+def test_matrix_base_name_colon_bracket() -> None:
+    assert matrix_base_name("deploy:[arm64]") == "deploy"
+
+
+def test_matrix_base_name_strips_trailing_space() -> None:
+    assert matrix_base_name("build  [x86]") == "build"
+
+
+# ---------------------------------------------------------------------------
+# _worst_status
+# ---------------------------------------------------------------------------
+
+
+def test_worst_status_failed_wins() -> None:
+    jobs = [
+        make_job(status=JobStatus.SUCCESS),
+        make_job(status=JobStatus.FAILED),
+        make_job(status=JobStatus.RUNNING),
+    ]
+    assert _worst_status(jobs) == "failed"
+
+
+def test_worst_status_single_job() -> None:
+    jobs = [make_job(status=JobStatus.SUCCESS)]
+    assert _worst_status(jobs) == "success"
+
+
+def test_worst_status_all_success() -> None:
+    jobs = [make_job(status=JobStatus.SUCCESS), make_job(status=JobStatus.SUCCESS)]
+    assert _worst_status(jobs) == "success"
+
+
+# ---------------------------------------------------------------------------
+# _sum_duration
+# ---------------------------------------------------------------------------
+
+
+def test_sum_duration_all_none() -> None:
+    jobs = [make_job(duration=None), make_job(duration=None)]
+    assert _sum_duration(jobs) is None
+
+
+def test_sum_duration_mixed() -> None:
+    jobs = [make_job(duration=30.0), make_job(duration=None), make_job(duration=60.0)]
+    assert _sum_duration(jobs) == 90.0
+
+
+def test_sum_duration_all_present() -> None:
+    jobs = [make_job(duration=10.0), make_job(duration=20.0)]
+    assert _sum_duration(jobs) == 30.0
+
+
+# ---------------------------------------------------------------------------
+# _group_jobs
+# ---------------------------------------------------------------------------
+
+
+def test_group_jobs_singleton_is_flat_job_row() -> None:
+    jobs = [make_job(id=1, name="build", stage="build")]
+    rows = _group_jobs(jobs)
+    assert len(rows) == 1
+    assert isinstance(rows[0], _JobRow)
+    assert rows[0].job.id == 1
+
+
+def test_group_jobs_matrix_pair_becomes_group_row() -> None:
+    jobs = [
+        make_job(id=1, name="test: [py3.9]", stage="test"),
+        make_job(id=2, name="test: [py3.10]", stage="test"),
+    ]
+    rows = _group_jobs(jobs)
+    assert len(rows) == 1
+    assert isinstance(rows[0], _GroupRow)
+    assert rows[0].base_name == "test"
+    assert rows[0].stage == "test"
+    assert len(rows[0].jobs) == 2
+
+
+def test_group_jobs_different_stages_not_grouped() -> None:
+    jobs = [
+        make_job(id=1, name="test: [py3.9]", stage="test"),
+        make_job(id=2, name="test: [py3.9]", stage="deploy"),
+    ]
+    rows = _group_jobs(jobs)
+    assert len(rows) == 2
+    assert all(isinstance(r, _JobRow) for r in rows)
+
+
+def test_group_jobs_group_key_format() -> None:
+    jobs = [
+        make_job(id=1, name="build [x86]", stage="build"),
+        make_job(id=2, name="build [arm]", stage="build"),
+    ]
+    rows = _group_jobs(jobs)
+    assert isinstance(rows[0], _GroupRow)
+    assert rows[0].key == "group:build:build"
+
+
+def test_group_jobs_mixed_matrix_and_singleton() -> None:
+    jobs = [
+        make_job(id=1, name="lint", stage="test"),
+        make_job(id=2, name="build [x86]", stage="build"),
+        make_job(id=3, name="build [arm]", stage="build"),
+    ]
+    rows = _group_jobs(jobs)
+    assert len(rows) == 2
+    types = {type(r) for r in rows}
+    assert _JobRow in types
+    assert _GroupRow in types
