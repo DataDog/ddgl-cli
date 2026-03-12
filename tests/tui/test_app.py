@@ -115,7 +115,6 @@ async def test_load_pipeline_clears_job_list_before_reload() -> None:
 
 @pytest.mark.asyncio
 async def test_sort_mode_cycles_on_s_key() -> None:
-    from ddgl.tui.widgets.job_list import SortMode
 
     app = _make_app()
     async with app.run_test(headless=True) as pilot:

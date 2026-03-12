@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from rich.text import Text
-from .._stubs import make_job, make_pipeline
 
 from ddgl.constants import JobStatus, PipelineStatus
 from ddgl.tui.widgets.pipeline_info import _render, _render_job_stats
+
+from .._stubs import make_job, make_pipeline
 
 
 def test_render_contains_pipeline_id() -> None:

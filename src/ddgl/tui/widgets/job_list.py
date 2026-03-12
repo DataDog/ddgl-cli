@@ -416,11 +416,7 @@ class JobListPanel(DataTable):
             return
         self.border_subtitle = ""
 
-        for i, row in enumerate(display_rows):
-            if i > 0:
-                sep_key = f"---{i}"
-                self._add_separator(sep_key)
-                self._sep_keys.add(sep_key)
+        for row in display_rows:
             if isinstance(row, _JobRow):
                 self._add_job_row(row.job)
             else:
@@ -431,18 +427,6 @@ class JobListPanel(DataTable):
                         self._add_job_row(
                             job, indent=True, is_last=(j == len(children) - 1)
                         )
-
-    def _add_separator(self, key: str) -> None:
-        """Insert a dim horizontal-rule row between top-level items."""
-        line = Text("─" * 40, style="dim")
-        self.add_row(
-            Text("─" * 40, style="dim"),
-            Text("─" * 40, style="dim"),
-            Text("─" * 40, style="dim"),
-            Text("─" * 40, style="dim"),
-            line,
-            key=key,
-        )
 
     def _restore_cursor(self, key: str) -> None:
         """Move the cursor back to the row with *key* after a repopulate."""
@@ -455,23 +439,18 @@ class JobListPanel(DataTable):
         self, job: Job, *, indent: bool = False, is_last: bool = False
     ) -> None:
         color = status_color(job.status)
-        text_style = f"bold {color}" if indent else color
         key = str(job.id)
 
         if indent:
-            # All cells indented; name gets the tree connector
+            # Status cell gets the tree connector; all cells indented
             connector = "└─ " if is_last else "├─ "
-            status_cell = Text(
-                f"  {status_icon(job.status)} {job.status}", style=text_style
-            )
-            stage_cell = Text(f"  {_truncate(job.stage, 18)}", style=text_style)
-            started_cell = Text(
-                f"  {_fmt_started_at(job.started_at)}", style=text_style
-            )
-            duration_cell = Text(f"  {_fmt_duration(job.duration)}", style=text_style)
-            name_cell = Text()
-            name_cell.append(connector, style=f"dim {color}")
-            name_cell.append(job.name, style=text_style)
+            status_cell = Text()
+            status_cell.append(connector, style=f"dim {color}")
+            status_cell.append(f"{status_icon(job.status)} {job.status}", style=color)
+            stage_cell = Text(f"  {_truncate(job.stage, 18)}", style=color)
+            started_cell = Text(f"  {_fmt_started_at(job.started_at)}", style=color)
+            duration_cell = Text(f"  {_fmt_duration(job.duration)}", style=color)
+            name_cell = Text(job.name, style=color)
         else:
             status_cell = Text(f"{status_icon(job.status)} {job.status}", style=color)
             stage_cell = Text(_truncate(job.stage, 20), style=color)
@@ -489,22 +468,23 @@ class JobListPanel(DataTable):
         toggle = "▼" if expanded else "▶"
         worst = _worst_status(group.jobs)
         color = status_color(worst)
+        bold = f"bold {color}"
 
-        # Merged status: toggle + worst icon + per-status counts
+        # Merged status: toggle + worst icon + per-status counts (all bold)
         status_cell = Text()
         status_cell.append(f"{toggle} ", style="dim")
-        status_cell.append(f"{status_icon(worst)} ", style=color)
+        status_cell.append(f"{status_icon(worst)} ", style=bold)
         status_cell.append_text(_status_summary(group.jobs))
 
-        stage_cell = Text(_truncate(group.stage, 20), style=color)
+        stage_cell = Text(_truncate(group.stage, 20), style=bold)
         started_cell = Text(
-            _fmt_started_at(_group_min_started_at(group.jobs)), style=color
+            _fmt_started_at(_group_min_started_at(group.jobs)), style=bold
         )
-        duration_cell = Text(_fmt_duration(_sum_duration(group.jobs)), style=color)
+        duration_cell = Text(_fmt_duration(_sum_duration(group.jobs)), style=bold)
 
         name_cell = Text()
-        name_cell.append(group.base_name, style=f"bold {color}")
-        name_cell.append(f"  ({len(group.jobs)} jobs)", style=color)
+        name_cell.append(group.base_name, style=bold)
+        name_cell.append(f"  ({len(group.jobs)} jobs)", style=bold)
 
         self.add_row(
             status_cell,
