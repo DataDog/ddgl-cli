@@ -4,6 +4,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.reactive import reactive
 from textual.widgets import Footer, Header, LoadingIndicator
 
 from ddgl.cache.cache import Cache
@@ -27,6 +28,8 @@ class PipelineViewer(App[None]):
         Binding("enter", "job_detail", "Detail", show=False),
     ]
 
+    pipeline: reactive[Pipeline | None] = reactive(None)
+
     def __init__(
         self,
         pipeline: Pipeline,
@@ -34,7 +37,7 @@ class PipelineViewer(App[None]):
         cache: Cache | None = None,
     ) -> None:
         super().__init__()
-        self._pipeline = pipeline
+        self._initial_pipeline = pipeline
         self._client = client
         self._cache = cache
 
@@ -49,9 +52,23 @@ class PipelineViewer(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one(PipelineInfoPanel).pipeline = self._pipeline
-        self.query_one(JobListPanel).display = False
-        self.load_jobs()
+        self.load_pipeline(self._initial_pipeline)
+
+    def watch_pipeline(self, value: Pipeline | None) -> None:
+        if value is not None:
+            self.query_one(PipelineInfoPanel).pipeline = value
+
+    def load_pipeline(self, pipeline: Pipeline) -> None:
+        """Switch to a new pipeline: update info panel and reload jobs."""
+        self.pipeline = pipeline
+
+        job_list = self.query_one(JobListPanel)
+        loading = self.query_one("#loading", LoadingIndicator)
+        job_list.display = False
+        job_list.jobs = []
+        loading.display = True
+
+        self._load_jobs(pipeline)
 
     def on_fuzzy_search_input_search_changed(
         self, message: FuzzySearchInput.SearchChanged
@@ -59,9 +76,9 @@ class PipelineViewer(App[None]):
         self.query_one(JobListPanel).search_query = message.query
 
     @work(exclusive=True)
-    async def load_jobs(self) -> None:
+    async def _load_jobs(self, pipeline: Pipeline) -> None:
         jobs: list[Job] = []
-        async for job in list_jobs(self._client, self._pipeline.id, cache=self._cache):
+        async for job in list_jobs(self._client, pipeline.id, cache=self._cache):
             jobs.append(job)
 
         loading = self.query_one("#loading", LoadingIndicator)
