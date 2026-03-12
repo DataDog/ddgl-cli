@@ -23,6 +23,20 @@ DataTable {
     height: 1fr;
 }
 
-FuzzySearchInput {
+#filter-bar {
     dock: bottom;
+    height: auto;
+}
+
+#search {
+    width: 1fr;
+}
+
+#status-filter, #stage-filter {
+    width: auto;
+    min-width: 14;
+}
+
+FilterButton.-active {
+    border: tall $accent;
 }

@@ -8,7 +8,7 @@ from textual.timer import Timer
 from textual.widgets import DataTable
 
 from ddgl.model.job import Job
-from ddgl.tui.widgets.search_bar import fuzzy_match
+from ddgl.tui.widgets.search_bar import FilterSpec, fuzzy_match
 from ddgl.tui.widgets.status import status_color, status_icon
 
 
@@ -62,14 +62,26 @@ def _apply_sort(jobs: list[Job], mode: SortMode) -> list[Job]:
     return _sort_by_start_time(jobs)
 
 
+def _apply_filter(jobs: list[Job], spec: FilterSpec) -> list[Job]:
+    """Return jobs that pass all three filter predicates in *spec*."""
+    result = jobs
+    if spec.statuses:
+        result = [j for j in result if str(j.status).lower() in spec.statuses]
+    if spec.stages:
+        result = [j for j in result if j.stage.lower() in spec.stages]
+    if spec.text:
+        result = [j for j in result if fuzzy_match(spec.text, j.name)]
+    return result
+
+
 class JobListPanel(DataTable):
-    """Right panel: job list as a DataTable with fuzzy filtering and sort modes."""
+    """Right panel: job list as a DataTable with structured filtering and sort modes."""
 
     jobs: reactive[list[Job]] = reactive([], always_update=True)
-    search_query: reactive[str] = reactive("")
+    filter_spec: reactive[FilterSpec] = reactive(FilterSpec, always_update=True)
     sort_mode: reactive[SortMode] = reactive(SortMode.STAGE)
 
-    _search_timer: Timer | None = None
+    _filter_timer: Timer | None = None
 
     def on_mount(self) -> None:
         self.add_column("", key="icon", width=3)
@@ -82,10 +94,10 @@ class JobListPanel(DataTable):
     def watch_jobs(self, value: list[Job]) -> None:
         self._recompute()
 
-    def watch_search_query(self, value: str) -> None:
-        if self._search_timer is not None:
-            self._search_timer.stop()
-        self._search_timer = self.set_timer(0.08, self._recompute)
+    def watch_filter_spec(self, value: FilterSpec) -> None:
+        if self._filter_timer is not None:
+            self._filter_timer.stop()
+        self._filter_timer = self.set_timer(0.08, self._recompute)
 
     def watch_sort_mode(self, value: SortMode) -> None:
         self._recompute()
@@ -102,13 +114,8 @@ class JobListPanel(DataTable):
             self.border_title = f"{label}  ·  {visible} / {total}"
 
     def _recompute(self) -> None:
-        query = self.search_query
         total = len(self.jobs)
-        visible = (
-            [j for j in self.jobs if fuzzy_match(query, j.name)]
-            if query
-            else list(self.jobs)
-        )
+        visible = _apply_filter(self.jobs, self.filter_spec)
         self._update_border_title(len(visible), total)
         self._repopulate(_apply_sort(visible, self.sort_mode))
 

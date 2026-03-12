@@ -6,12 +6,14 @@ import pytest
 from ddgl.constants import JobStatus
 from ddgl.tui.widgets.job_list import (
     SortMode,
+    _apply_filter,
     _apply_sort,
     _fmt_duration,
     _sort_alphabetical,
     _sort_by_stage,
     _sort_by_start_time,
 )
+from ddgl.tui.widgets.search_bar import FilterSpec
 
 from .._stubs import make_job
 
@@ -166,3 +168,76 @@ def test_apply_sort_dispatch(mode: SortMode, expected_first_name: str) -> None:
     ]
     result = _apply_sort(jobs, mode)
     assert result[0].name == expected_first_name
+
+
+# ---------------------------------------------------------------------------
+# _apply_filter
+# ---------------------------------------------------------------------------
+
+
+def test_apply_filter_empty_spec_returns_all() -> None:
+    jobs = [
+        make_job(id=1, name="lint", stage="test", status=JobStatus.SUCCESS),
+        make_job(id=2, name="build", stage="build", status=JobStatus.FAILED),
+    ]
+    assert _apply_filter(jobs, FilterSpec()) == jobs
+
+
+def test_apply_filter_by_status() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.SUCCESS),
+        make_job(id=2, status=JobStatus.FAILED),
+    ]
+    result = _apply_filter(jobs, FilterSpec(statuses={"failed"}))
+    assert [j.id for j in result] == [2]
+
+
+def test_apply_filter_by_stage() -> None:
+    jobs = [
+        make_job(id=1, stage="build"),
+        make_job(id=2, stage="test"),
+    ]
+    result = _apply_filter(jobs, FilterSpec(stages={"test"}))
+    assert [j.id for j in result] == [2]
+
+
+def test_apply_filter_by_text() -> None:
+    jobs = [
+        make_job(id=1, name="build-app"),
+        make_job(id=2, name="unit-test"),
+    ]
+    result = _apply_filter(jobs, FilterSpec(text="bld"))
+    assert [j.id for j in result] == [1]
+
+
+def test_apply_filter_combined_predicates_are_anded() -> None:
+    jobs = [
+        make_job(id=1, name="lint", stage="test", status=JobStatus.FAILED),
+        make_job(id=2, name="build", stage="build", status=JobStatus.FAILED),
+        make_job(id=3, name="deploy", stage="test", status=JobStatus.SUCCESS),
+    ]
+    # status:failed AND stage:test → only job 1
+    spec = FilterSpec(statuses={"failed"}, stages={"test"})
+    result = _apply_filter(jobs, spec)
+    assert [j.id for j in result] == [1]
+
+
+def test_apply_filter_multi_status() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.SUCCESS),
+        make_job(id=2, status=JobStatus.FAILED),
+        make_job(id=3, status=JobStatus.RUNNING),
+    ]
+    spec = FilterSpec(statuses={"failed", "running"})
+    result = _apply_filter(jobs, spec)
+    assert {j.id for j in result} == {2, 3}
+
+
+def test_apply_filter_stage_case_insensitive() -> None:
+    jobs = [make_job(id=1, stage="Build")]
+    result = _apply_filter(jobs, FilterSpec(stages={"build"}))
+    assert len(result) == 1
+
+
+def test_apply_filter_empty_jobs() -> None:
+    assert _apply_filter([], FilterSpec(statuses={"failed"})) == []
