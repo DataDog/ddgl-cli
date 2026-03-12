@@ -6,22 +6,89 @@ import pytest
 from ddgl.constants import JobStatus
 from ddgl.tui.widgets.job_list import (
     SortMode,
-    _GroupRow,
-    _JobRow,
     _apply_filter,
     _apply_sort,
     _fmt_duration,
+    _fmt_started_at,
     _group_jobs,
+    _group_min_started_at,
+    _GroupRow,
+    _JobRow,
     _sort_alphabetical,
     _sort_by_stage,
     _sort_by_start_time,
     _sum_duration,
+    _truncate,
     _worst_status,
     matrix_base_name,
 )
 from ddgl.tui.widgets.search_bar import FilterSpec
 
 from .._stubs import make_job
+
+# ---------------------------------------------------------------------------
+# _truncate
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_short_string_unchanged() -> None:
+    assert _truncate("build", 20) == "build"
+
+
+def test_truncate_exact_length_unchanged() -> None:
+    assert _truncate("a" * 20, 20) == "a" * 20
+
+
+def test_truncate_long_string_adds_ellipsis() -> None:
+    result = _truncate("a" * 25, 20)
+    assert result.endswith("…")
+    assert len(result) == 20
+
+
+# ---------------------------------------------------------------------------
+# _fmt_started_at
+# ---------------------------------------------------------------------------
+
+
+def test_fmt_started_at_none() -> None:
+    assert _fmt_started_at(None) == "—"
+
+
+def test_fmt_started_at_empty_string() -> None:
+    assert _fmt_started_at("") == "—"
+
+
+def test_fmt_started_at_valid_iso() -> None:
+    assert _fmt_started_at("2024-03-15T14:32:00.000Z") == "14:32"
+
+
+def test_fmt_started_at_no_t_separator() -> None:
+    assert _fmt_started_at("2024-03-15") == "—"
+
+
+# ---------------------------------------------------------------------------
+# _group_min_started_at
+# ---------------------------------------------------------------------------
+
+
+def test_group_min_started_at_all_none() -> None:
+    jobs = [make_job(started_at=None), make_job(started_at=None)]
+    assert _group_min_started_at(jobs) is None
+
+
+def test_group_min_started_at_returns_earliest() -> None:
+    jobs = [
+        make_job(started_at="2024-01-01T12:00:00Z"),
+        make_job(started_at="2024-01-01T10:00:00Z"),
+        make_job(started_at="2024-01-01T11:00:00Z"),
+    ]
+    assert _group_min_started_at(jobs) == "2024-01-01T10:00:00Z"
+
+
+def test_group_min_started_at_mixed_none() -> None:
+    jobs = [make_job(started_at=None), make_job(started_at="2024-01-01T08:00:00Z")]
+    assert _group_min_started_at(jobs) == "2024-01-01T08:00:00Z"
+
 
 # ---------------------------------------------------------------------------
 # _fmt_duration
