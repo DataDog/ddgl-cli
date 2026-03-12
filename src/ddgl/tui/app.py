@@ -79,7 +79,8 @@ class PipelineViewer(App[None]):
         self.query_one(JobListPanel).focus()
 
     def action_cycle_sort(self) -> None:
-        pass  # wired in commit 5
+        job_list = self.query_one(JobListPanel)
+        job_list.sort_mode = job_list.sort_mode.next()
 
     def action_job_detail(self) -> None:
         pass  # future
