@@ -23,12 +23,13 @@ class FilterModalScreen(ModalScreen[set[str]]):
 
     CSS = """
     FilterModalScreen {
-        align: center middle;
+        align: center bottom;
     }
     #modal-container {
         width: 40;
         height: auto;
         max-height: 20;
+        margin-bottom: 5;
         background: $panel;
         border: round $accent;
         padding: 1 2;
