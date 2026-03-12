@@ -11,11 +11,9 @@ def fuzzy_match(query: str, target: str) -> bool:
     query = query.lower()
     qi = 0
     for char in target.lower():
-        if char == query[qi]:
+        if qi < len(query) and char == query[qi]:
             qi += 1
-            if qi == len(query):
-                return True
-    return False
+    return qi == len(query)
 
 
 class FuzzySearchInput(Input):
@@ -30,4 +28,4 @@ class FuzzySearchInput(Input):
         super().__init__(placeholder="Filter jobs...", **kwargs)  # type: ignore[arg-type]
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        self.post_message(self.SearchChanged(event.value.lower()))
+        self.post_message(self.SearchChanged(event.value))

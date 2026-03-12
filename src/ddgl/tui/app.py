@@ -23,9 +23,9 @@ class PipelineViewer(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("/", "focus_search", "Search"),
-        Binding("escape", "clear_search", "Clear"),
+        Binding("escape", "blur_search", "Blur search", show=False),
+        Binding("ctrl+k", "clear_search", "Clear search"),
         Binding("s", "cycle_sort", "Sort"),
-        Binding("enter", "job_detail", "Detail", show=False),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -53,6 +53,7 @@ class PipelineViewer(App[None]):
 
     def on_mount(self) -> None:
         self.load_pipeline(self._initial_pipeline)
+        self.query_one(JobListPanel).focus()
 
     def watch_pipeline(self, value: Pipeline | None) -> None:
         if value is not None:
@@ -77,9 +78,14 @@ class PipelineViewer(App[None]):
 
     @work(exclusive=True)
     async def _load_jobs(self, pipeline: Pipeline) -> None:
-        jobs: list[Job] = []
-        async for job in list_jobs(self._client, pipeline.id, cache=self._cache):
-            jobs.append(job)
+        try:
+            jobs: list[Job] = []
+            async for job in list_jobs(self._client, pipeline.id, cache=self._cache):
+                jobs.append(job)
+        except Exception as e:
+            self.query_one("#loading", LoadingIndicator).display = False
+            self.notify(f"Failed to load jobs: {e}", severity="error")
+            return
 
         loading = self.query_one("#loading", LoadingIndicator)
         job_list = self.query_one(JobListPanel)
@@ -90,6 +96,9 @@ class PipelineViewer(App[None]):
     def action_focus_search(self) -> None:
         self.query_one(FuzzySearchInput).focus()
 
+    def action_blur_search(self) -> None:
+        self.query_one(JobListPanel).focus()
+
     def action_clear_search(self) -> None:
         search = self.query_one(FuzzySearchInput)
         search.clear()
@@ -98,6 +107,3 @@ class PipelineViewer(App[None]):
     def action_cycle_sort(self) -> None:
         job_list = self.query_one(JobListPanel)
         job_list.sort_mode = job_list.sort_mode.next()
-
-    def action_job_detail(self) -> None:
-        pass  # future
