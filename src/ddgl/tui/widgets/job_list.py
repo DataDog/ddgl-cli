@@ -250,6 +250,7 @@ class JobListPanel(DataTable):
     _filter_timer: Timer | None = None
     _job_by_row_key: dict[str, Job]
     _expanded_groups: set[str]
+    _sep_keys: set[str]  # row keys for separator rows (non-interactive)
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(  # type: ignore[arg-type]
@@ -260,6 +261,7 @@ class JobListPanel(DataTable):
         )
         self._job_by_row_key = {}
         self._expanded_groups = set()
+        self._sep_keys = set()
 
     def get_selected_job(self) -> Job | None:
         """Return the Job under the cursor, or None (including for group rows)."""
@@ -312,9 +314,46 @@ class JobListPanel(DataTable):
             self._expanded_groups.add(key)
         self._recompute()
 
+    def action_cursor_down(self) -> None:
+        """Move down, skipping separator rows."""
+        ordered = self.ordered_rows
+        new_row = self.cursor_row + 1
+        while new_row < len(ordered):
+            if str(ordered[new_row].key.value) not in self._sep_keys:
+                self.move_cursor(row=new_row)
+                return
+            new_row += 1
+
+    def action_cursor_up(self) -> None:
+        """Move up, skipping separator rows."""
+        ordered = self.ordered_rows
+        new_row = self.cursor_row - 1
+        while new_row >= 0:
+            if str(ordered[new_row].key.value) not in self._sep_keys:
+                self.move_cursor(row=new_row)
+                return
+            new_row -= 1
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """If a mouse click lands the cursor on a separator, jump past it."""
+        if str(event.row_key.value) not in self._sep_keys:
+            return
+        ordered = self.ordered_rows
+        for new_row in range(self.cursor_row + 1, len(ordered)):
+            if str(ordered[new_row].key.value) not in self._sep_keys:
+                self.move_cursor(row=new_row)
+                return
+        for new_row in range(self.cursor_row - 1, -1, -1):
+            if str(ordered[new_row].key.value) not in self._sep_keys:
+                self.move_cursor(row=new_row)
+                return
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Toggle group rows on Enter; individual job rows are handled by the app."""
         key = str(event.row_key.value)
+        if key in self._sep_keys:
+            event.stop()
+            return
         if not key.startswith("group:"):
             return
         event.stop()
@@ -336,6 +375,17 @@ class JobListPanel(DataTable):
             self.border_title = f"{label}  ·  {visible} / {total}"
 
     def _recompute(self) -> None:
+        # Save cursor so we can restore it after the table is rebuilt.
+        saved_key: str | None = None
+        if self.rows:
+            try:
+                ck = self.coordinate_to_cell_key(self.cursor_coordinate)
+                k = str(ck.row_key.value)
+                if k not in self._sep_keys:
+                    saved_key = k
+            except Exception:
+                pass
+
         total = len(self.jobs)
         visible = _apply_filter(self.jobs, self.filter_spec)
         self._update_border_title(len(visible), total)
@@ -350,9 +400,13 @@ class JobListPanel(DataTable):
 
         self._repopulate(display_rows)
 
+        if saved_key is not None:
+            self._restore_cursor(saved_key)
+
     def _repopulate(self, display_rows: list[_DisplayRow]) -> None:
         self.clear()
         self._job_by_row_key = {}
+        self._sep_keys = set()
 
         if not self.jobs:
             self.border_subtitle = "No jobs"
@@ -362,41 +416,68 @@ class JobListPanel(DataTable):
             return
         self.border_subtitle = ""
 
-        for row in display_rows:
+        for i, row in enumerate(display_rows):
+            if i > 0:
+                sep_key = f"---{i}"
+                self._add_separator(sep_key)
+                self._sep_keys.add(sep_key)
             if isinstance(row, _JobRow):
-                self._add_job_row(row.job, indent=row.indent)
+                self._add_job_row(row.job)
             else:
                 self._add_group_row(row)
                 if row.key in self._expanded_groups:
                     children = row.jobs
-                    for i, job in enumerate(children):
+                    for j, job in enumerate(children):
                         self._add_job_row(
-                            job, indent=True, is_last=(i == len(children) - 1)
+                            job, indent=True, is_last=(j == len(children) - 1)
                         )
+
+    def _add_separator(self, key: str) -> None:
+        """Insert a dim horizontal-rule row between top-level items."""
+        line = Text("─" * 40, style="dim")
+        self.add_row(
+            Text("─" * 40, style="dim"),
+            Text("─" * 40, style="dim"),
+            Text("─" * 40, style="dim"),
+            Text("─" * 40, style="dim"),
+            line,
+            key=key,
+        )
+
+    def _restore_cursor(self, key: str) -> None:
+        """Move the cursor back to the row with *key* after a repopulate."""
+        for i, row in enumerate(self.ordered_rows):
+            if str(row.key.value) == key:
+                self.move_cursor(row=i)
+                return
 
     def _add_job_row(
         self, job: Job, *, indent: bool = False, is_last: bool = False
     ) -> None:
         color = status_color(job.status)
-        dim_color = f"dim {color}"
+        text_style = f"bold {color}" if indent else color
         key = str(job.id)
 
-        # Merged status: icon + text
-        status_cell = Text(f"{status_icon(job.status)} {job.status}", style=color)
-
-        stage_cell = Text(_truncate(job.stage, 20), style=dim_color)
-        started_cell = Text(_fmt_started_at(job.started_at), style=dim_color)
-        duration_cell = Text(_fmt_duration(job.duration), style=dim_color)
-
-        # Name: hierarchy prefix for indented children; trailing newline for spacing
-        name_cell = Text()
         if indent:
-            prefix = "└─ " if is_last else "├─ "
-            name_cell.append(prefix, style="dim")
-            name_cell.append(job.name, style=dim_color)
+            # All cells indented; name gets the tree connector
+            connector = "└─ " if is_last else "├─ "
+            status_cell = Text(
+                f"  {status_icon(job.status)} {job.status}", style=text_style
+            )
+            stage_cell = Text(f"  {_truncate(job.stage, 18)}", style=text_style)
+            started_cell = Text(
+                f"  {_fmt_started_at(job.started_at)}", style=text_style
+            )
+            duration_cell = Text(f"  {_fmt_duration(job.duration)}", style=text_style)
+            name_cell = Text()
+            name_cell.append(connector, style=f"dim {color}")
+            name_cell.append(job.name, style=text_style)
         else:
-            name_cell.append(job.name, style=dim_color)
-            name_cell.append("\n")  # visual row separator between top-level rows
+            status_cell = Text(f"{status_icon(job.status)} {job.status}", style=color)
+            stage_cell = Text(_truncate(job.stage, 20), style=color)
+            started_cell = Text(_fmt_started_at(job.started_at), style=color)
+            duration_cell = Text(_fmt_duration(job.duration), style=color)
+            name_cell = Text(job.name, style=color)
 
         self.add_row(
             status_cell, stage_cell, started_cell, duration_cell, name_cell, key=key
@@ -408,7 +489,6 @@ class JobListPanel(DataTable):
         toggle = "▼" if expanded else "▶"
         worst = _worst_status(group.jobs)
         color = status_color(worst)
-        dim_color = f"dim {color}"
 
         # Merged status: toggle + worst icon + per-status counts
         status_cell = Text()
@@ -416,16 +496,15 @@ class JobListPanel(DataTable):
         status_cell.append(f"{status_icon(worst)} ", style=color)
         status_cell.append_text(_status_summary(group.jobs))
 
-        stage_cell = Text(_truncate(group.stage, 20), style=dim_color)
+        stage_cell = Text(_truncate(group.stage, 20), style=color)
         started_cell = Text(
-            _fmt_started_at(_group_min_started_at(group.jobs)), style=dim_color
+            _fmt_started_at(_group_min_started_at(group.jobs)), style=color
         )
-        duration_cell = Text(_fmt_duration(_sum_duration(group.jobs)), style=dim_color)
+        duration_cell = Text(_fmt_duration(_sum_duration(group.jobs)), style=color)
 
         name_cell = Text()
         name_cell.append(group.base_name, style=f"bold {color}")
-        name_cell.append(f"  ({len(group.jobs)} jobs)", style=dim_color)
-        name_cell.append("\n")  # visual row separator
+        name_cell.append(f"  ({len(group.jobs)} jobs)", style=color)
 
         self.add_row(
             status_cell,
