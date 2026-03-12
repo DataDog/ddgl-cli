@@ -13,11 +13,15 @@ from ddgl.constants import JobStatus
 from ddgl.core.jobs import filter_jobs, get_job, list_jobs
 from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.model.job import Job
 
 
-@click.group()
-def jobs() -> None:
+@click.group(invoke_without_command=True)
+@click.pass_context
+def jobs(ctx: click.Context) -> None:
     """Inspect GitLab jobs."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @jobs.command("list")
@@ -52,17 +56,33 @@ async def _jobs_list(
     try:
         with Cache.open(CACHE_DIR) as cache:
             async with GitLabClient(config) as client:
-                pipeline = await resolve_pipeline(client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache)
+                pipeline = await resolve_pipeline(
+                    client, ref=ref,
+                    pipeline_id=pipeline_id,
+                    depth=depth, cache=cache,
+                )
                 scope = JobStatus.FAILED if failed_only else None
-                all_jobs = [j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)]
+                all_jobs = [
+                    j async for j in list_jobs(
+                        client, pipeline.id,
+                        scope=scope, cache=cache,
+                    )
+                ]
     except (NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    result = filter_jobs(all_jobs, failed_only=failed_only, name_pattern=name_pattern, stage=stage)
+    result = filter_jobs(
+        all_jobs, failed_only=failed_only,
+        name_pattern=name_pattern, stage=stage,
+    )
 
     if not result:
-        msg = "No jobs match the given filters." if (failed_only or stage or name_pattern) else "No jobs found."
+        has_filters = failed_only or stage or name_pattern
+        msg = (
+            "No jobs match the given filters."
+            if has_filters else "No jobs found."
+        )
         click.echo(msg)
         return
 
@@ -72,13 +92,50 @@ async def _jobs_list(
 
 
 @jobs.command("get")
-@click.argument("job_id", type=int)
-def jobs_get(job_id: int) -> None:
-    """Show details for a specific job."""
-    asyncio.run(_jobs_get(job_id))
+@pipeline_resolution_options
+@job_filter_options
+@click.option(
+    "--job", "job_id", default=None, type=int,
+    help="Show a specific job by ID.",
+)
+def jobs_get(
+    ref: str | None,
+    pipeline_id: int | None,
+    depth: int,
+    failed_only: bool,
+    stage: str | None,
+    name_pattern: str | None,
+    job_id: int | None,
+) -> None:
+    """Show details for jobs in a pipeline.
+
+    With --job: show a single job by ID.
+    Otherwise: resolve the pipeline, filter jobs, show details for all matches.
+    """
+    has_filters = job_id is not None or failed_only or stage or name_pattern
+    if not has_filters and sys.stdin.isatty():
+        click.confirm(
+            "No job filter specified — this will show details"
+            " for every job in the pipeline. Continue?",
+            abort=True,
+        )
+    asyncio.run(
+        _jobs_get(
+            ref, pipeline_id, depth,
+            failed_only, stage, name_pattern, job_id,
+        )
+    )
 
 
-async def _jobs_get(job_id: int) -> None:
+async def _jobs_get(
+    ref: str | None,
+    pipeline_id: int | None,
+    depth: int,
+    failed_only: bool,
+    stage: str | None,
+    name_pattern: str | None,
+    job_id: int | None,
+) -> None:
     try:
         config = await load_config()
     except ConfigError as e:
@@ -88,11 +145,39 @@ async def _jobs_get(job_id: int) -> None:
     try:
         with Cache.open(CACHE_DIR) as cache:
             async with GitLabClient(config) as client:
-                j = await get_job(client, job_id, cache=cache)
-    except NotFoundError as e:
+                if job_id is not None:
+                    matched = [await get_job(client, job_id, cache=cache)]
+                else:
+                    pipeline = await resolve_pipeline(
+                        client, ref=ref,
+                        pipeline_id=pipeline_id,
+                        depth=depth, cache=cache,
+                    )
+                    scope = JobStatus.FAILED if failed_only else None
+                    matched = []
+                    async for job in filter_jobs(
+                        list_jobs(client, pipeline.id, scope=scope, cache=cache),
+                        failed_only=failed_only,
+                        name_pattern=name_pattern,
+                        stage=stage,
+                    ):
+                        matched.append(job)
+    except (NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
+    if not matched:
+        has_filters = failed_only or stage or name_pattern
+        msg = "No jobs match the given filters." if has_filters else "No jobs found."
+        click.echo(msg)
+        return
+
+    for j in matched:
+        _print_job_detail(j)
+        click.echo()
+
+
+def _print_job_detail(j: Job) -> None:
     duration_str = f"{int(j.duration)}s" if j.duration is not None else "—"
 
     click.echo(f"Job #{j.id}")

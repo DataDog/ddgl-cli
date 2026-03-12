@@ -100,7 +100,7 @@ def _make_job_predicate(
     failed_only: bool,
     name_pattern: str | None,
     stage: str | None,
-) -> "Callable[[Job], bool]":
+) -> Callable[[Job], bool]:
     compiled = re.compile(name_pattern) if name_pattern else None
 
     def _pred(job: Job) -> bool:
