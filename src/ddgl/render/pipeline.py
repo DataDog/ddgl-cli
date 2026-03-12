@@ -18,7 +18,6 @@ def render_pipeline_table(pipelines: list[Pipeline], *, ref: str | None = None) 
     table.add_column("Status", no_wrap=True)
     table.add_column("Ref")
     table.add_column("SHA", no_wrap=True)
-    table.add_column("Duration", no_wrap=True, justify="right")
     table.add_column("Created", no_wrap=True)
 
     for p in pipelines:
@@ -27,7 +26,6 @@ def render_pipeline_table(pipelines: list[Pipeline], *, ref: str | None = None) 
             format_status(p.status),
             p.ref,
             format_sha(p.sha),
-            format_duration(p.duration),
             format_datetime(p.created_at, short=True),
         )
 
