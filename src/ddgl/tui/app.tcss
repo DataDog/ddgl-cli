@@ -40,3 +40,8 @@ DataTable {
 FilterButton.-active {
     border: tall $accent;
 }
+
+#sort-button {
+    width: auto;
+    min-width: 18;
+}

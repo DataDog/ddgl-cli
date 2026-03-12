@@ -17,7 +17,7 @@ from ddgl.core.jobs import list_jobs
 from ddgl.core.pipeline import get_pipeline
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
-from ddgl.tui.widgets.filter_buttons import FilterButton
+from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
 from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
@@ -33,7 +33,6 @@ class PipelineViewer(App[None]):
         Binding("/", "focus_search", "Search"),
         Binding("escape", "blur_search", "Blur search", show=False),
         Binding("ctrl+k", "clear_search", "Clear search"),
-        Binding("s", "cycle_sort", "Sort"),
         Binding("r", "refresh", "Refresh"),
         Binding("o", "open_url", "Open URL"),
     ]
@@ -69,6 +68,7 @@ class PipelineViewer(App[None]):
             yield FuzzySearchInput(id="search")
             yield FilterButton("status", "Status", id="status-filter")
             yield FilterButton("stage", "Stage", id="stage-filter")
+            yield SortButton(id="sort-button")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -220,9 +220,15 @@ class PipelineViewer(App[None]):
         search.clear()
         self.query_one(JobListPanel).focus()
 
-    def action_cycle_sort(self) -> None:
-        job_list = self.query_one(JobListPanel)
-        job_list.sort_mode = job_list.sort_mode.next()
+    def on_job_list_panel_sort_mode_changed(
+        self, message: JobListPanel.SortModeChanged
+    ) -> None:
+        """Keep the sort button label in sync when s is pressed."""
+        self.query_one("#sort-button", SortButton).set_mode(message.mode)
+
+    def on_sort_button_sort_changed(self, message: SortButton.SortChanged) -> None:
+        """Apply a sort mode selected by clicking the sort button."""
+        self.query_one(JobListPanel).sort_mode = message.mode
 
     def action_open_url(self) -> None:
         # Prefer the selected job's URL; fall back to the pipeline URL.

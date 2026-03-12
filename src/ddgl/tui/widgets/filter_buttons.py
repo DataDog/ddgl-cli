@@ -7,6 +7,8 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, SelectionList
 
+from ddgl.tui.widgets.job_list import SortMode
+
 
 class FilterModalScreen(ModalScreen[set[str]]):
     """A modal that lets the user multi-select values from a list.
@@ -123,3 +125,30 @@ class FilterButton(Button):
             FilterModalScreen(self._label_base, self._options, self._selected),
             _on_dismiss,
         )
+
+
+class SortButton(Button):
+    """Cycles through sort modes on click; mirrors the job list's sort_mode.
+
+    Posts a ``SortChanged`` message so the app can sync the job list.
+    """
+
+    class SortChanged(Message):
+        def __init__(self, mode: SortMode) -> None:
+            super().__init__()
+            self.mode = mode
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(SortMode.STAGE.label(), **kwargs)  # type: ignore[arg-type]
+        self._mode = SortMode.STAGE
+
+    def set_mode(self, mode: SortMode) -> None:
+        """Update the button label to reflect an externally-driven sort change."""
+        self._mode = mode
+        self.label = mode.label()
+
+    async def _on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        new_mode = self._mode.next()
+        self.set_mode(new_mode)
+        self.post_message(self.SortChanged(new_mode))
