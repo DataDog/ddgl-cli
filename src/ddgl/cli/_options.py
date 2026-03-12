@@ -34,6 +34,24 @@ def pipeline_resolution_options(f: F) -> F:
     return f  # type: ignore[return-value]
 
 
+def output_options(f: F) -> F:
+    """Add --json and --no-pager to a command."""
+    f = click.option(
+        "--no-pager",
+        is_flag=True,
+        default=False,
+        help="Disable the pager for long output.",
+    )(f)
+    f = click.option(
+        "--json",
+        "output_json",
+        is_flag=True,
+        default=False,
+        help="Output as JSON.",
+    )(f)
+    return f  # type: ignore[return-value]
+
+
 def job_filter_options(f: F) -> F:
     """Add -f/--failed, --stage, --name to a command."""
     f = click.option(

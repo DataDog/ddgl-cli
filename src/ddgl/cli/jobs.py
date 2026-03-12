@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import nullcontext
 
+import msgspec
 import rich_click as click
 
 from ddgl.cache import Cache
-from ddgl.cli._options import CACHE_DIR, job_filter_options, pipeline_resolution_options
+from ddgl.cli._options import (
+    CACHE_DIR,
+    job_filter_options,
+    output_options,
+    pipeline_resolution_options,
+)
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
 from ddgl.constants import JobStatus
@@ -15,6 +22,7 @@ from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.render._console import console
 from ddgl.render.job import render_job_detail, render_job_table
 
 
@@ -29,6 +37,7 @@ def jobs(ctx: click.Context) -> None:
 @jobs.command("list")
 @pipeline_resolution_options
 @job_filter_options
+@output_options
 def jobs_list(
     ref: str | None,
     pipeline_id: int | None,
@@ -36,6 +45,8 @@ def jobs_list(
     failed_only: bool,
     stage: str | None,
     name_pattern: str | None,
+    output_json: bool,
+    no_pager: bool,
 ) -> None:
     """List jobs for a pipeline."""
     try:
@@ -51,7 +62,13 @@ def jobs_list(
         click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
         return
 
-    render_job_table(result, pipeline=pipeline)
+    if output_json:
+        click.echo(msgspec.json.encode(result).decode())
+        return
+
+    use_pager = not no_pager and console.is_terminal
+    with console.pager(styles=True) if use_pager else nullcontext():
+        render_job_table(result, pipeline=pipeline)
 
 
 async def _jobs_list(
@@ -84,6 +101,7 @@ async def _jobs_list(
     "--job", "job_id", default=None, type=int,
     help="Show a specific job by ID.",
 )
+@output_options
 @click.pass_context
 def jobs_get(
     ctx: click.Context,
@@ -94,6 +112,8 @@ def jobs_get(
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
+    output_json: bool,
+    no_pager: bool,
 ) -> None:
     """Show details for jobs in a pipeline.
 
@@ -122,9 +142,15 @@ def jobs_get(
         click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
         return
 
-    for j in matched:
-        render_job_detail(j)
-        click.echo()
+    if output_json:
+        click.echo(msgspec.json.encode(matched).decode())
+        return
+
+    use_pager = not no_pager and console.is_terminal
+    with console.pager(styles=True) if use_pager else nullcontext():
+        for j in matched:
+            render_job_detail(j)
+            click.echo()
 
 
 async def _jobs_get(

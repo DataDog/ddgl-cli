@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import nullcontext
 
+import msgspec
 import rich_click as click
 
 from ddgl.cache import Cache
-from ddgl.cli._options import CACHE_DIR, pipeline_resolution_options
+from ddgl.cli._options import CACHE_DIR, output_options, pipeline_resolution_options
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
 from ddgl.constants import PipelineScope
 from ddgl.core.pipeline import list_pipelines, resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.render._console import console
 from ddgl.render.pipeline import render_pipeline_detail, render_pipeline_table
 
 
@@ -29,7 +32,10 @@ def pipelines() -> None:
     default=None,
     help="Pipeline scope filter.",
 )
-def pipelines_list(ref: str | None, count: int, scope: str | None) -> None:
+@output_options
+def pipelines_list(
+    ref: str | None, count: int, scope: str | None, output_json: bool, no_pager: bool
+) -> None:
     """List recent pipelines for a ref."""
     try:
         result, resolved_ref = asyncio.run(_list(ref, count, PipelineScope(scope) if scope else None))
@@ -41,7 +47,13 @@ def pipelines_list(ref: str | None, count: int, scope: str | None) -> None:
         click.echo(f"No pipelines found for ref '{resolved_ref}'.")
         return
 
-    render_pipeline_table(result, ref=resolved_ref)
+    if output_json:
+        click.echo(msgspec.json.encode(result).decode())
+        return
+
+    use_pager = not no_pager and console.is_terminal
+    with console.pager(styles=True) if use_pager else nullcontext():
+        render_pipeline_table(result, ref=resolved_ref)
 
 
 async def _list(
@@ -62,7 +74,10 @@ async def _list(
 
 @pipelines.command("get")
 @pipeline_resolution_options
-def pipelines_get(ref: str | None, pipeline_id: int | None, depth: int) -> None:
+@output_options
+def pipelines_get(
+    ref: str | None, pipeline_id: int | None, depth: int, output_json: bool, no_pager: bool
+) -> None:
     """Resolve and display the latest pipeline (or a specific one by ID)."""
     try:
         pipeline = asyncio.run(_get(ref, pipeline_id, depth))
@@ -70,7 +85,13 @@ def pipelines_get(ref: str | None, pipeline_id: int | None, depth: int) -> None:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    render_pipeline_detail(pipeline)
+    if output_json:
+        click.echo(msgspec.json.encode(pipeline).decode())
+        return
+
+    use_pager = not no_pager and console.is_terminal
+    with console.pager(styles=True) if use_pager else nullcontext():
+        render_pipeline_detail(pipeline)
 
 
 async def _get(ref: str | None, pipeline_id: int | None, depth: int):

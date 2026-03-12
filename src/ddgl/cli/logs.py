@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
 import rich_click as click
 
 from ddgl.cache import Cache
-from ddgl.cli._options import CACHE_DIR, job_filter_options, pipeline_resolution_options
+from ddgl.cli._options import (
+    CACHE_DIR,
+    job_filter_options,
+    output_options,
+    pipeline_resolution_options,
+)
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
 from ddgl.constants import JobStatus
@@ -22,6 +28,7 @@ from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 @job_filter_options
 @click.option("--job", "job_id", default=None, type=int, help="Fetch log for a specific job by ID.")
 @click.option("--output", "output_path", default=None, type=click.Path(), help="Output path (file or directory).")
+@output_options
 @click.pass_context
 def logs(
     ctx: click.Context,
@@ -33,24 +40,44 @@ def logs(
     name_pattern: str | None,
     job_id: int | None,
     output_path: str | None,
+    output_json: bool,
+    no_pager: bool,
 ) -> None:
     """Fetch job logs.
 
-    With --job: fetch a single job log by ID.
+    With `--job`: fetch a single job log by ID.
     Otherwise: resolve the pipeline, filter jobs, fetch all matching logs.
     """
-    # No filters at all: warn the user this will fetch every job's log.
-    skip_confirm = (ctx.obj or {}).get("yes", False)
+    skip_confirm = (ctx.obj or {}).get("yes", False) or output_json
     has_filters = job_id is not None or failed_only or stage or name_pattern
     if not has_filters and not skip_confirm and sys.stdin.isatty():
         click.confirm(
             "No job filter specified — this will fetch logs for every job in the pipeline. Continue?",
             abort=True,
         )
-    asyncio.run(_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, output_path))
+
+    try:
+        results = asyncio.run(
+            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id)
+        )
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if not results:
+        has_filters = failed_only or stage or name_pattern
+        click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+        return
+
+    if output_json:
+        click.echo(json.dumps(dict(results)))
+        return
+
+    for name, text in results:
+        _write_log(name, text, output_path)
 
 
-async def _logs(
+async def _fetch_logs(
     ref: str | None,
     pipeline_id: int | None,
     depth: int,
@@ -58,62 +85,45 @@ async def _logs(
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
-    output_path: str | None,
-) -> None:
-    try:
-        config = await load_config()
-    except ConfigError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+) -> list[tuple[str, str]]:
+    """Fetch logs and return [(job_name, log_text), ...]."""
+    config = await load_config()
 
-    try:
-        with Cache.open(CACHE_DIR) as cache:
-            async with GitLabClient(config) as client:
-                if job_id is not None:
-                    # Fetch job metadata and log concurrently.
-                    job, text = await asyncio.gather(
-                        get_job(client, job_id, cache=cache),
-                        get_log(client, job_id, cache=cache),
-                    )
-                    _write_log(job.name, text, output_path)
-                    return
-
-                pipeline = await resolve_pipeline(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+    with Cache.open(CACHE_DIR) as cache:
+        async with GitLabClient(config) as client:
+            if job_id is not None:
+                job, text = await asyncio.gather(
+                    get_job(client, job_id, cache=cache),
+                    get_log(client, job_id, cache=cache),
                 )
-                scope = JobStatus.FAILED if failed_only else None
+                return [(job.name, text)]
 
-                # Fire a log-fetch task for each matching job as the iterator
-                # streams in, without materialising all jobs into a list.
-                log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
-                async for job in filter_jobs(
-                    list_jobs(client, pipeline.id, scope=scope, cache=cache),
-                    failed_only=failed_only,
-                    name_pattern=name_pattern,
-                    stage=stage,
-                ):
-                    log_tasks[job.id] = (
-                        job.name,
-                        asyncio.create_task(get_log(client, job.id, cache=cache)),
-                    )
+            pipeline = await resolve_pipeline(
+                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+            )
+            scope = JobStatus.FAILED if failed_only else None
 
-                if not log_tasks:
-                    has_filters = failed_only or stage or name_pattern
-                    msg = "No jobs match the given filters." if has_filters else "No jobs found."
-                    click.echo(msg)
-                    return
+            log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
+            async for job in filter_jobs(
+                list_jobs(client, pipeline.id, scope=scope, cache=cache),
+                failed_only=failed_only,
+                name_pattern=name_pattern,
+                stage=stage,
+            ):
+                log_tasks[job.id] = (
+                    job.name,
+                    asyncio.create_task(get_log(client, job.id, cache=cache)),
+                )
 
-                # Print each log as soon as its fetch completes.
-                futures = [
-                    _await_with_name(name, task)
-                    for _, (name, task) in log_tasks.items()
-                ]
-                for coro in asyncio.as_completed(futures):
-                    name, text = await coro
-                    _write_log(name, text, output_path)
-    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+    if not log_tasks:
+        return []
+
+    results: list[tuple[str, str]] = []
+    futures = [_await_with_name(name, task) for _, (name, task) in log_tasks.items()]
+    for coro in asyncio.as_completed(futures):
+        name, text = await coro
+        results.append((name, text))
+    return results
 
 
 async def _await_with_name(name: str, task: asyncio.Task[str]) -> tuple[str, str]:
