@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import datetime
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
+from textual.timer import Timer
 from textual.widgets import Footer, Header, LoadingIndicator
 
 from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import list_jobs
+from ddgl.core.pipeline import get_pipeline
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.widgets.filter_buttons import FilterButton
 from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
+
+_REFRESH_INTERVAL = 20  # seconds between auto-refreshes for running pipelines
 
 
 class PipelineViewer(App[None]):
@@ -27,6 +33,7 @@ class PipelineViewer(App[None]):
         Binding("escape", "blur_search", "Blur search", show=False),
         Binding("ctrl+k", "clear_search", "Clear search"),
         Binding("s", "cycle_sort", "Sort"),
+        Binding("r", "refresh", "Refresh"),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -45,6 +52,9 @@ class PipelineViewer(App[None]):
         self._text_filter = FilterSpec()
         self._dropdown_statuses: set[str] = set()
         self._dropdown_stages: set[str] = set()
+        # Refresh state.
+        self._refresh_timer: Timer | None = None
+        self._last_updated: datetime.datetime | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -69,6 +79,11 @@ class PipelineViewer(App[None]):
 
     def load_pipeline(self, pipeline: Pipeline) -> None:
         """Switch to a new pipeline: update info panel and reload jobs."""
+        # Cancel any running auto-refresh timer before starting a new load.
+        if self._refresh_timer is not None:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
+
         self.pipeline = pipeline
 
         job_list = self.query_one(JobListPanel)
@@ -131,6 +146,49 @@ class PipelineViewer(App[None]):
         stages = sorted({j.stage for j in jobs})
         self.query_one("#status-filter", FilterButton).update_options(statuses)
         self.query_one("#stage-filter", FilterButton).update_options(stages)
+
+        # Record the update time and schedule auto-refresh if pipeline is live.
+        self._last_updated = datetime.datetime.now()
+        self._update_sub_title()
+        if pipeline.is_running:
+            self._refresh_timer = self.set_interval(
+                _REFRESH_INTERVAL, self._do_auto_refresh
+            )
+
+    def _update_sub_title(self) -> None:
+        if self._last_updated is None:
+            self.sub_title = ""
+            return
+        ts = self._last_updated.strftime("%H:%M:%S")
+        if self.pipeline and self.pipeline.is_running:
+            self.sub_title = f"Auto-refreshing · last updated {ts}"
+        else:
+            self.sub_title = f"Last updated {ts}"
+
+    async def _do_auto_refresh(self) -> None:
+        if self.pipeline is None:
+            return
+        try:
+            fresh = await get_pipeline(
+                self._client, self.pipeline.id, cache=self._cache
+            )
+        except Exception as e:
+            self.notify(f"Auto-refresh failed: {e}", severity="warning")
+            return
+        self.load_pipeline(fresh)
+
+    def action_refresh(self) -> None:
+        if self.pipeline is not None:
+            self._manual_refresh(self.pipeline)
+
+    @work(exclusive=False)
+    async def _manual_refresh(self, pipeline: Pipeline) -> None:
+        try:
+            fresh = await get_pipeline(self._client, pipeline.id, cache=self._cache)
+        except Exception as e:
+            self.notify(f"Refresh failed: {e}", severity="error")
+            return
+        self.load_pipeline(fresh)
 
     def action_focus_search(self) -> None:
         self.query_one(FuzzySearchInput).focus()
