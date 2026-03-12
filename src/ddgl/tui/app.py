@@ -5,13 +5,14 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, LoadingIndicator, Static
+from textual.widgets import DataTable, Footer, Header, LoadingIndicator
 
 from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import list_jobs
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 from ddgl.tui.widgets.status import status_color, status_icon
 
 
@@ -48,14 +49,14 @@ class PipelineViewer(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
-            yield Static(id="pipeline-info")
+            yield PipelineInfoPanel(id="pipeline-info")
             with Vertical(id="job-panel"):
                 yield LoadingIndicator(id="loading")
                 yield DataTable(id="job-table")
         yield Footer()
 
     def on_mount(self) -> None:
-        self._render_pipeline_info()
+        self.query_one(PipelineInfoPanel).pipeline = self._pipeline
 
         table = self.query_one("#job-table", DataTable)
         table.add_column("", key="icon", width=3)
@@ -66,32 +67,6 @@ class PipelineViewer(App[None]):
         table.display = False
 
         self.load_jobs()
-
-    def _render_pipeline_info(self) -> None:
-        p = self._pipeline
-        elapsed = p.elapsed
-        if elapsed:
-            total = int(elapsed.total_seconds())
-            duration_str = f"{total // 60}m {total % 60}s"
-        else:
-            duration_str = "—"
-
-        color = status_color(p.status)
-        icon = status_icon(p.status)
-
-        content = Text()
-        content.append(f"Pipeline #{p.id}\n", style="bold")
-        content.append("\n")
-        content.append("Status:   ")
-        content.append(f"{icon} {p.status}\n", style=color)
-        content.append(f"Ref:      {p.ref}\n")
-        content.append(f"SHA:      {p.sha[:12] if p.sha else '—'}\n")
-        content.append(f"Source:   {p.source or '—'}\n")
-        content.append(f"Duration: {duration_str}\n")
-        if p.web_url:
-            content.append(f"\nURL:\n{p.web_url}\n")
-
-        self.query_one("#pipeline-info", Static).update(content)
 
     @work(exclusive=True)
     async def load_jobs(self) -> None:
