@@ -4,7 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-import click
+import rich_click as click
 
 from ddgl.cache import Cache
 from ddgl.cli._options import CACHE_DIR, job_filter_options, pipeline_resolution_options

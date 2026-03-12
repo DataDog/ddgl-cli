@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 
-import click
+import rich_click as click
 
 from ddgl.cli.jobs import jobs
 from ddgl.cli.logs import logs
@@ -11,6 +11,10 @@ from ddgl.cli.pipelines import pipelines
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DATE_FORMAT = "%H:%M:%S"
+
+click.rich_click.USE_MARKDOWN = True
+click.rich_click.SHOW_METAVARS_COLUMN = False
+click.rich_click.APPEND_METAVARS_HELP = True
 
 
 def setup_logging(verbosity: int = 0) -> None:
@@ -50,7 +54,7 @@ def setup_logging(verbosity: int = 0) -> None:
 
 @click.group()
 @click.version_option(package_name="ddgl")
-@click.option("-v", "--verbose", count=True, help="Increase verbosity (-v/-vv).")
+@click.option("-v", "--verbose", count=True, help="Increase verbosity (`-v`/`-vv`).")
 @click.option("-y", "--yes", is_flag=True, default=False, help="Skip confirmation prompts.")
 @click.pass_context
 def main(ctx: click.Context, verbose: int, yes: bool) -> None:

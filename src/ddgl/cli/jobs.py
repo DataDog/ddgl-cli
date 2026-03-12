@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-import click
+import rich_click as click
 
 from ddgl.cache import Cache
 from ddgl.cli._options import CACHE_DIR, job_filter_options, pipeline_resolution_options

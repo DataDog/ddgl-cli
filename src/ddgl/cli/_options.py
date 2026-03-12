@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-import click
+import rich_click as click
 
 CACHE_DIR = Path("~/.cache/ddgl").expanduser()
 
