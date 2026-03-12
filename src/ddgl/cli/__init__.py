@@ -6,6 +6,7 @@ import os
 import click
 
 from ddgl.cli.jobs import jobs
+from ddgl.cli.logs import logs
 from ddgl.cli.pipelines import pipelines
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -57,3 +58,4 @@ def main(verbose: int) -> None:
 
 main.add_command(pipelines)
 main.add_command(jobs)
+main.add_command(logs)
