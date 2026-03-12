@@ -38,7 +38,9 @@ def pipelines_list(
 ) -> None:
     """List recent pipelines for a ref."""
     try:
-        result, resolved_ref = asyncio.run(_list(ref, count, PipelineScope(scope) if scope else None))
+        result, resolved_ref = asyncio.run(
+            _list(ref, count, PipelineScope(scope) if scope else None, quiet=output_json)
+        )
     except ConfigError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -57,7 +59,7 @@ def pipelines_list(
 
 
 async def _list(
-    ref: str | None, count: int, scope: PipelineScope | None
+    ref: str | None, count: int, scope: PipelineScope | None, *, quiet: bool = False
 ) -> tuple[list, str]:
     config = await load_config()
 
@@ -67,7 +69,9 @@ async def _list(
 
     with Cache.open(CACHE_DIR) as cache:
         async with GitLabClient(config) as client:
-            result = await list_pipelines(client, ref, scope=scope, count=count, cache=cache)
+            spinner = nullcontext() if quiet else console.status("Fetching pipelines…")
+            with spinner:
+                result = await list_pipelines(client, ref, scope=scope, count=count, cache=cache)
 
     return result, ref
 
@@ -80,7 +84,7 @@ def pipelines_get(
 ) -> None:
     """Resolve and display the latest pipeline (or a specific one by ID)."""
     try:
-        pipeline = asyncio.run(_get(ref, pipeline_id, depth))
+        pipeline = asyncio.run(_get(ref, pipeline_id, depth, quiet=output_json))
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -94,10 +98,12 @@ def pipelines_get(
         render_pipeline_detail(pipeline)
 
 
-async def _get(ref: str | None, pipeline_id: int | None, depth: int):
+async def _get(ref: str | None, pipeline_id: int | None, depth: int, *, quiet: bool = False):
     config = await load_config()
     with Cache.open(CACHE_DIR) as cache:
         async with GitLabClient(config) as client:
-            return await resolve_pipeline(
-                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
-            )
+            spinner = nullcontext() if quiet else console.status("Resolving pipeline…")
+            with spinner:
+                return await resolve_pipeline(
+                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+                )

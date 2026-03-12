@@ -51,7 +51,7 @@ def jobs_list(
     """List jobs for a pipeline."""
     try:
         pipeline, result = asyncio.run(
-            _jobs_list(ref, pipeline_id, depth, failed_only, stage, name_pattern)
+            _jobs_list(ref, pipeline_id, depth, failed_only, stage, name_pattern, quiet=output_json)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -78,17 +78,21 @@ async def _jobs_list(
     failed_only: bool,
     stage: str | None,
     name_pattern: str | None,
+    *,
+    quiet: bool = False,
 ) -> tuple[Pipeline, list[Job]]:
     config = await load_config()
     with Cache.open(CACHE_DIR) as cache:
         async with GitLabClient(config) as client:
-            pipeline = await resolve_pipeline(
-                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
-            )
+            with nullcontext() if quiet else console.status("Resolving pipeline…"):
+                pipeline = await resolve_pipeline(
+                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
+                )
             scope = JobStatus.FAILED if failed_only else None
-            all_jobs = [
-                j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
-            ]
+            with nullcontext() if quiet else console.status("Fetching jobs…"):
+                all_jobs = [
+                    j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
+                ]
 
     result = filter_jobs(all_jobs, failed_only=failed_only, name_pattern=name_pattern, stage=stage)
     return pipeline, result
@@ -131,7 +135,7 @@ def jobs_get(
 
     try:
         matched = asyncio.run(
-            _jobs_get(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id)
+            _jobs_get(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -161,22 +165,27 @@ async def _jobs_get(
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
+    *,
+    quiet: bool = False,
 ) -> list[Job]:
     config = await load_config()
     with Cache.open(CACHE_DIR) as cache:
         async with GitLabClient(config) as client:
             if job_id is not None:
-                return [await get_job(client, job_id, cache=cache)]
+                with nullcontext() if quiet else console.status("Fetching job…"):
+                    return [await get_job(client, job_id, cache=cache)]
 
-            pipeline = await resolve_pipeline(
-                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
-            )
-            scope = JobStatus.FAILED if failed_only else None
-            return [
-                j async for j in filter_jobs(
-                    list_jobs(client, pipeline.id, scope=scope, cache=cache),
-                    failed_only=failed_only,
-                    name_pattern=name_pattern,
-                    stage=stage,
+            with nullcontext() if quiet else console.status("Resolving pipeline…"):
+                pipeline = await resolve_pipeline(
+                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
                 )
-            ]
+            scope = JobStatus.FAILED if failed_only else None
+            with nullcontext() if quiet else console.status("Fetching jobs…"):
+                return [
+                    j async for j in filter_jobs(
+                        list_jobs(client, pipeline.id, scope=scope, cache=cache),
+                        failed_only=failed_only,
+                        name_pattern=name_pattern,
+                        stage=stage,
+                    )
+                ]

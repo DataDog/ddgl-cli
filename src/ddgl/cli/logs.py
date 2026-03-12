@@ -7,6 +7,13 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import rich_click as click
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 
 from ddgl.cache import Cache
 from ddgl.cli._options import (
@@ -61,7 +68,7 @@ def logs(
 
     try:
         results = asyncio.run(
-            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id)
+            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -96,6 +103,8 @@ async def _fetch_logs(
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
+    *,
+    quiet: bool = False,
 ) -> list[tuple[str, str]]:
     """Fetch logs and return [(job_name, log_text), ...]."""
     config = await load_config()
@@ -103,37 +112,56 @@ async def _fetch_logs(
     with Cache.open(CACHE_DIR) as cache:
         async with GitLabClient(config) as client:
             if job_id is not None:
-                job, text = await asyncio.gather(
-                    get_job(client, job_id, cache=cache),
-                    get_log(client, job_id, cache=cache),
-                )
+                with nullcontext() if quiet else console.status("Fetching log…"):
+                    job, text = await asyncio.gather(
+                        get_job(client, job_id, cache=cache),
+                        get_log(client, job_id, cache=cache),
+                    )
                 return [(job.name, text)]
 
-            pipeline = await resolve_pipeline(
-                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
-            )
+            with nullcontext() if quiet else console.status("Resolving pipeline…"):
+                pipeline = await resolve_pipeline(
+                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+                )
             scope = JobStatus.FAILED if failed_only else None
 
-            log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
-            async for job in filter_jobs(
-                list_jobs(client, pipeline.id, scope=scope, cache=cache),
-                failed_only=failed_only,
-                name_pattern=name_pattern,
-                stage=stage,
-            ):
-                log_tasks[job.id] = (
-                    job.name,
-                    asyncio.create_task(get_log(client, job.id, cache=cache)),
-                )
+            with nullcontext() if quiet else console.status("Fetching job list…"):
+                log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
+                async for job in filter_jobs(
+                    list_jobs(client, pipeline.id, scope=scope, cache=cache),
+                    failed_only=failed_only,
+                    name_pattern=name_pattern,
+                    stage=stage,
+                ):
+                    log_tasks[job.id] = (
+                        job.name,
+                        asyncio.create_task(get_log(client, job.id, cache=cache)),
+                    )
 
     if not log_tasks:
         return []
 
     results: list[tuple[str, str]] = []
     futures = [_await_with_name(name, task) for _, (name, task) in log_tasks.items()]
-    for coro in asyncio.as_completed(futures):
-        name, text = await coro
-        results.append((name, text))
+
+    if quiet:
+        for coro in asyncio.as_completed(futures):
+            results.append(await coro)
+    else:
+        from ddgl.render._console import err_console
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            task_id = progress.add_task("Fetching logs", total=len(futures))
+            for coro in asyncio.as_completed(futures):
+                results.append(await coro)
+                progress.advance(task_id)
+
     return results
 
 
