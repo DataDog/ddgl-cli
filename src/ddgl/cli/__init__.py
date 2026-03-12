@@ -4,13 +4,12 @@ import logging
 import os
 
 import rich_click as click
+from rich.logging import RichHandler
 
 from ddgl.cli.jobs import jobs
 from ddgl.cli.logs import logs
 from ddgl.cli.pipelines import pipelines
-
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_LOG_DATE_FORMAT = "%H:%M:%S"
+from ddgl.render._console import err_console
 
 click.rich_click.USE_MARKDOWN = True
 click.rich_click.SHOW_METAVARS_COLUMN = False
@@ -26,12 +25,6 @@ def setup_logging(verbosity: int = 0) -> None:
         3. DDGL_LOG_LEVEL env var
         4. Default: WARNING
     """
-    logging.addLevelName(logging.DEBUG, "DEBG")
-    logging.addLevelName(logging.INFO, "INFO")
-    logging.addLevelName(logging.WARNING, "WARN")
-    logging.addLevelName(logging.ERROR, "ERRO")
-    logging.addLevelName(logging.CRITICAL, "CRIT")
-
     if verbosity >= 2:
         level = logging.DEBUG
     elif verbosity == 1:
@@ -45,9 +38,7 @@ def setup_logging(verbosity: int = 0) -> None:
     ddgl_logger.setLevel(level)
 
     if not ddgl_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
-        ddgl_logger.addHandler(handler)
+        ddgl_logger.addHandler(RichHandler(console=err_console, show_path=False))
 
     ddgl_logger.propagate = False
 
