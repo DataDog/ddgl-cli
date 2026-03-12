@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
-from itertools import groupby
 
 from rich.text import Text
 from textual.binding import Binding
@@ -197,23 +196,29 @@ def _filter_is_active(spec: FilterSpec) -> bool:
 def _group_jobs(jobs: list[Job]) -> list[_DisplayRow]:
     """Group matrix jobs into GroupRows; singletons become plain JobRows.
 
-    Jobs are first sorted by (stage, base_name) so that members of the same
-    matrix group are adjacent, then grouped by (matrix_base_name, stage).
-    Groups with a single member are emitted as a flat _JobRow.
+    The position of each group in the output is determined by its *first*
+    member in the input, so the caller's sort order is preserved.  Members
+    belonging to the same (stage, base_name) pair are collected together
+    regardless of where they sit in the input list.
     """
-    # Use a stable sort so the external sort order is preserved within groups.
-    keyed = sorted(jobs, key=lambda j: (j.stage, matrix_base_name(j.name)))
+    seen_order: list[tuple[str, str]] = []
+    groups: dict[tuple[str, str], list[Job]] = {}
+    for job in jobs:
+        gkey = (job.stage, matrix_base_name(job.name))
+        if gkey not in groups:
+            seen_order.append(gkey)
+            groups[gkey] = []
+        groups[gkey].append(job)
+
     rows: list[_DisplayRow] = []
-    for (stage, base), members in groupby(
-        keyed, key=lambda j: (j.stage, matrix_base_name(j.name))
-    ):
-        member_list = list(members)
+    for stage, base in seen_order:
+        member_list = groups[(stage, base)]
         if len(member_list) == 1:
             rows.append(_JobRow(member_list[0]))
         else:
-            key = f"group:{base}:{stage}"
+            row_key = f"group:{base}:{stage}"
             rows.append(
-                _GroupRow(key=key, base_name=base, stage=stage, jobs=member_list)
+                _GroupRow(key=row_key, base_name=base, stage=stage, jobs=member_list)
             )
     return rows
 

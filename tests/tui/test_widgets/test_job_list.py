@@ -442,3 +442,23 @@ def test_group_jobs_mixed_matrix_and_singleton() -> None:
     types = {type(r) for r in rows}
     assert _JobRow in types
     assert _GroupRow in types
+
+
+def test_group_jobs_preserves_pre_sorted_order() -> None:
+    """_group_jobs must not re-sort its input; the caller owns sort order.
+
+    'alpha-job' is in stage 'z-stage', 'zebra-job' is in stage 'a-stage'.
+    Alphabetically alpha < zebra, but by stage a < z.  After an alphabetical
+    pre-sort the groups should appear in alphabetical order, not stage order.
+    """
+    jobs = [
+        make_job(id=1, name="alpha-job [x86]", stage="z-stage"),
+        make_job(id=2, name="alpha-job [arm]", stage="z-stage"),
+        make_job(id=3, name="zebra-job [x86]", stage="a-stage"),
+        make_job(id=4, name="zebra-job [arm]", stage="a-stage"),
+    ]
+    rows = _group_jobs(_sort_alphabetical(jobs))
+    assert len(rows) == 2
+    assert isinstance(rows[0], _GroupRow)
+    assert rows[0].base_name == "alpha-job"
+    assert rows[1].base_name == "zebra-job"
