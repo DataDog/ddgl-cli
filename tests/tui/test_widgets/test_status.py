@@ -1,0 +1,75 @@
+"""Tests for ddgl/tui/widgets/status.py."""
+from __future__ import annotations
+
+import pytest
+from rich.text import Text
+
+from ddgl.tui.widgets.status import status_color, status_icon, status_text
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("success", "✓"),
+        ("failed", "✗"),
+        ("running", "●"),
+        ("pending", "○"),
+        ("canceled", "⊘"),
+        ("skipped", "→"),
+        ("manual", "▶"),
+        ("created", "○"),
+        ("preparing", "◌"),
+        ("waiting_for_resource", "◌"),
+        ("waiting_for_callback", "◌"),
+        ("scheduled", "⏱"),
+        ("canceling", "⊘"),
+    ],
+)
+def test_status_icon(status: str, expected: str) -> None:
+    assert status_icon(status) == expected
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("success", "green"),
+        ("failed", "red"),
+        ("running", "yellow"),
+        ("pending", "cyan"),
+        ("canceled", "dim"),
+        ("skipped", "dim"),
+        ("manual", "blue"),
+        ("created", "white"),
+        ("preparing", "cyan"),
+        ("waiting_for_resource", "cyan"),
+        ("waiting_for_callback", "cyan"),
+        ("scheduled", "blue"),
+        ("canceling", "yellow"),
+    ],
+)
+def test_status_color(status: str, expected: str) -> None:
+    assert status_color(status) == expected
+
+
+def test_status_icon_unknown() -> None:
+    assert status_icon("totally_unknown") == "?"
+
+
+def test_status_color_unknown() -> None:
+    assert status_color("totally_unknown") == "white"
+
+
+def test_status_text_returns_rich_text() -> None:
+    result = status_text("success")
+    assert isinstance(result, Text)
+
+
+def test_status_text_contains_status_and_icon() -> None:
+    result = status_text("failed")
+    assert "✗" in result.plain
+    assert "failed" in result.plain
+
+
+def test_status_text_unknown_has_question_mark() -> None:
+    result = status_text("unknown")
+    assert "?" in result.plain

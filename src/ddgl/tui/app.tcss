@@ -1,0 +1,24 @@
+#main {
+    height: 1fr;
+}
+
+#pipeline-info {
+    width: 30%;
+    border: round $panel-lighten-1;
+    padding: 1 2;
+    content-align: left top;
+}
+
+#job-panel {
+    width: 70%;
+    border: round $panel-lighten-1;
+}
+
+LoadingIndicator {
+    height: 3;
+    width: 100%;
+}
+
+DataTable {
+    height: 1fr;
+}

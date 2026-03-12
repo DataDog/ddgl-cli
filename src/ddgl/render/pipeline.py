@@ -5,7 +5,12 @@ from rich.table import Table
 
 from ddgl.model.pipeline import Pipeline
 from ddgl.render._console import console
-from ddgl.render._styles import format_datetime, format_duration, format_sha, format_status
+from ddgl.render._styles import (
+    format_datetime,
+    format_duration,
+    format_sha,
+    format_status,
+)
 
 
 def render_pipeline_table(pipelines: list[Pipeline], *, ref: str | None = None) -> None:

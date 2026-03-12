@@ -9,6 +9,7 @@ from rich.logging import RichHandler
 from ddgl.cli.jobs import jobs
 from ddgl.cli.logs import logs
 from ddgl.cli.pipelines import pipelines
+from ddgl.cli.viz import viz
 from ddgl.render._console import err_console
 
 click.rich_click.USE_MARKDOWN = True
@@ -58,3 +59,4 @@ def main(ctx: click.Context, verbose: int, yes: bool) -> None:
 main.add_command(pipelines)
 main.add_command(jobs)
 main.add_command(logs)
+main.add_command(viz)
