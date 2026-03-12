@@ -81,8 +81,13 @@ class PipelineViewer(App[None]):
             info.pipeline = value
             info.job_stats = []
 
-    def load_pipeline(self, pipeline: Pipeline) -> None:
-        """Switch to a new pipeline: update info panel and reload jobs."""
+    def load_pipeline(self, pipeline: Pipeline, *, keep_existing: bool = False) -> None:
+        """Switch to a new pipeline: update info panel and reload jobs.
+
+        When ``keep_existing=True`` the current job list stays visible while
+        new jobs are fetched in the background (used for auto- and manual
+        refresh so the user can keep browsing during the reload).
+        """
         # Cancel any running auto-refresh timer before starting a new load.
         if self._refresh_timer is not None:
             self._refresh_timer.stop()
@@ -92,11 +97,15 @@ class PipelineViewer(App[None]):
 
         job_list = self.query_one(JobListPanel)
         loading = self.query_one("#loading", LoadingIndicator)
-        job_list.display = False
-        job_list.jobs = []
-        loading.display = True
+        if keep_existing and job_list.jobs:
+            # Background refresh: keep the table interactive, signal via subtitle.
+            self.sub_title = "Refreshing…"
+        else:
+            job_list.display = False
+            job_list.jobs = []
+            loading.display = True
 
-        self._load_jobs(pipeline)
+        self._load_jobs(pipeline, keep_existing=keep_existing)
 
     def on_fuzzy_search_input_search_changed(
         self, message: FuzzySearchInput.SearchChanged
@@ -129,20 +138,23 @@ class PipelineViewer(App[None]):
         self.query_one(JobListPanel).filter_spec = spec
 
     @work(exclusive=True)
-    async def _load_jobs(self, pipeline: Pipeline) -> None:
+    async def _load_jobs(self, pipeline: Pipeline, keep_existing: bool = False) -> None:
         try:
             jobs: list[Job] = []
             async for job in list_jobs(self._client, pipeline.id, cache=self._cache):
                 jobs.append(job)
         except Exception as e:
-            self.query_one("#loading", LoadingIndicator).display = False
+            if not keep_existing:
+                self.query_one("#loading", LoadingIndicator).display = False
             self.notify(f"Failed to load jobs: {e}", severity="error")
+            self._update_sub_title()
             return
 
         loading = self.query_one("#loading", LoadingIndicator)
         job_list = self.query_one(JobListPanel)
-        loading.display = False
-        job_list.display = True
+        if not keep_existing:
+            loading.display = False
+            job_list.display = True
         job_list.jobs = jobs
 
         # Populate filter button options from the loaded job list.
@@ -182,7 +194,7 @@ class PipelineViewer(App[None]):
         except Exception as e:
             self.notify(f"Auto-refresh failed: {e}", severity="warning")
             return
-        self.load_pipeline(fresh)
+        self.load_pipeline(fresh, keep_existing=True)
 
     def action_refresh(self) -> None:
         if self.pipeline is not None:
@@ -195,7 +207,7 @@ class PipelineViewer(App[None]):
         except Exception as e:
             self.notify(f"Refresh failed: {e}", severity="error")
             return
-        self.load_pipeline(fresh)
+        self.load_pipeline(fresh, keep_existing=True)
 
     def action_focus_search(self) -> None:
         self.query_one(FuzzySearchInput).focus()
