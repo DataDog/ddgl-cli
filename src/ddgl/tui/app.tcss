@@ -1,3 +1,7 @@
+Header {
+    background: $primary;
+}
+
 #main {
     height: 1fr;
 }
@@ -24,8 +28,8 @@ DataTable {
 }
 
 #filter-bar {
-    dock: bottom;
     height: auto;
+    background: $panel-darken-1;
 }
 
 #search {

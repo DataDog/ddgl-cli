@@ -8,6 +8,7 @@ from textual.widgets import Static
 
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.status import status_color, status_icon
 
 
@@ -33,6 +34,8 @@ class PipelineInfoPanel(Static):
     def watch_pipeline(self, value: Pipeline | None) -> None:
         # render() reads _pipeline directly to avoid the reactive descriptor proxy.
         self._pipeline = value
+        if value is not None:
+            self.border_title = gradient_text(f"Pipeline #{value.id}")
         self.refresh()
 
     def watch_job_stats(self, value: list[Job]) -> None:

@@ -25,11 +25,11 @@ from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_quer
 
 _REFRESH_INTERVAL = 20  # seconds between auto-refreshes for running pipelines
 
-_GITLAB_THEME = Theme(
-    name="gitlab",
-    primary="#FC6D26",    # GitLab orange
-    secondary="#6B4FBB",  # GitLab purple
-    accent="#FCA121",     # amber highlight
+_DD_THEME = Theme(
+    name="datadog",
+    primary="#774AA4",    # DataDog purple
+    secondary="#5A3E8E",  # darker purple variant
+    accent="#FC6D26",     # GitLab orange accent
     warning="#FAB800",
     error="#DD2B0E",
     success="#2DA160",
@@ -84,8 +84,8 @@ class PipelineViewer(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.register_theme(_GITLAB_THEME)
-        self.theme = "gitlab"
+        self.register_theme(_DD_THEME)
+        self.theme = "datadog"
         self.query_one("#sort-button", SortButton).set_mode(SortMode.START_TIME)
         self.load_pipeline(self._initial_pipeline)
         self.query_one(JobListPanel).focus()

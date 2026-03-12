@@ -12,6 +12,7 @@ from textual.timer import Timer
 from textual.widgets import DataTable
 
 from ddgl.model.job import Job
+from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.search_bar import FilterSpec, fuzzy_match
 from ddgl.tui.widgets.status import status_color, status_icon
 
@@ -368,11 +369,12 @@ class JobListPanel(DataTable):
     ) -> None:
         label = self.sort_mode.label()
         if total is None:
-            self.border_title = label
+            text = label
         elif visible == total:
-            self.border_title = f"{label}  ·  {total} jobs"
+            text = f"{label}  ·  {total} jobs"
         else:
-            self.border_title = f"{label}  ·  {visible} / {total}"
+            text = f"{label}  ·  {visible} / {total}"
+        self.border_title = gradient_text(text)
 
     def _recompute(self) -> None:
         # Save cursor so we can restore it after the table is rebuilt.
