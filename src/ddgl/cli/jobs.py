@@ -11,7 +11,8 @@ from ddgl.cli._options import CACHE_DIR, job_filter_options, pipeline_resolution
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
 from ddgl.constants import JobStatus
-from ddgl.core.jobs import filter_jobs, list_jobs
+from ddgl.core.jobs import filter_jobs, get_job, list_jobs
+from ddgl.core.logs import get_log
 from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 
@@ -53,13 +54,9 @@ async def _jobs_list(
     try:
         with Cache.open(CACHE_DIR) as cache:
             async with GitLabClient(config) as client:
-                pipeline = await resolve_pipeline(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
-                )
+                pipeline = await resolve_pipeline(client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache)
                 scope = JobStatus.FAILED if failed_only else None
-                all_jobs = [
-                    j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
-                ]
+                all_jobs = [j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)]
     except (NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -119,66 +116,67 @@ async def _jobs_logs(
         with Cache.open(CACHE_DIR) as cache:
             async with GitLabClient(config) as client:
                 if job_id is not None:
-                    logs: dict[int, str] = {job_id: await client.get_job_log(job_id)}
-                    job_names: dict[int, str] = {job_id: str(job_id)}
-                else:
-                    pipeline = await resolve_pipeline(
-                        client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+                    # Fetch job metadata and log concurrently.
+                    job, text = await asyncio.gather(
+                        get_job(client, job_id, cache=cache),
+                        get_log(client, job_id, cache=cache),
                     )
-                    scope = JobStatus.FAILED if failed_only else None
-                    all_jobs = [
-                        j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
-                    ]
-                    target_jobs = filter_jobs(
-                        all_jobs, failed_only=failed_only, name_pattern=name_pattern, stage=stage
-                    )
-                    if not target_jobs:
-                        msg = (
-                            "No jobs match the given filters."
-                            if (failed_only or stage or name_pattern)
-                            else "No jobs found."
-                        )
-                        click.echo(msg)
-                        return
+                    _write_log(job.name, text, output_path)
+                    return
 
-                    if len(target_jobs) > 1 and sys.stdin.isatty() and output_path is None:
-                        click.confirm(f"Fetch logs for all {len(target_jobs)} jobs?", abort=True)
-
-                    log_texts = await asyncio.gather(
-                        *[client.get_job_log(j.id) for j in target_jobs]
+                pipeline = await resolve_pipeline(
+                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
+                )
+                scope = JobStatus.FAILED if failed_only else None
+                # Fire a log-fetch task for each matching job as the iterator
+                # streams in, without materialising all jobs into a list.
+                log_tasks: dict[int, tuple[str, asyncio.Task[str]]] = {}
+                async for job in filter_jobs(
+                    list_jobs(client, pipeline.id, scope=scope, cache=cache),
+                    failed_only=failed_only,
+                    name_pattern=name_pattern,
+                    stage=stage,
+                ):
+                    log_tasks[job.id] = (
+                        job.name,
+                        asyncio.create_task(get_log(client, job.id, cache=cache)),
                     )
-                    logs = {j.id: text for j, text in zip(target_jobs, log_texts)}
-                    job_names = {j.id: j.name for j in target_jobs}
+
+                if not log_tasks:
+                    msg = (
+                        "No jobs match the given filters."
+                        if (failed_only or stage or name_pattern)
+                        else "No jobs found."
+                    )
+                    click.echo(msg)
+                    return
+
+                # Print each log as soon as its fetch completes.
+                futures = [
+                    _await_with_name(name, task)
+                    for _, (name, task) in log_tasks.items()
+                ]
+                for coro in asyncio.as_completed(futures):
+                    name, text = await coro
+                    _write_log(name, text, output_path)
     except (NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    _write_logs(logs, job_names, output_path)
+
+async def _await_with_name(name: str, task: asyncio.Task[str]) -> tuple[str, str]:
+    return name, await task
 
 
-def _write_logs(
-    logs: dict[int, str],
-    job_names: dict[int, str],
-    output_path: str | None,
-) -> None:
-    sep = "\n─── {name} ───\n"
-
+def _write_log(name: str, text: str, output_path: str | None) -> None:
+    """Write a single job log to its destination."""
     if output_path is not None:
         out = Path(output_path)
         if out.is_dir():
-            for jid, text in logs.items():
-                (out / f"{job_names[jid]}.log").write_text(text)
+            (out / f"{name}.log").write_text(text)
         else:
-            lines = []
-            for jid, text in logs.items():
-                lines.append(sep.format(name=job_names[jid]))
-                lines.append(text)
-            out.write_text("".join(lines))
+            with open(out, "a") as f:
+                f.write(f"─── {name} ───\n{text}\n")
         return
-
-    if len(logs) == 1:
-        click.echo(next(iter(logs.values())))
-    else:
-        for jid, text in logs.items():
-            click.echo(sep.format(name=job_names[jid]))
-            click.echo(text)
+    click.echo(f"─── {name} ───")
+    click.echo(text)

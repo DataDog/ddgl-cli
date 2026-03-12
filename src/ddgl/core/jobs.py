@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
+from typing import overload
 
 from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
@@ -94,22 +95,63 @@ async def list_jobs(
             yield job
 
 
+def _make_job_predicate(
+    *,
+    failed_only: bool,
+    name_pattern: str | None,
+    stage: str | None,
+) -> "Callable[[Job], bool]":
+    compiled = re.compile(name_pattern) if name_pattern else None
+
+    def _pred(job: Job) -> bool:
+        if failed_only and not job.has_failed:
+            return False
+        if compiled and not compiled.search(job.name):
+            return False
+        if stage and job.stage != stage:
+            return False
+        return True
+
+    return _pred
+
+
+@overload
+def filter_jobs(
+    jobs: AsyncIterable[Job],
+    *,
+    failed_only: bool = ...,
+    name_pattern: str | None = ...,
+    stage: str | None = ...,
+) -> AsyncIterator[Job]: ...
+
+
+@overload
 def filter_jobs(
     jobs: Iterable[Job],
+    *,
+    failed_only: bool = ...,
+    name_pattern: str | None = ...,
+    stage: str | None = ...,
+) -> list[Job]: ...
+
+
+def filter_jobs(
+    jobs: AsyncIterable[Job] | Iterable[Job],
     *,
     failed_only: bool = False,
     name_pattern: str | None = None,
     stage: str | None = None,
-) -> list[Job]:
-    """Pure client-side filter. No I/O. All active predicates compose with AND."""
-    result = []
-    compiled = re.compile(name_pattern) if name_pattern else None
-    for job in jobs:
-        if failed_only and not job.has_failed:
-            continue
-        if compiled and not compiled.search(job.name):
-            continue
-        if stage and job.stage != stage:
-            continue
-        result.append(job)
-    return result
+) -> AsyncIterator[Job] | list[Job]:
+    """Client-side filter. All active predicates compose with AND.
+
+    Accepts both sync iterables (returns list) and async iterables (returns
+    AsyncIterator, yielding matching jobs as they arrive).
+    """
+    pred = _make_job_predicate(failed_only=failed_only, name_pattern=name_pattern, stage=stage)
+    if isinstance(jobs, AsyncIterable):
+        async def _afilter() -> AsyncIterator[Job]:
+            async for job in jobs:
+                if pred(job):
+                    yield job
+        return _afilter()
+    return [j for j in jobs if pred(j)]

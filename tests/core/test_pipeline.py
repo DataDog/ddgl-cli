@@ -1,6 +1,7 @@
 """Tests for src/ddgl/core/pipeline.py."""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -29,7 +30,7 @@ _PROJECT_ID = TEST_CONFIG.project_id
 
 
 @pytest.fixture()
-def mock_api() -> respx.MockRouter:
+def mock_api() -> Iterator[respx.MockRouter]:
     with respx.mock(base_url=TEST_CONFIG.api_url) as router:
         yield router
 

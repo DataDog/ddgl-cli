@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ def config() -> Config:
 
 
 @pytest.fixture()
-def mock_api() -> respx.MockRouter:
+def mock_api() -> Iterator[respx.MockRouter]:
     """Pre-configured respx mock targeting the test GitLab API base URL."""
     with respx.mock(base_url=TEST_CONFIG.api_url) as router:
         yield router

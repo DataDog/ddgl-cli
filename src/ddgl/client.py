@@ -327,3 +327,30 @@ class GitLabClient:
             return await self._get_text(f"{base}/jobs/{job_id}/trace")
         except NotFoundError:
             raise NotFoundError("job", job_id)
+
+    async def stream_job_log(
+        self,
+        job_id: int,
+        project_id: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream the raw log of a job line by line.
+
+        Raises:
+            NotFoundError: job does not exist.
+            GitLabAPIError: other HTTP error.
+        """
+        logger.info("Streaming log for job %d", job_id)
+        base = self._project_path(project_id)
+        path = f"{base}/jobs/{job_id}/trace"
+        async with self._http.stream("GET", path) as resp:
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if resp.status_code == 404:
+                    raise NotFoundError("job", job_id) from exc
+                raise GitLabAPIError(
+                    resp.status_code, "GET", path,
+                    (await resp.aread()).decode()[:200],
+                ) from exc
+            async for line in resp.aiter_lines():
+                yield line
