@@ -82,6 +82,17 @@ class JobListPanel(DataTable):
     sort_mode: reactive[SortMode] = reactive(SortMode.STAGE)
 
     _filter_timer: Timer | None = None
+    _job_by_row_key: dict[str, Job]
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._job_by_row_key = {}
+
+    def get_selected_job(self) -> Job | None:
+        """Return the Job under the cursor, or None if the table is empty."""
+        if self.cursor_row_key is None:
+            return None
+        return self._job_by_row_key.get(str(self.cursor_row_key))
 
     def on_mount(self) -> None:
         self.add_column("", key="icon", width=3)
@@ -121,6 +132,7 @@ class JobListPanel(DataTable):
 
     def _repopulate(self, jobs: list[Job]) -> None:
         self.clear()
+        self._job_by_row_key = {}
         if not self.jobs:
             self.border_subtitle = "No jobs"
             return
@@ -130,10 +142,13 @@ class JobListPanel(DataTable):
         self.border_subtitle = ""
         for job in jobs:
             color = status_color(job.status)
+            key = str(job.id)
             self.add_row(
                 Text(status_icon(job.status), style=color),
                 job.stage,
                 Text(str(job.status), style=color),
                 _fmt_duration(job.duration),
                 job.name,
+                key=key,
             )
+            self._job_by_row_key[key] = job

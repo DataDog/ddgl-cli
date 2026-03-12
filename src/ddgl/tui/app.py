@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import webbrowser
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -34,6 +35,7 @@ class PipelineViewer(App[None]):
         Binding("ctrl+k", "clear_search", "Clear search"),
         Binding("s", "cycle_sort", "Sort"),
         Binding("r", "refresh", "Refresh"),
+        Binding("o", "open_url", "Open URL"),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -204,3 +206,14 @@ class PipelineViewer(App[None]):
     def action_cycle_sort(self) -> None:
         job_list = self.query_one(JobListPanel)
         job_list.sort_mode = job_list.sort_mode.next()
+
+    def action_open_url(self) -> None:
+        # Prefer the selected job's URL; fall back to the pipeline URL.
+        job = self.query_one(JobListPanel).get_selected_job()
+        if job and job.web_url:
+            webbrowser.open(job.web_url)
+            return
+        if self.pipeline and self.pipeline.web_url:
+            webbrowser.open(self.pipeline.web_url)
+            return
+        self.notify("No URL available.", severity="warning")
