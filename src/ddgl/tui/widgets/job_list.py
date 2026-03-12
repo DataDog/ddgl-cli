@@ -5,6 +5,7 @@ from textual.reactive import reactive
 from textual.widgets import DataTable
 
 from ddgl.model.job import Job
+from ddgl.tui.widgets.search_bar import fuzzy_match
 from ddgl.tui.widgets.status import status_color, status_icon
 
 
@@ -20,9 +21,10 @@ def _sort_by_stage(jobs: list[Job]) -> list[Job]:
 
 
 class JobListPanel(DataTable):
-    """Right panel: job list as a DataTable, sorted by stage."""
+    """Right panel: job list as a DataTable, sorted by stage, with fuzzy filtering."""
 
     jobs: reactive[list[Job]] = reactive([], always_update=True)
+    search_query: reactive[str] = reactive("")
 
     def on_mount(self) -> None:
         self.add_column("", key="icon", width=3)
@@ -32,7 +34,17 @@ class JobListPanel(DataTable):
         self.add_column("Duration", key="duration", width=10)
 
     def watch_jobs(self, value: list[Job]) -> None:
-        self._repopulate(_sort_by_stage(value))
+        self._recompute()
+
+    def watch_search_query(self, value: str) -> None:
+        self._recompute()
+
+    def _recompute(self) -> None:
+        query = self.search_query
+        visible = [
+            j for j in self.jobs if fuzzy_match(query, j.name)
+        ] if query else list(self.jobs)
+        self._repopulate(_sort_by_stage(visible))
 
     def _repopulate(self, jobs: list[Job]) -> None:
         self.clear()

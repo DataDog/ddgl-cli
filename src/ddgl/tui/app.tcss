@@ -22,3 +22,7 @@ LoadingIndicator {
 DataTable {
     height: 1fr;
 }
+
+FuzzySearchInput {
+    dock: bottom;
+}

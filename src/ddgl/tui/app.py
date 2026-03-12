@@ -13,6 +13,7 @@ from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
+from ddgl.tui.widgets.search_bar import FuzzySearchInput
 
 
 class PipelineViewer(App[None]):
@@ -44,12 +45,18 @@ class PipelineViewer(App[None]):
             with Vertical(id="job-panel"):
                 yield LoadingIndicator(id="loading")
                 yield JobListPanel(id="job-table")
+        yield FuzzySearchInput(id="search")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(PipelineInfoPanel).pipeline = self._pipeline
         self.query_one(JobListPanel).display = False
         self.load_jobs()
+
+    def on_fuzzy_search_input_search_changed(
+        self, message: FuzzySearchInput.SearchChanged
+    ) -> None:
+        self.query_one(JobListPanel).search_query = message.query
 
     @work(exclusive=True)
     async def load_jobs(self) -> None:
@@ -64,10 +71,12 @@ class PipelineViewer(App[None]):
         job_list.jobs = jobs
 
     def action_focus_search(self) -> None:
-        pass  # wired in commit 4
+        self.query_one(FuzzySearchInput).focus()
 
     def action_clear_search(self) -> None:
-        pass  # wired in commit 4
+        search = self.query_one(FuzzySearchInput)
+        search.clear()
+        self.query_one(JobListPanel).focus()
 
     def action_cycle_sort(self) -> None:
         pass  # wired in commit 5
