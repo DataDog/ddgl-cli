@@ -3,9 +3,8 @@ from __future__ import annotations
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical
-from textual.screen import ModalScreen
+from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import DataTable, Input, LoadingIndicator
 
 from ddgl.cache.cache import Cache
@@ -25,56 +24,60 @@ def _fmt_ts(ts: str) -> str:
     return ts[t + 1 : t + 6]
 
 
-class PipelineSwitcherModal(ModalScreen[Pipeline | None]):
-    """Modal to browse and switch pipelines, optionally changing ref."""
+class PipelineListPanel(Widget):
+    """Persistent left panel: browse and switch pipelines, optionally by ref."""
 
-    BINDINGS = [Binding("escape", "dismiss_cancel", "Cancel")]
+    class PipelineSelected(Message):
+        def __init__(self, pipeline: Pipeline) -> None:
+            super().__init__()
+            self.pipeline = pipeline
 
     def __init__(
         self,
         client: GitLabClient,
         cache: Cache | None = None,
-        current_ref: str = "",
+        initial_ref: str = "",
+        **kwargs: object,
     ) -> None:
-        super().__init__()
+        super().__init__(**kwargs)  # type: ignore[arg-type]
         self._client = client
         self._cache = cache
-        self._current_ref = current_ref
+        self._initial_ref = initial_ref
         self._pipelines: list[Pipeline] = []
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="switcher"):
-            yield Input(
-                value=self._current_ref,
-                placeholder="Ref (branch / tag / SHA) — Enter to search",
-                id="ref-input",
-            )
-            yield LoadingIndicator(id="switcher-loading")
-            yield DataTable(
-                id="pipeline-table",
-                cursor_type="row",
-                show_row_labels=False,
-                cell_padding=1,
-            )
+        yield Input(
+            value=self._initial_ref,
+            placeholder="Ref — Enter to search",
+            id="pipeline-ref-input",
+        )
+        yield LoadingIndicator(id="pipeline-list-loading")
+        yield DataTable(
+            id="pipeline-list-table",
+            cursor_type="row",
+            show_row_labels=False,
+            cell_padding=1,
+        )
 
     def on_mount(self) -> None:
-        self.border_title = gradient_text("Switch Pipeline")
-        table = self.query_one("#pipeline-table", DataTable)
-        table.add_column("Status", key="status", width=14)
-        table.add_column("ID", key="id", width=8)
-        table.add_column("Ref", key="ref", width=28)
-        table.add_column("SHA", key="sha", width=10)
-        table.add_column("Created", key="created", width=7)
-        self._fetch(self._current_ref or None)
-        self.query_one("#pipeline-table", DataTable).focus()
+        self.border_title = gradient_text("Pipelines")
+        table = self.query_one("#pipeline-list-table", DataTable)
+        table.add_column("Status", key="status", width=12)
+        table.add_column("ID", key="id", width=7)
+        table.add_column("Ref", key="ref")
+        table.add_column("At", key="time", width=5)
+        self._fetch(self._initial_ref or None)
+
+    def focus_table(self) -> None:
+        self.query_one("#pipeline-list-table", DataTable).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._fetch(event.value.strip() or None)
 
     @work(exclusive=True)
     async def _fetch(self, ref: str | None) -> None:
-        loading = self.query_one("#switcher-loading")
-        table = self.query_one("#pipeline-table", DataTable)
+        loading = self.query_one("#pipeline-list-loading")
+        table = self.query_one("#pipeline-list-table", DataTable)
         loading.display = True
         table.clear()
         try:
@@ -90,7 +93,6 @@ class PipelineSwitcherModal(ModalScreen[Pipeline | None]):
                 Text(f"{status_icon(p.status)} {p.status}", style=color),
                 Text(str(p.id), style=color),
                 Text(p.ref, style=color),
-                Text(p.sha[:8] if p.sha else "—", style=color),
                 Text(_fmt_ts(p.created_at), style=color),
                 key=str(p.id),
             )
@@ -99,7 +101,4 @@ class PipelineSwitcherModal(ModalScreen[Pipeline | None]):
         key = str(event.row_key.value)
         pipeline = next((p for p in self._pipelines if str(p.id) == key), None)
         if pipeline:
-            self.dismiss(pipeline)
-
-    def action_dismiss_cancel(self) -> None:
-        self.dismiss(None)
+            self.post_message(PipelineListPanel.PipelineSelected(pipeline))

@@ -11,11 +11,33 @@ JobListPanel > .datatable--cursor {
     height: 1fr;
 }
 
-#pipeline-info {
+#left-col {
     width: 30%;
+}
+
+#pipeline-info {
+    height: auto;
     border: round $panel-lighten-1;
     padding: 1 2;
     content-align: left top;
+}
+
+PipelineListPanel {
+    height: 1fr;
+    border: round $panel-lighten-1;
+}
+
+PipelineListPanel Input {
+    margin-bottom: 1;
+}
+
+PipelineListPanel DataTable {
+    height: 1fr;
+}
+
+#pipeline-list-table > .datatable--cursor {
+    background: $primary 60%;
+    color: $text;
 }
 
 #job-panel {
@@ -55,30 +77,6 @@ FilterButton.-active {
     min-width: 18;
 }
 
-PipelineSwitcherModal {
-    align: center middle;
-}
-
-#switcher {
-    width: 80%;
-    height: 70%;
-    background: $surface;
-    border: round $primary;
-    padding: 1 2;
-}
-
-#switcher Input {
-    margin-bottom: 1;
-}
-
-#pipeline-table {
-    height: 1fr;
-}
-
-#pipeline-table > .datatable--cursor {
-    background: $primary 60%;
-    color: $text;
-}
 
 HelpModal {
     align: center middle;

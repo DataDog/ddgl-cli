@@ -22,7 +22,7 @@ from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
 from ddgl.tui.widgets.help import HelpModal
 from ddgl.tui.widgets.job_list import JobListPanel, SortMode
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
-from ddgl.tui.widgets.pipeline_switcher import PipelineSwitcherModal
+from ddgl.tui.widgets.pipeline_list import PipelineListPanel
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
 
 _REFRESH_INTERVAL = 20  # seconds between auto-refreshes for running pipelines
@@ -76,7 +76,14 @@ class PipelineViewer(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
-            yield PipelineInfoPanel(id="pipeline-info")
+            with Vertical(id="left-col"):
+                yield PipelineInfoPanel(id="pipeline-info")
+                yield PipelineListPanel(
+                    self._client,
+                    self._cache,
+                    initial_ref=self._initial_pipeline.ref,
+                    id="pipeline-list",
+                )
             with Vertical(id="job-panel"):
                 yield LoadingIndicator(id="loading")
                 yield JobListPanel(id="job-table")
@@ -253,18 +260,12 @@ class PipelineViewer(App[None]):
         self.query_one(JobListPanel).sort_mode = message.mode
 
     def action_switch_pipeline(self) -> None:
-        def _on_dismiss(result: Pipeline | None) -> None:
-            if result is not None:
-                self.load_pipeline(result)
+        self.query_one("#pipeline-list", PipelineListPanel).focus_table()
 
-        self.push_screen(
-            PipelineSwitcherModal(
-                self._client,
-                self._cache,
-                current_ref=self.pipeline.ref if self.pipeline else "",
-            ),
-            _on_dismiss,
-        )
+    def on_pipeline_list_panel_pipeline_selected(
+        self, message: PipelineListPanel.PipelineSelected
+    ) -> None:
+        self.load_pipeline(message.pipeline)
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())
