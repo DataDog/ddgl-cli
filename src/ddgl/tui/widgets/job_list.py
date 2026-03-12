@@ -218,9 +218,13 @@ class JobListPanel(DataTable):
 
     def get_selected_job(self) -> Job | None:
         """Return the Job under the cursor, or None (including for group rows)."""
-        if self.cursor_row_key is None:
+        if not self.rows:
             return None
-        return self._job_by_row_key.get(str(self.cursor_row_key))
+        try:
+            cell_key = self.coordinate_to_cell_key(self.cursor_coordinate)
+        except Exception:
+            return None
+        return self._job_by_row_key.get(str(cell_key.row_key.value))
 
     def on_mount(self) -> None:
         self.add_column("", key="icon", width=3)
