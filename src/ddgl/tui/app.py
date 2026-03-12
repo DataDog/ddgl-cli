@@ -18,7 +18,7 @@ from ddgl.core.pipeline import get_pipeline
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
-from ddgl.tui.widgets.job_list import JobListPanel
+from ddgl.tui.widgets.job_list import JobListPanel, SortMode
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
 
@@ -51,7 +51,7 @@ class PipelineViewer(App[None]):
         self._cache = cache
         # Filter state: text tokens from search box + explicit dropdown selections.
         self._text_filter = FilterSpec()
-        self._dropdown_statuses: set[str] = set()
+        self._dropdown_statuses: set[str] = {"running", "failed", "success"}
         self._dropdown_stages: set[str] = set()
         # Refresh state.
         self._refresh_timer: Timer | None = None
@@ -72,6 +72,7 @@ class PipelineViewer(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#sort-button", SortButton).set_mode(SortMode.START_TIME)
         self.load_pipeline(self._initial_pipeline)
         self.query_one(JobListPanel).focus()
 
@@ -160,8 +161,11 @@ class PipelineViewer(App[None]):
         # Populate filter button options from the loaded job list.
         statuses = sorted({str(j.status) for j in jobs})
         stages = sorted({j.stage for j in jobs})
-        self.query_one("#status-filter", FilterButton).update_options(statuses)
+        status_btn = self.query_one("#status-filter", FilterButton)
+        status_btn.update_options(statuses)
+        status_btn.set_selected(self._dropdown_statuses)
         self.query_one("#stage-filter", FilterButton).update_options(stages)
+        self._update_job_filter()
 
         # Update pipeline info panel with job stats.
         self.query_one(PipelineInfoPanel).job_stats = jobs

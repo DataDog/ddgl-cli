@@ -245,7 +245,7 @@ class JobListPanel(DataTable):
 
     jobs: reactive[list[Job]] = reactive([], always_update=True)
     filter_spec: reactive[FilterSpec] = reactive(FilterSpec, always_update=True)
-    sort_mode: reactive[SortMode] = reactive(SortMode.STAGE)
+    sort_mode: reactive[SortMode] = reactive(SortMode.START_TIME)
 
     _filter_timer: Timer | None = None
     _job_by_row_key: dict[str, Job]
