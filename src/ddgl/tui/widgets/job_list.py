@@ -367,14 +367,18 @@ class JobListPanel(DataTable):
     def _update_border_title(
         self, visible: int | None = None, total: int | None = None
     ) -> None:
-        label = self.sort_mode.label()
         if total is None:
-            text = label
+            text = "Jobs"
         elif visible == total:
-            text = f"{label}  ·  {total} jobs"
+            text = f"Jobs  ·  {total} jobs"
         else:
-            text = f"{label}  ·  {visible} / {total}"
-        self.border_title = gradient_text(text)
+            text = f"Jobs  ·  {visible} / {total}"
+        title = gradient_text(text)
+        self.border_title = title
+        try:
+            self.app.query_one("#job-panel").border_title = title
+        except Exception:
+            pass
 
     def _recompute(self) -> None:
         # Save cursor so we can restore it after the table is rebuilt.

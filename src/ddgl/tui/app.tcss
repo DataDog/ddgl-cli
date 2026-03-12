@@ -2,6 +2,11 @@ Header {
     background: $primary;
 }
 
+JobListPanel > .datatable--cursor {
+    background: $primary 60%;
+    color: $text;
+}
+
 #main {
     height: 1fr;
 }

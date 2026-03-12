@@ -5,9 +5,10 @@ from rich.text import Text
 # Brand colours used across the TUI.
 PURPLE = "#774AA4"  # DataDog purple
 ORANGE = "#FC6D26"  # GitLab orange
+AMBER = "#FCA121"   # amber highlight
 
 
-def gradient_text(text: str, start_hex: str = PURPLE, end_hex: str = ORANGE) -> Text:
+def gradient_text(text: str, start_hex: str = ORANGE, end_hex: str = AMBER) -> Text:
     """Return a Rich Text with per-character colour gradient between two hex colours."""
     t = Text()
     n = len(text)

@@ -49,8 +49,6 @@ def _render(p: Pipeline, jobs: list[Job]) -> Text:
     duration_str = _fmt_elapsed(p)
 
     content = Text()
-    content.append(f"Pipeline #{p.id}\n", style="bold")
-    content.append("\n")
     content.append("Status:   ")
     content.append(f"{icon} {p.status}\n", style=color)
     content.append(f"Ref:      {p.ref}\n")

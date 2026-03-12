@@ -9,10 +9,11 @@ from ddgl.tui.widgets.pipeline_info import _render, _render_job_stats
 from .._stubs import make_job, make_pipeline
 
 
-def test_render_contains_pipeline_id() -> None:
+def test_render_does_not_repeat_pipeline_id() -> None:
+    # Pipeline ID is shown in the border title, not duplicated in the body.
     p = make_pipeline(id=42)
     result = _render(p, [])
-    assert "42" in result.plain
+    assert "Pipeline #42" not in result.plain
 
 
 def test_render_contains_ref() -> None:
