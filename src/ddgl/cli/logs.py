@@ -111,7 +111,7 @@ async def _logs(
                 for coro in asyncio.as_completed(futures):
                     name, text = await coro
                     _write_log(name, text, output_path)
-    except (NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

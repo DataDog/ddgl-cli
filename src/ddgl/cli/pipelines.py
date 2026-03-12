@@ -76,7 +76,7 @@ async def _get(ref: str | None, pipeline_id: int | None, depth: int) -> None:
                 p = await resolve_pipeline(
                     client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
                 )
-    except (NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

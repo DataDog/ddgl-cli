@@ -68,7 +68,7 @@ async def _jobs_list(
                         scope=scope, cache=cache,
                     )
                 ]
-    except (NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
@@ -165,7 +165,7 @@ async def _jobs_get(
                         stage=stage,
                     ):
                         matched.append(job)
-    except (NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
