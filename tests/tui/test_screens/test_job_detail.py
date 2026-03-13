@@ -4,7 +4,7 @@ from __future__ import annotations
 from rich.text import Text
 
 from ddgl.constants import JobStatus
-from ddgl.tui.screens.job_detail import _fmt_duration, _render_meta
+from ddgl.tui.screens.job_detail import _fmt_duration, _highlight_text, _render_meta
 
 from .._stubs import make_job
 
@@ -121,3 +121,41 @@ def test_render_meta_omits_queued_when_none() -> None:
     job = make_job()
     plain = _render_meta(job).plain
     assert "Queued" not in plain
+
+
+# ---------------------------------------------------------------------------
+# _highlight_text
+# ---------------------------------------------------------------------------
+
+
+def test_highlight_no_match_returns_original() -> None:
+    original = Text("hello world")
+    result = _highlight_text(original, "xyz")
+    assert result is original
+
+
+def test_highlight_match_returns_copy() -> None:
+    original = Text("hello world")
+    result = _highlight_text(original, "world")
+    assert result is not original
+    assert result.plain == original.plain
+
+
+def test_highlight_preserves_plain_text() -> None:
+    original = Text("error: build failed")
+    result = _highlight_text(original, "error")
+    assert result.plain == "error: build failed"
+
+
+def test_highlight_case_insensitive() -> None:
+    original = Text("ERROR: build FAILED")
+    result = _highlight_text(original, "error")
+    assert result is not original
+    assert result.plain == original.plain
+
+
+def test_highlight_multiple_matches() -> None:
+    original = Text("foo bar foo baz foo")
+    result = _highlight_text(original, "foo")
+    spans = [s for s in result._spans if "reverse" in str(s.style)]
+    assert len(spans) == 3

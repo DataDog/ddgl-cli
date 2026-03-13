@@ -98,6 +98,12 @@ FilterButton.-active {
     height: 1fr;
 }
 
+#log-search {
+    dock: bottom;
+    height: auto;
+    margin: 0 1;
+}
+
 /* -- Help Modal ---------------------------------------------------------- */
 
 HelpModal {
