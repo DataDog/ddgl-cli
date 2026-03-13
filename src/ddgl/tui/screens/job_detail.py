@@ -139,6 +139,10 @@ class JobDetailScreen(Screen[None]):
         Binding("slash", "open_search", "Search", key_display="/"),
         Binding("n", "next_match", "Next match", show=False),
         Binding("shift+n", "prev_match", "Prev match", show=False),
+        Binding("pageup", "page_up_log", "Page up", show=False),
+        Binding("pagedown", "page_down_log", "Page down", show=False),
+        Binding("ctrl+up", "page_up_log", show=False),
+        Binding("ctrl+down", "page_down_log", show=False),
     ]
 
     def __init__(
@@ -231,6 +235,14 @@ class JobDetailScreen(Screen[None]):
         loading.display = False
         log_widget.display = True
         log_widget.focus()
+
+    # -- Scroll ------------------------------------------------------------
+
+    def action_page_up_log(self) -> None:
+        self.query_one("#job-log", RichLog).scroll_page_up(animate=False)
+
+    def action_page_down_log(self) -> None:
+        self.query_one("#job-log", RichLog).scroll_page_down(animate=False)
 
     # -- Search ------------------------------------------------------------
 
