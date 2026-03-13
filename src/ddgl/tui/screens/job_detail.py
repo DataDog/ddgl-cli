@@ -124,6 +124,7 @@ class JobDetailScreen(Screen[None]):
                 if not log_widget.display:
                     loading.display = False
                     log_widget.display = True
+                    log_widget.focus()
         except Exception as e:
             loading.display = False
             log_widget.display = True
@@ -132,3 +133,4 @@ class JobDetailScreen(Screen[None]):
         if not log_widget.display:
             loading.display = False
             log_widget.display = True
+        log_widget.focus()
