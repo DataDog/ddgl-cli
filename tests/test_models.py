@@ -106,12 +106,12 @@ class TestJobLog:
 
     def test_multiple_sections(self) -> None:
         raw = (
-            "section_start:1:build\r\n"
+            "section_start:1:build\r\x1b[0K\n"
             "compiling\n"
-            "section_end:2:build\r\n"
-            "section_start:3:test\r\n"
+            "section_end:2:build\r\x1b[0K\n"
+            "section_start:3:test\r\x1b[0K\n"
             "testing\n"
-            "section_end:4:test\r\n"
+            "section_end:4:test\r\x1b[0K\n"
         )
         log = JobLog(raw)
         assert len(log.sections) == 2
