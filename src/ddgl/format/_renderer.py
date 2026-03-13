@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import msgspec
 from rich.rule import Rule
 from rich.text import Text
 
@@ -21,8 +21,7 @@ _SECTION_COLOR = "dark_orange"
 _INDENT = "  "
 
 
-@dataclass
-class TraceOptions:
+class TraceOptions(msgspec.Struct):
     """Controls how a :class:`Trace` is rendered to Rich renderables."""
 
     sections: bool = True  # section markers → Rule headers

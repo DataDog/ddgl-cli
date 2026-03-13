@@ -7,8 +7,9 @@ tree that downstream renderers consume without re-parsing.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from enum import Enum
+
+import msgspec
 
 # ── regexes ──────────────────────────────────────────────────────────────────
 
@@ -36,8 +37,7 @@ class Stream(Enum):
     STDERR = "E"
 
 
-@dataclass
-class LogLine:
+class LogLine(msgspec.Struct):
     """A single line of log output."""
 
     text: str  # line body (noise stripped, ANSI preserved)
@@ -48,8 +48,7 @@ class LogLine:
     continuation: bool = False  # True when append flag is "+" (continuation of previous line)
 
 
-@dataclass
-class Section:
+class Section(msgspec.Struct):
     """A GitLab CI section (may nest)."""
 
     name: str
@@ -57,14 +56,13 @@ class Section:
     end_ts: int | None = None  # unix seconds from section_end marker
     duration: int | None = None  # end_ts - start_ts
     collapsed: bool = False  # [collapsed=true] metadata
-    children: list[Section | LogLine] = field(default_factory=list)
+    children: list[Section | LogLine] = []
 
 
-@dataclass
-class Trace:
+class Trace(msgspec.Struct):
     """Root of the IR tree."""
 
-    children: list[Section | LogLine] = field(default_factory=list)
+    children: list[Section | LogLine] = []
 
 
 # ── public helpers ───────────────────────────────────────────────────────────
@@ -83,9 +81,10 @@ def parse_trace(text: str) -> Trace:
 
     Processes the trace line-by-line:
     1. Strip noise (``\\r``, ``\\x1b[0K``)
-    2. Strip timestamp / stream prefix
-    3. Check for section markers
-    4. Otherwise create a :class:`LogLine`
+    2. Strip timestamp prefix
+    3. Strip stream marker (00O, 01E, etc.)
+    4. Check for section markers
+    5. Otherwise create a :class:`LogLine`
     """
     trace = Trace()
     if not text:
@@ -110,7 +109,7 @@ def parse_trace(text: str) -> Trace:
             body = cleaned[ts_match.end():]
 
         # Step 2: strip stream marker (00O, 01E, etc.).
-        stream: str | None = None
+        stream: Stream | None = None
         stream_id: int | None = None
         continuation = False
         stream_match = _STREAM_RE.match(body)
