@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -42,29 +43,31 @@ def render_trace(
 ) -> list[RenderableType]:
     """Walk *trace* and produce a flat list of Rich renderables."""
     opts = options or TraceOptions()
-    out: list[RenderableType] = []
-    _walk(trace.children, opts, depth=0, out=out)
-    return out
+    return list(_walk(trace.children, opts, depth=0, is_first=True))
 
 
 def _walk(
     nodes: list[Section | LogLine],
     opts: TraceOptions,
     depth: int,
-    out: list[RenderableType],
-) -> None:
+    *,
+    is_first: bool = False,
+) -> Iterator[RenderableType]:
+    first = is_first
     for node in nodes:
         if isinstance(node, Section):
             if opts.sections:
                 # Blank line before section for visual breathing room.
-                if out:
-                    out.append(Text(""))
-                out.append(_section_rule(node, depth))
+                if not first:
+                    yield Text("")
+                first = False
+                yield _section_rule(node, depth)
                 if node.collapsed:
                     continue
-            _walk(node.children, opts, depth + (1 if opts.sections else 0), out)
+            yield from _walk(node.children, opts, depth + (1 if opts.sections else 0))
         else:
-            out.append(_render_line(node, opts, depth))
+            first = False
+            yield _render_line(node, opts, depth)
 
 
 def _section_rule(section: Section, depth: int) -> Rule:
