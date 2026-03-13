@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 import types
@@ -127,11 +128,19 @@ class StructSqliteBackend(_SqliteBackend):
     def _row_to_dict(
         self, col_names: list[str], row: tuple[Any, ...]
     ) -> dict[str, object]:
-        return {
-            col: val
-            for col, val in zip(col_names, row)
-            if col not in self._EXCLUDED_COLS
-        }
+        result: dict[str, object] = {}
+        for col, val in zip(col_names, row):
+            if col in self._EXCLUDED_COLS:
+                continue
+            # JSON-encoded collection fields are stored as TEXT; decode them
+            # back so msgspec.convert can turn them into the right types.
+            if isinstance(val, str) and val and val[0] in ("[", "{"):
+                try:
+                    val = json.loads(val)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            result[col] = val
+        return result
 
     def _deserialize(
         self, row_dict: dict[str, object], cls: type, table_name: str
@@ -198,7 +207,10 @@ class StructSqliteBackend(_SqliteBackend):
         fields = msgspec.structs.fields(struct_cls)  # type: ignore[arg-type]
         builtins = msgspec.to_builtins(value)
         col_names = [f.name for f in fields]
-        values = [builtins[f.name] for f in fields]
+        values = [
+            json.dumps(v) if isinstance(v, (list, tuple, dict)) else v
+            for v in (builtins[f.name] for f in fields)
+        ]
 
         placeholders = ", ".join("?" * len(col_names))
         col_list = ", ".join(col_names)
