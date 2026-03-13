@@ -17,7 +17,7 @@ _SECTION_START_RE = re.compile(
 _SECTION_END_RE = re.compile(
     r"^section_end:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
 )
-_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:([0-9a-fA-F]{2})([OE]) )?")
+_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:([0-9a-fA-F]{2})([OE])([ +]))?")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDsuhl]")
 
@@ -35,6 +35,7 @@ class LogLine:
     iso_timestamp: str | None = None  # HH:MM:SS from leading ISO-8601 timestamp
     stream: str | None = None  # "stdout" or "stderr" (from 00O/01E marker)
     stream_id: int | None = None  # executor stream id (00=executor, 01=script, …)
+    continuation: bool = False  # True when append flag is "+" (continuation of previous line)
 
 
 @dataclass
@@ -143,11 +144,16 @@ def _ingest_lines(chunk: str, target: list[Section | LogLine]) -> None:
         short_ts: str | None = None
         stream: str | None = None
         stream_id: int | None = None
+        continuation = False
         body = cleaned
         if ts_match:
             short_ts = ts_match.group(2)  # HH:MM:SS only
             if ts_match.group(4):  # stream flag present
                 stream = "stderr" if ts_match.group(4) == "E" else "stdout"
                 stream_id = int(ts_match.group(3), 16)
+                continuation = ts_match.group(5) == "+"
             body = cleaned[ts_match.end() :]
-        target.append(LogLine(text=body, raw=raw_line, iso_timestamp=short_ts, stream=stream, stream_id=stream_id))
+        target.append(LogLine(
+            text=body, raw=raw_line, iso_timestamp=short_ts,
+            stream=stream, stream_id=stream_id, continuation=continuation,
+        ))

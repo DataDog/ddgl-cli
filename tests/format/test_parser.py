@@ -155,6 +155,7 @@ class TestParseTraceLines:
         assert line.text == "compiling foo.c"
         assert line.stream == "stdout"
         assert line.stream_id == 0
+        assert line.continuation is False
 
     def test_stderr_marker_parsed(self) -> None:
         raw = "2025-01-15T10:30:45.123Z 01E error message\n"
@@ -165,6 +166,16 @@ class TestParseTraceLines:
         assert line.text == "error message"
         assert line.stream == "stderr"
         assert line.stream_id == 1
+        assert line.continuation is False
+
+    def test_continuation_marker(self) -> None:
+        raw = "2025-01-15T10:30:45.123Z 00O+continued output\n"
+        trace = parse_trace(raw)
+        line = trace.children[0]
+        assert isinstance(line, LogLine)
+        assert line.continuation is True
+        assert line.stream == "stdout"
+        assert line.text == "continued output"
 
     def test_hex_stream_id(self) -> None:
         raw = "2025-01-15T10:30:45.123Z 0aO some output\n"
