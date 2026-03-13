@@ -94,18 +94,18 @@ class TestLineRendering:
         assert "\r" not in lines[0].plain
         assert "\x1b[0K" not in lines[0].plain
 
-    def test_no_color_strips_ansi(self) -> None:
+    def test_color_false_strips_ansi(self) -> None:
         trace = Trace(children=[
             LogLine(text="\x1b[32mGreen\x1b[0m", raw="\x1b[32mGreen\x1b[0m"),
         ])
-        lines = _lines(trace, no_color=True)
+        lines = _lines(trace, color=False)
         assert lines[0].plain == "Green"
 
     def test_color_preserved_from_ansi(self) -> None:
         trace = Trace(children=[
             LogLine(text="\x1b[32mGreen\x1b[0m", raw="\x1b[32mGreen\x1b[0m"),
         ])
-        lines = _lines(trace, no_color=False)
+        lines = _lines(trace, color=True)
         assert lines[0].plain == "Green"
         # Should have style spans from ANSI parsing.
         assert len(lines[0]._spans) > 0

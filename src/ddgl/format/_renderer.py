@@ -29,7 +29,7 @@ class TraceOptions(msgspec.Struct):
     strip: bool = True  # remove noise sequences from log lines
     timestamps: bool = True  # dim leading ISO timestamp
     highlight: bool = True  # colour error/warning lines
-    no_color: bool = False  # strip all ANSI from log content
+    color: bool = True  # preserve ANSI colour from log content
 
     @classmethod
     def raw(cls) -> TraceOptions:
@@ -83,11 +83,11 @@ def _render_line(line: LogLine, opts: TraceOptions, depth: int) -> Text:
     if opts.strip:
         body = _NOISE_RE.sub("", body)
 
-    if opts.no_color:
+    if opts.color:
+        txt = Text.from_ansi(body)
+    else:
         body = _ANSI_RE.sub("", body)
         txt = Text(body)
-    else:
-        txt = Text.from_ansi(body)
 
     if opts.timestamps and line.iso_timestamp:
         ts = Text(f"{line.iso_timestamp} ", style="dim")

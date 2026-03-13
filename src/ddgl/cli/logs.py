@@ -57,11 +57,11 @@ def logs(
     output_json: bool,
     no_pager: bool,
     raw: bool,
-    no_sections: bool,
-    no_strip: bool,
-    no_timestamps: bool,
-    no_highlight: bool,
-    no_color: bool,
+    sections: bool,
+    strip: bool,
+    timestamps: bool,
+    highlight: bool,
+    color: bool,
 ) -> None:
     """Fetch job logs.
 
@@ -103,11 +103,11 @@ def logs(
         options = TraceOptions.raw()
     else:
         options = TraceOptions(
-            sections=not no_sections,
-            strip=not no_strip,
-            timestamps=not no_timestamps,
-            highlight=not no_highlight,
-            no_color=no_color or not console.is_terminal,
+            sections=sections,
+            strip=strip,
+            timestamps=timestamps,
+            highlight=highlight,
+            color=color and console.is_terminal,
         )
 
     use_pager = not no_pager and console.is_terminal

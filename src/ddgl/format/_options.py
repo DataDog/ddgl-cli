@@ -11,36 +11,31 @@ F = TypeVar("F", bound=Callable)
 
 
 def trace_format_options(f: F) -> F:
-    """Add --raw, --no-sections, --no-strip, --no-timestamps, --no-highlight, --no-color."""
+    """Add --raw and --[no-]{sections,strip,timestamps,highlight,color} flags."""
     f = click.option(
-        "--no-color",
-        is_flag=True,
-        default=False,
-        help="Strip all ANSI colour from log content.",
+        "--color/--no-color",
+        default=True,
+        help="Preserve / strip ANSI colour from log content.",
     )(f)
     f = click.option(
-        "--no-highlight",
-        is_flag=True,
-        default=False,
-        help="Disable error/warning line highlighting.",
+        "--highlight/--no-highlight",
+        default=True,
+        help="Enable / disable error/warning line highlighting.",
     )(f)
     f = click.option(
-        "--no-timestamps",
-        is_flag=True,
-        default=False,
-        help="Hide ISO timestamps from log lines.",
+        "--timestamps/--no-timestamps",
+        default=True,
+        help="Show / hide ISO timestamps on log lines.",
     )(f)
     f = click.option(
-        "--no-strip",
-        is_flag=True,
-        default=False,
-        help="Keep noise sequences (\\r, \\x1b[0K) in output.",
+        "--strip/--no-strip",
+        default=True,
+        help="Remove / keep noise sequences (\\r, \\x1b[0K).",
     )(f)
     f = click.option(
-        "--no-sections",
-        is_flag=True,
-        default=False,
-        help="Hide section header rules.",
+        "--sections/--no-sections",
+        default=True,
+        help="Show / hide section header rules.",
     )(f)
     f = click.option(
         "--raw",

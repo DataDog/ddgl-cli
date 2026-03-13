@@ -20,11 +20,11 @@ from ddgl.render._console import console
 def format_cmd(
     source: click.utils.LazyFile,
     raw: bool,
-    no_sections: bool,
-    no_strip: bool,
-    no_timestamps: bool,
-    no_highlight: bool,
-    no_color: bool,
+    sections: bool,
+    strip: bool,
+    timestamps: bool,
+    highlight: bool,
+    color: bool,
     output_json: bool,
     no_pager: bool,
 ) -> None:
@@ -43,11 +43,11 @@ def format_cmd(
         options = TraceOptions.raw()
     else:
         options = TraceOptions(
-            sections=not no_sections,
-            strip=not no_strip,
-            timestamps=not no_timestamps,
-            highlight=not no_highlight,
-            no_color=no_color or not sys.stdout.isatty(),
+            sections=sections,
+            strip=strip,
+            timestamps=timestamps,
+            highlight=highlight,
+            color=color and sys.stdout.isatty(),
         )
 
     renderables = format_trace(text, options)
