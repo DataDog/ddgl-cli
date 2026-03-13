@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 
 # ── regexes ──────────────────────────────────────────────────────────────────
 
+# Section markers (matched against the line body after stripping prefix/noise).
 _SECTION_START_RE = re.compile(
-    r"^(?:\x1b\[0K)?section_start:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
+    r"section_start:(\d+):(\S+)"
 )
 _SECTION_END_RE = re.compile(
-    r"^(?:\x1b\[0K)?section_end:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
+    r"section_end:(\d+):(\S+)"
 )
 _TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:([0-9a-fA-F]{2})([OE])([ +]))?")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
@@ -71,75 +72,27 @@ def strip_ansi(text: str) -> str:
 def parse_trace(text: str) -> Trace:
     """Parse raw GitLab CI trace text into a :class:`Trace` tree.
 
-    Section markers are consumed; regular lines become :class:`LogLine` nodes
-    placed inside the innermost open :class:`Section` (or at the top level).
+    Processes the trace line-by-line:
+    1. Strip noise (``\\r``, ``\\x1b[0K``)
+    2. Strip timestamp / stream prefix
+    3. Check for section markers
+    4. Otherwise create a :class:`LogLine`
     """
     trace = Trace()
     if not text:
         return trace
 
-    # Build an index of section markers with their spans.
-    events: list[tuple[int, int, str, dict]] = []  # (start, end, kind, data)
-
-    for m in _SECTION_START_RE.finditer(text):
-        ts = int(m.group(1))
-        raw_name = m.group(2)
-        # Parse optional metadata like [collapsed=true]
-        collapsed = "[collapsed=true]" in raw_name
-        # The section name is everything before any bracket metadata.
-        name = re.sub(r"\[.*?\]", "", raw_name).strip()
-        events.append((m.start(), m.end(), "start", {"ts": ts, "name": name, "collapsed": collapsed}))
-
-    for m in _SECTION_END_RE.finditer(text):
-        ts = int(m.group(1))
-        name = m.group(2).strip()
-        events.append((m.start(), m.end(), "end", {"ts": ts, "name": name}))
-
-    # Sort events by position in the text.
-    events.sort(key=lambda e: e[0])
-
-    # Walk through the text, splitting at event boundaries.
     stack: list[Section] = []
-    pos = 0
 
-    def _current_children() -> list[Section | LogLine]:
+    def _target() -> list[Section | LogLine]:
         return stack[-1].children if stack else trace.children
 
-    for ev_start, ev_end, kind, data in events:
-        # Process any text between pos and this event.
-        if ev_start > pos:
-            _ingest_lines(text[pos:ev_start], _current_children())
-
-        if kind == "start":
-            section = Section(
-                name=data["name"],
-                start_ts=data["ts"],
-                collapsed=data["collapsed"],
-            )
-            _current_children().append(section)
-            stack.append(section)
-        else:  # "end"
-            if stack:
-                top = stack[-1]
-                top.end_ts = data["ts"]
-                top.duration = top.end_ts - top.start_ts
-                stack.pop()
-
-        pos = ev_end
-
-    # Remaining text after the last event.
-    if pos < len(text):
-        _ingest_lines(text[pos:], _current_children())
-
-    return trace
-
-
-def _ingest_lines(chunk: str, target: list[Section | LogLine]) -> None:
-    """Split *chunk* into lines and append :class:`LogLine` nodes to *target*."""
-    for raw_line in chunk.splitlines():
+    for raw_line in text.splitlines():
         cleaned = _NOISE_RE.sub("", raw_line)
         if not cleaned:
             continue
+
+        # Strip timestamp and stream prefix.
         ts_match = _TIMESTAMP_RE.match(cleaned)
         short_ts: str | None = None
         stream: str | None = None
@@ -147,13 +100,45 @@ def _ingest_lines(chunk: str, target: list[Section | LogLine]) -> None:
         continuation = False
         body = cleaned
         if ts_match:
-            short_ts = ts_match.group(2)  # HH:MM:SS only
-            if ts_match.group(4):  # stream flag present
+            short_ts = ts_match.group(2)
+            if ts_match.group(4):
                 stream = "stderr" if ts_match.group(4) == "E" else "stdout"
                 stream_id = int(ts_match.group(3), 16)
                 continuation = ts_match.group(5) == "+"
-            body = cleaned[ts_match.end() :]
-        target.append(LogLine(
+            body = cleaned[ts_match.end():]
+
+        # Strip any remaining ANSI noise from the body prefix before
+        # checking section markers (e.g. "[0K" remnants).
+        body_for_match = _ANSI_RE.sub("", body)
+
+        # Check for section markers.
+        start = _SECTION_START_RE.match(body_for_match)
+        if start:
+            raw_name = start.group(2)
+            collapsed = "collapsed=true" in raw_name
+            name = re.sub(r"\[.*?\]", "", raw_name).strip()
+            section = Section(
+                name=name,
+                start_ts=int(start.group(1)),
+                collapsed=collapsed,
+            )
+            _target().append(section)
+            stack.append(section)
+            continue
+
+        end = _SECTION_END_RE.match(body_for_match)
+        if end:
+            if stack:
+                top = stack[-1]
+                top.end_ts = int(end.group(1))
+                top.duration = top.end_ts - top.start_ts
+                stack.pop()
+            continue
+
+        # Regular log line.
+        _target().append(LogLine(
             text=body, raw=raw_line, iso_timestamp=short_ts,
             stream=stream, stream_id=stream_id, continuation=continuation,
         ))
+
+    return trace
