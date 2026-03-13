@@ -88,7 +88,7 @@ def _walk_json(
             if node.iso_timestamp:
                 record["timestamp"] = node.iso_timestamp
             if node.stream:
-                record["stream"] = node.stream
+                record["stream"] = node.stream.name.lower()
             if node.stream_id is not None:
                 record["stream_id"] = node.stream_id
             yield json.dumps(record)

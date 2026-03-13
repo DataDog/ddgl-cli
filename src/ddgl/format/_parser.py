@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 
 # ── regexes ──────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,13 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDsuhl]")
 TraceNode = "Section | LogLine"
 
 
+class Stream(Enum):
+    """GitLab semantic log stream type."""
+
+    STDOUT = "O"
+    STDERR = "E"
+
+
 @dataclass
 class LogLine:
     """A single line of log output."""
@@ -35,7 +43,7 @@ class LogLine:
     text: str  # line body (noise stripped, ANSI preserved)
     raw: str  # original line verbatim
     iso_timestamp: str | None = None  # HH:MM:SS from leading ISO-8601 timestamp
-    stream: str | None = None  # "stdout" or "stderr" (from 00O/01E marker)
+    stream: Stream | None = None  # from 00O/01E marker
     stream_id: int | None = None  # executor stream id (00=executor, 01=script, …)
     continuation: bool = False  # True when append flag is "+" (continuation of previous line)
 
@@ -107,7 +115,7 @@ def parse_trace(text: str) -> Trace:
         continuation = False
         stream_match = _STREAM_RE.match(body)
         if stream_match:
-            stream = "stderr" if stream_match.group(2) == "E" else "stdout"
+            stream = Stream(stream_match.group(2))
             stream_id = int(stream_match.group(1), 16)
             continuation = stream_match.group(3) == "+"
             body = body[stream_match.end():]

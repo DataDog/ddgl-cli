@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ddgl.format._parser import LogLine, Section, parse_trace, strip_ansi
+from ddgl.format._parser import LogLine, Section, Stream, parse_trace, strip_ansi
 
 
 class TestStripAnsi:
@@ -168,7 +168,7 @@ class TestParseTraceLines:
         assert isinstance(line, LogLine)
         assert line.iso_timestamp == "10:30:45"
         assert line.text == "compiling foo.c"
-        assert line.stream == "stdout"
+        assert line.stream is Stream.STDOUT
         assert line.stream_id == 0
         assert line.continuation is False
 
@@ -179,7 +179,7 @@ class TestParseTraceLines:
         assert isinstance(line, LogLine)
         assert line.iso_timestamp == "10:30:45"
         assert line.text == "error message"
-        assert line.stream == "stderr"
+        assert line.stream is Stream.STDERR
         assert line.stream_id == 1
         assert line.continuation is False
 
@@ -189,7 +189,7 @@ class TestParseTraceLines:
         line = trace.children[0]
         assert isinstance(line, LogLine)
         assert line.continuation is True
-        assert line.stream == "stdout"
+        assert line.stream is Stream.STDOUT
         assert line.text == "continued output"
 
     def test_hex_stream_id(self) -> None:
@@ -198,7 +198,7 @@ class TestParseTraceLines:
         line = trace.children[0]
         assert isinstance(line, LogLine)
         assert line.stream_id == 10
-        assert line.stream == "stdout"
+        assert line.stream is Stream.STDOUT
 
     def test_no_timestamp(self) -> None:
         raw = "just a regular line\n"
