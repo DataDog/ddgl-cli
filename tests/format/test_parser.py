@@ -26,6 +26,21 @@ class TestParseTraceEmpty:
 
 
 class TestParseTraceSections:
+    def test_section_with_leading_escape(self) -> None:
+        """Real GitLab traces have \\x1b[0K before section_start."""
+        raw = (
+            "\x1b[0Ksection_start:100:build\r\x1b[0K\n"
+            "compiling...\n"
+            "\x1b[0Ksection_end:105:build\r\x1b[0K\n"
+        )
+        trace = parse_trace(raw)
+        assert len(trace.children) == 1
+        sec = trace.children[0]
+        assert isinstance(sec, Section)
+        assert sec.name == "build"
+        assert sec.duration == 5
+        assert len(sec.children) == 1
+
     def test_single_section(self) -> None:
         raw = (
             "section_start:100:build\r\x1b[0K\n"

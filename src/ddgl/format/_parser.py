@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 # ── regexes ──────────────────────────────────────────────────────────────────
 
 _SECTION_START_RE = re.compile(
-    r"^section_start:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
+    r"^(?:\x1b\[0K)?section_start:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
 )
 _SECTION_END_RE = re.compile(
-    r"^section_end:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
+    r"^(?:\x1b\[0K)?section_end:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
 )
 _TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:([0-9a-fA-F]{2})([OE])([ +]))?")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
