@@ -113,6 +113,15 @@ FilterButton.-active {
     height: 1fr;
 }
 
+#job-history {
+    height: 1fr;
+    padding: 1;
+}
+
+#history-table {
+    height: 1fr;
+}
+
 /* -- Help Modal ---------------------------------------------------------- */
 
 HelpModal {

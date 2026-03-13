@@ -22,6 +22,7 @@ from ddgl.core.logs import stream_log
 from ddgl.model.job import Job
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.job_dag import JobDAGPanel
+from ddgl.tui.widgets.job_history import JobHistoryPanel
 from ddgl.tui.widgets.status import status_color, status_icon
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,13 @@ class JobDetailScreen(Screen[None]):
                             self._client,
                             self._cache,
                             id="job-dag",
+                        )
+                    with TabPane("History", id="tab-history"):
+                        yield JobHistoryPanel(
+                            self._job,
+                            self._client,
+                            self._cache,
+                            id="job-history",
                         )
 
     def on_mount(self) -> None:
