@@ -145,6 +145,12 @@ class JobDetailScreen(Screen[None]):
                             self._cache,
                             id="job-history",
                         )
+                    with TabPane("Tests", id="tab-tests"):
+                        yield Static(
+                            "[dim]Test results will be available once the "
+                            "Unified Test Format integration is ready.[/dim]",
+                            id="tests-placeholder",
+                        )
 
     def on_mount(self) -> None:
         self.title = gradient_text(f"Job #{self._job.id}")
