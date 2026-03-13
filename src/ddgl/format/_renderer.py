@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 _ERROR_RE = re.compile(r"\b(?:error|fatal|exception|traceback)\b", re.IGNORECASE)
 _WARN_RE = re.compile(r"\b(?:warn(?:ing)?)\b", re.IGNORECASE)
 
+_SECTION_COLOR = "dark_orange"
+_INDENT = "  "
+
 
 @dataclass
 class TraceOptions:
@@ -53,25 +56,28 @@ def _walk(
     for node in nodes:
         if isinstance(node, Section):
             if opts.sections:
+                # Blank line before section for visual breathing room.
+                if out:
+                    out.append(Text(""))
                 out.append(_section_rule(node, depth))
                 if node.collapsed:
-                    # Collapsed sections render as a single summary line.
                     continue
-            _walk(node.children, opts, depth + 1, out)
+            _walk(node.children, opts, depth + (1 if opts.sections else 0), out)
         else:
-            out.append(_render_line(node, opts))
+            out.append(_render_line(node, opts, depth))
 
 
 def _section_rule(section: Section, depth: int) -> Rule:
-    indent = "  " * depth
-    parts = [f"{indent}[bold]{section.name}[/bold]"]
+    indent = _INDENT * depth
+    icon = "\u25b8" if section.collapsed else "\u25be"
+    parts = [f"{indent}[{_SECTION_COLOR}]{icon}[/{_SECTION_COLOR}] [{_SECTION_COLOR} bold]{section.name}[/{_SECTION_COLOR} bold]"]
     if section.duration is not None:
         parts.append(f"[dim]{section.duration}s[/dim]")
     title = "  ".join(parts)
-    return Rule(title, align="left")
+    return Rule(title, align="left", style=_SECTION_COLOR)
 
 
-def _render_line(line: LogLine, opts: TraceOptions) -> Text:
+def _render_line(line: LogLine, opts: TraceOptions, depth: int) -> Text:
     body = line.text
 
     if opts.strip:
@@ -86,6 +92,11 @@ def _render_line(line: LogLine, opts: TraceOptions) -> Text:
     if opts.timestamps and line.iso_timestamp:
         ts = Text(f"{line.iso_timestamp} ", style="dim")
         txt = Text.assemble(ts, txt)
+
+    # Indent lines within sections.
+    if depth > 0 and opts.sections:
+        indent = Text(_INDENT * depth)
+        txt = Text.assemble(indent, txt)
 
     if opts.highlight:
         plain = txt.plain
