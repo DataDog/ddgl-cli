@@ -18,7 +18,8 @@ _SECTION_START_RE = re.compile(
 _SECTION_END_RE = re.compile(
     r"section_end:(\d+):(\S+)"
 )
-_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:([0-9a-fA-F]{2})([OE])([ +]))?")
+_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) ")
+_STREAM_RE = re.compile(r"^([0-9a-fA-F]{2})([OE])([ +])")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDsuhl]")
 
@@ -92,20 +93,24 @@ def parse_trace(text: str) -> Trace:
         if not cleaned:
             continue
 
-        # Strip timestamp and stream prefix.
+        # Step 1: strip ISO timestamp prefix.
         ts_match = _TIMESTAMP_RE.match(cleaned)
         short_ts: str | None = None
-        stream: str | None = None
-        stream_id: int | None = None
-        continuation = False
         body = cleaned
         if ts_match:
             short_ts = ts_match.group(2)
-            if ts_match.group(4):
-                stream = "stderr" if ts_match.group(4) == "E" else "stdout"
-                stream_id = int(ts_match.group(3), 16)
-                continuation = ts_match.group(5) == "+"
             body = cleaned[ts_match.end():]
+
+        # Step 2: strip stream marker (00O, 01E, etc.).
+        stream: str | None = None
+        stream_id: int | None = None
+        continuation = False
+        stream_match = _STREAM_RE.match(body)
+        if stream_match:
+            stream = "stderr" if stream_match.group(2) == "E" else "stdout"
+            stream_id = int(stream_match.group(1), 16)
+            continuation = stream_match.group(3) == "+"
+            body = body[stream_match.end():]
 
         # Strip any remaining ANSI noise from the body prefix before
         # checking section markers (e.g. "[0K" remnants).
