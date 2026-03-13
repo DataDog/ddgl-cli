@@ -17,7 +17,7 @@ _SECTION_START_RE = re.compile(
 _SECTION_END_RE = re.compile(
     r"^section_end:(\d+):([^\r\n]+?)\r?\x1b\[0K", re.MULTILINE
 )
-_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z) ")
+_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) (?:\d{2}[OE] )?")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDsuhl]")
 
@@ -138,9 +138,9 @@ def _ingest_lines(chunk: str, target: list[Section | LogLine]) -> None:
         if not cleaned:
             continue
         ts_match = _TIMESTAMP_RE.match(cleaned)
-        iso_ts: str | None = None
+        short_ts: str | None = None
         body = cleaned
         if ts_match:
-            iso_ts = ts_match.group(1)
+            short_ts = ts_match.group(2)  # HH:MM:SS only
             body = cleaned[ts_match.end() :]
-        target.append(LogLine(text=body, raw=raw_line, iso_timestamp=iso_ts))
+        target.append(LogLine(text=body, raw=raw_line, iso_timestamp=short_ts))

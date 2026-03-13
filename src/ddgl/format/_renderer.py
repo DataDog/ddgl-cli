@@ -54,6 +54,9 @@ def _walk(
         if isinstance(node, Section):
             if opts.sections:
                 out.append(_section_rule(node, depth))
+                if node.collapsed:
+                    # Collapsed sections render as a single summary line.
+                    continue
             _walk(node.children, opts, depth + 1, out)
         else:
             out.append(_render_line(node, opts))

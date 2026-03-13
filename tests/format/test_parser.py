@@ -136,13 +136,31 @@ class TestParseTraceLines:
         assert isinstance(line, LogLine)
         assert "\x1b[32m" in line.text
 
-    def test_iso_timestamp_extracted(self) -> None:
+    def test_iso_timestamp_extracted_as_short(self) -> None:
         raw = "2025-01-15T10:30:45.123Z compiling foo.c\n"
         trace = parse_trace(raw)
         line = trace.children[0]
         assert isinstance(line, LogLine)
-        assert line.iso_timestamp == "2025-01-15T10:30:45.123Z"
+        assert line.iso_timestamp == "10:30:45"
         assert line.text == "compiling foo.c"
+
+    def test_stream_marker_stripped(self) -> None:
+        raw = "2025-01-15T10:30:45.123Z 00O compiling foo.c\n"
+        trace = parse_trace(raw)
+        line = trace.children[0]
+        assert isinstance(line, LogLine)
+        assert line.iso_timestamp == "10:30:45"
+        assert line.text == "compiling foo.c"
+        assert "00O" not in line.text
+
+    def test_stderr_marker_stripped(self) -> None:
+        raw = "2025-01-15T10:30:45.123Z 01E error message\n"
+        trace = parse_trace(raw)
+        line = trace.children[0]
+        assert isinstance(line, LogLine)
+        assert line.iso_timestamp == "10:30:45"
+        assert line.text == "error message"
+        assert "01E" not in line.text
 
     def test_no_timestamp(self) -> None:
         raw = "just a regular line\n"

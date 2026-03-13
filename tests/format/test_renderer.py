@@ -50,6 +50,29 @@ class TestSectionRendering:
         rules = _rules(trace)
         assert len(rules) == 2
 
+    def test_collapsed_section_hides_children(self) -> None:
+        trace = Trace(children=[
+            Section(name="prepare", start_ts=0, end_ts=2, duration=2, collapsed=True, children=[
+                LogLine(text="hidden setup", raw="hidden setup"),
+            ]),
+        ])
+        result = render_trace(trace)
+        rules = [r for r in result if isinstance(r, Rule)]
+        lines = [r for r in result if isinstance(r, Text)]
+        assert len(rules) == 1
+        assert "prepare" in rules[0].title  # type: ignore[operator]
+        assert lines == []  # children are hidden
+
+    def test_collapsed_section_children_shown_when_sections_disabled(self) -> None:
+        trace = Trace(children=[
+            Section(name="prepare", start_ts=0, end_ts=2, duration=2, collapsed=True, children=[
+                LogLine(text="visible", raw="visible"),
+            ]),
+        ])
+        lines = _lines(trace, sections=False)
+        assert len(lines) == 1
+        assert lines[0].plain == "visible"
+
     def test_unclosed_section_no_duration_in_title(self) -> None:
         trace = Trace(children=[
             Section(name="hanging", start_ts=0, children=[
@@ -89,17 +112,17 @@ class TestLineRendering:
 
     def test_timestamp_prepended_when_enabled(self) -> None:
         trace = Trace(children=[
-            LogLine(text="hello", raw="2025-01-01T00:00:00.000Z hello", iso_timestamp="2025-01-01T00:00:00.000Z"),
+            LogLine(text="hello", raw="14:30:00 hello", iso_timestamp="14:30:00"),
         ])
         lines = _lines(trace, timestamps=True)
-        assert lines[0].plain.startswith("2025-01-01T00:00:00.000Z")
+        assert lines[0].plain.startswith("14:30:00")
 
     def test_timestamp_omitted_when_disabled(self) -> None:
         trace = Trace(children=[
-            LogLine(text="hello", raw="2025-01-01T00:00:00.000Z hello", iso_timestamp="2025-01-01T00:00:00.000Z"),
+            LogLine(text="hello", raw="14:30:00 hello", iso_timestamp="14:30:00"),
         ])
         lines = _lines(trace, timestamps=False)
-        assert not lines[0].plain.startswith("2025-01-01")
+        assert not lines[0].plain.startswith("14:30:00")
 
 
 class TestHighlighting:
