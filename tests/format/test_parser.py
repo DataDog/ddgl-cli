@@ -143,24 +143,36 @@ class TestParseTraceLines:
         assert isinstance(line, LogLine)
         assert line.iso_timestamp == "10:30:45"
         assert line.text == "compiling foo.c"
+        assert line.stream is None
+        assert line.stream_id is None
 
-    def test_stream_marker_stripped(self) -> None:
+    def test_stdout_marker_parsed(self) -> None:
         raw = "2025-01-15T10:30:45.123Z 00O compiling foo.c\n"
         trace = parse_trace(raw)
         line = trace.children[0]
         assert isinstance(line, LogLine)
         assert line.iso_timestamp == "10:30:45"
         assert line.text == "compiling foo.c"
-        assert "00O" not in line.text
+        assert line.stream == "stdout"
+        assert line.stream_id == 0
 
-    def test_stderr_marker_stripped(self) -> None:
+    def test_stderr_marker_parsed(self) -> None:
         raw = "2025-01-15T10:30:45.123Z 01E error message\n"
         trace = parse_trace(raw)
         line = trace.children[0]
         assert isinstance(line, LogLine)
         assert line.iso_timestamp == "10:30:45"
         assert line.text == "error message"
-        assert "01E" not in line.text
+        assert line.stream == "stderr"
+        assert line.stream_id == 1
+
+    def test_hex_stream_id(self) -> None:
+        raw = "2025-01-15T10:30:45.123Z 0aO some output\n"
+        trace = parse_trace(raw)
+        line = trace.children[0]
+        assert isinstance(line, LogLine)
+        assert line.stream_id == 10
+        assert line.stream == "stdout"
 
     def test_no_timestamp(self) -> None:
         raw = "just a regular line\n"
