@@ -3,8 +3,8 @@ from __future__ import annotations
 from rich.rule import Rule
 from rich.text import Text
 
-from ddgl.format._parser import LogLine, Section, Trace
 from ddgl.format._renderer import TraceOptions, render_trace
+from ddgl.model.trace import LogLine, Section, Trace
 
 
 def _lines(trace: Trace, **kw: object) -> list[Text]:

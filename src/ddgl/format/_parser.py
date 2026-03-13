@@ -1,15 +1,14 @@
-"""Tree-based IR and parser for GitLab CI job traces.
+"""Parser for GitLab CI job traces.
 
-Single source of truth for all trace-related regexes. Produces a ``Trace``
-tree that downstream renderers consume without re-parsing.
+Single source of truth for all trace-related regexes. Builds a ``Trace``
+tree from raw text that downstream renderers consume without re-parsing.
 """
 
 from __future__ import annotations
 
 import re
-from enum import Enum
 
-import msgspec
+from ddgl.model.trace import LogLine, Section, Stream, Trace
 
 # ── regexes ──────────────────────────────────────────────────────────────────
 
@@ -24,45 +23,6 @@ _TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) ")
 _STREAM_RE = re.compile(r"^([0-9a-fA-F]{2})([OE])([ +])")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDsuhl]")
-
-# ── IR nodes ─────────────────────────────────────────────────────────────────
-
-TraceNode = "Section | LogLine"
-
-
-class Stream(Enum):
-    """GitLab semantic log stream type."""
-
-    STDOUT = "O"
-    STDERR = "E"
-
-
-class LogLine(msgspec.Struct):
-    """A single line of log output."""
-
-    text: str  # line body (noise stripped, ANSI preserved)
-    raw: str  # original line verbatim
-    iso_timestamp: str | None = None  # HH:MM:SS from leading ISO-8601 timestamp
-    stream: Stream | None = None  # from 00O/01E marker
-    stream_id: int | None = None  # executor stream id (00=executor, 01=script, …)
-    continuation: bool = False  # True when append flag is "+" (continuation of previous line)
-
-
-class Section(msgspec.Struct):
-    """A GitLab CI section (may nest)."""
-
-    name: str
-    start_ts: int  # unix seconds from section_start marker
-    end_ts: int | None = None  # unix seconds from section_end marker
-    duration: int | None = None  # end_ts - start_ts
-    collapsed: bool = False  # [collapsed=true] metadata
-    children: list[Section | LogLine] = []
-
-
-class Trace(msgspec.Struct):
-    """Root of the IR tree."""
-
-    children: list[Section | LogLine] = []
 
 
 # ── public helpers ───────────────────────────────────────────────────────────

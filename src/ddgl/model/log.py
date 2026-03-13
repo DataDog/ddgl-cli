@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ddgl.format import Section as _FmtSection
-from ddgl.format import Trace, parse_trace, strip_ansi
+from ddgl.format._parser import parse_trace, strip_ansi
+from ddgl.model.trace import Section, Trace
 
 
 @dataclass
@@ -36,10 +36,10 @@ class JobLog:
         return [
             LogSection(
                 name=node.name,
-                lines=[child.text for child in node.children if not isinstance(child, _FmtSection)],
+                lines=[child.text for child in node.children if not isinstance(child, Section)],
             )
             for node in self.trace.children
-            if isinstance(node, _FmtSection)
+            if isinstance(node, Section)
         ]
 
     @property

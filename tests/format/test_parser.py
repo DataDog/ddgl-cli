@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ddgl.format._parser import LogLine, Section, Stream, parse_trace, strip_ansi
+from ddgl.format._parser import parse_trace, strip_ansi
+from ddgl.model.trace import LogLine, Section, Stream
 
 
 class TestStripAnsi:

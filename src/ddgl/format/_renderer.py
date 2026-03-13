@@ -9,7 +9,8 @@ import msgspec
 from rich.rule import Rule
 from rich.text import Text
 
-from ddgl.format._parser import _ANSI_RE, _NOISE_RE, LogLine, Section, Trace
+from ddgl.format._parser import _ANSI_RE, _NOISE_RE
+from ddgl.model.trace import LogLine, Section, Trace
 
 if TYPE_CHECKING:
     from rich.console import RenderableType

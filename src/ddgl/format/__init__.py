@@ -15,15 +15,9 @@ import json
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
-from ddgl.format._parser import (
-    LogLine,
-    Section,
-    Trace,
-    TraceNode,
-    parse_trace,
-    strip_ansi,
-)
+from ddgl.format._parser import parse_trace, strip_ansi
 from ddgl.format._renderer import TraceOptions, render_trace
+from ddgl.model.trace import LogLine, Section, Trace, TraceNode
 
 if TYPE_CHECKING:
     from rich.console import RenderableType
