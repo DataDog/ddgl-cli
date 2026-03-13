@@ -1,12 +1,54 @@
 """Tests for ddgl/tui/screens/job_detail.py — pure-function tests only."""
 from __future__ import annotations
 
+import msgspec
 from rich.text import Text
 
 from ddgl.constants import JobStatus
-from ddgl.tui.screens.job_detail import _fmt_duration, _highlight_text, _render_meta
+from ddgl.tui.screens.job_detail import (
+    _fmt_duration,
+    _highlight_text,
+    _render_meta,
+    _walk_trace,
+)
 
 from .._stubs import make_job
+
+# ---------------------------------------------------------------------------
+# Local stubs for trace IR (avoids coupling tests to production constructors)
+# ---------------------------------------------------------------------------
+
+
+def _logline(text: str, *, raw: str = "", iso_timestamp: str | None = None):
+    """Minimal LogLine stub."""
+    from ddgl.model.trace import LogLine
+
+    return LogLine(text=text, raw=raw or text, iso_timestamp=iso_timestamp)
+
+
+def _section(
+    name: str,
+    *,
+    duration: int | None = None,
+    collapsed: bool = False,
+    children=None,
+):
+    """Minimal Section stub."""
+    from ddgl.model.trace import Section
+
+    return Section(
+        name=name,
+        start_ts=0,
+        duration=duration,
+        collapsed=collapsed,
+        children=children or [],
+    )
+
+
+def _trace(*children):
+    from ddgl.model.trace import Trace
+
+    return Trace(children=list(children))
 
 # ---------------------------------------------------------------------------
 # _fmt_duration
@@ -159,3 +201,75 @@ def test_highlight_multiple_matches() -> None:
     result = _highlight_text(original, "foo")
     spans = [s for s in result._spans if "reverse" in str(s.style)]
     assert len(spans) == 3
+
+
+# ---------------------------------------------------------------------------
+# _walk_trace
+# ---------------------------------------------------------------------------
+
+
+def test_walk_trace_empty() -> None:
+    result = _walk_trace(_trace())
+    assert result == []
+
+
+def test_walk_trace_single_logline() -> None:
+    result = _walk_trace(_trace(_logline("hello")))
+    assert len(result) == 1
+    assert result[0].plain == "hello"
+
+
+def test_walk_trace_ansi_in_logline_preserved() -> None:
+    result = _walk_trace(_trace(_logline("\x1b[31mred\x1b[0m")))
+    assert result[0].plain == "red"
+
+
+def test_walk_trace_section_header_contains_name() -> None:
+    result = _walk_trace(_trace(_section("build")))
+    assert len(result) == 1
+    assert "build" in result[0].plain
+
+
+def test_walk_trace_section_header_contains_duration() -> None:
+    result = _walk_trace(_trace(_section("build", duration=42)))
+    assert "42s" in result[0].plain
+
+
+def test_walk_trace_section_children_included() -> None:
+    sec = _section("build", children=[_logline("output")])
+    result = _walk_trace(_trace(sec))
+    assert len(result) == 2
+    assert any("output" in t.plain for t in result)
+
+
+def test_walk_trace_collapsed_section_skips_children() -> None:
+    sec = _section("prepare", collapsed=True, children=[_logline("hidden")])
+    result = _walk_trace(_trace(sec))
+    assert len(result) == 1
+    assert "prepare" in result[0].plain
+    assert not any("hidden" in t.plain for t in result)
+
+
+def test_walk_trace_timestamp_prefix() -> None:
+    result = _walk_trace(_trace(_logline("msg", iso_timestamp="12:34:56")))
+    assert "12:34:56" in result[0].plain
+    assert "msg" in result[0].plain
+
+
+def test_walk_trace_nested_section() -> None:
+    inner_line = _logline("inner output")
+    inner = _section("inner-sec", children=[inner_line])
+    outer = _section("outer-sec", children=[inner])
+    result = _walk_trace(_trace(outer))
+    # outer header + inner header + inner log line
+    assert len(result) == 3
+    plains = [t.plain for t in result]
+    assert any("outer-sec" in p for p in plains)
+    assert any("inner-sec" in p for p in plains)
+    assert any("inner output" in p for p in plains)
+
+
+def test_walk_trace_multiple_top_level_nodes() -> None:
+    result = _walk_trace(_trace(_logline("a"), _logline("b"), _logline("c")))
+    assert len(result) == 3
+    assert [t.plain for t in result] == ["a", "b", "c"]

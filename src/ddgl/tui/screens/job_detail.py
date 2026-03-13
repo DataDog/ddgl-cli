@@ -18,8 +18,10 @@ from textual.widgets import (
 from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import get_job
-from ddgl.core.logs import stream_log
+from ddgl.core.logs import get_log
+from ddgl.format import parse_trace
 from ddgl.model.job import Job
+from ddgl.model.trace import LogLine, Section, Trace
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.job_dag import JobDAGPanel
 from ddgl.tui.widgets.job_history import JobHistoryPanel
@@ -63,6 +65,47 @@ def _render_meta(job: Job) -> Text:
         t.append("\nURL\n", style="dim")
         t.append(f"{job.web_url}\n", style="dim underline")
     return t
+
+
+_SECTION_COLOR = "dark_orange"
+_SECTION_INDENT = "  "
+
+
+def _walk_trace(trace: Trace) -> list[Text]:
+    """Convert a Trace IR to a flat list of Rich Text objects for RichLog display.
+
+    Sections become styled header lines; collapsed sections skip their children.
+    Log lines are rendered with ANSI color preserved and an optional dim timestamp.
+    """
+    out: list[Text] = []
+    _collect_nodes(trace.children, out, depth=0)
+    return out
+
+
+def _collect_nodes(
+    nodes: list[Section | LogLine],
+    out: list[Text],
+    depth: int,
+) -> None:
+    for node in nodes:
+        if isinstance(node, Section):
+            indent = _SECTION_INDENT * depth
+            icon = "\u25b8" if node.collapsed else "\u25be"
+            header = Text()
+            header.append(indent)
+            header.append(f"{icon} {node.name}", style=f"{_SECTION_COLOR} bold")
+            if node.duration is not None:
+                header.append(f"  {node.duration}s", style="dim")
+            out.append(header)
+            if not node.collapsed:
+                _collect_nodes(node.children, out, depth + 1)
+        else:
+            txt = Text.from_ansi(node.text)
+            if node.iso_timestamp:
+                txt = Text.assemble(Text(f"{node.iso_timestamp} ", style="dim"), txt)
+            if depth > 0:
+                txt = Text.assemble(Text(_SECTION_INDENT * depth), txt)
+            out.append(txt)
 
 
 def _highlight_text(original: Text, query: str) -> Text:
@@ -178,23 +221,15 @@ class JobDetailScreen(Screen[None]):
         log_widget = self.query_one("#job-log", RichLog)
         loading = self.query_one("#log-loading", LoadingIndicator)
         try:
-            async for line in stream_log(
-                self._client, self._job.id, cache=self._cache
-            ):
-                text = Text.from_ansi(line)
-                self._log_lines.append(text)
+            raw = await get_log(self._client, self._job.id, cache=self._cache)
+            trace = parse_trace(raw)
+            self._log_lines = _walk_trace(trace)
+            for text in self._log_lines:
                 log_widget.write(text)
-                if not log_widget.display:
-                    loading.display = False
-                    log_widget.display = True
-                    log_widget.focus()
         except Exception as e:
-            loading.display = False
-            log_widget.display = True
             log_widget.write(Text(f"Failed to load log: {e}", style="red"))
-        if not log_widget.display:
-            loading.display = False
-            log_widget.display = True
+        loading.display = False
+        log_widget.display = True
         log_widget.focus()
 
     # -- Search ------------------------------------------------------------
