@@ -18,6 +18,7 @@ from ddgl.core.jobs import list_jobs
 from ddgl.core.pipeline import get_pipeline
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.tui.screens.job_detail import JobDetailScreen
 from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
 from ddgl.tui.widgets.help import HelpModal
 from ddgl.tui.widgets.job_list import JobListPanel, SortMode
@@ -266,6 +267,16 @@ class PipelineViewer(App[None]):
         self, message: PipelineListPanel.PipelineSelected
     ) -> None:
         self.load_pipeline(message.pipeline)
+
+    def on_job_list_panel_job_selected(
+        self, message: JobListPanel.JobSelected
+    ) -> None:
+        all_jobs = self.query_one(JobListPanel).jobs
+        self.push_screen(
+            JobDetailScreen(
+                message.job, self._client, self._cache, all_jobs=all_jobs
+            )
+        )
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())

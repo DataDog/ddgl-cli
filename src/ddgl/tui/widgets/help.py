@@ -12,7 +12,7 @@ _HELP_CONTENT = """\
 [bold]Navigation[/bold]
   [dim]↑ / ↓  or  k / j[/dim]   Move cursor
   [dim]Space[/dim]               Expand / collapse matrix group
-  [dim]Enter[/dim]               Open job detail  [dim](coming soon)[/dim]
+  [dim]Enter[/dim]               Open job detail
 
 [bold]Actions[/bold]
   [dim]r[/dim]        Refresh pipeline

@@ -78,6 +78,28 @@ FilterButton.-active {
 }
 
 
+/* -- Job Detail Screen --------------------------------------------------- */
+
+#job-detail-root {
+    height: 1fr;
+}
+
+#job-meta-panel {
+    width: 28;
+    border-right: solid $panel-lighten-1;
+    padding: 1 2;
+}
+
+#job-content-panel {
+    width: 1fr;
+}
+
+#job-log {
+    height: 1fr;
+}
+
+/* -- Help Modal ---------------------------------------------------------- */
+
 HelpModal {
     align: center middle;
 }

@@ -1,214 +1,181 @@
-# F4 — Job Detail / Log View
+# F4 — Job Detail Screen
 
-## Goal
+## Context
 
-Pressing `Enter` on a non-group job row opens a modal overlay showing the job's
-metadata (status, stage, duration, failure reason, URL) and its scrollable raw log.
-`Escape` / `q` dismiss the modal.
+The ddgl TUI currently shows a pipeline view with a job list. Users can browse jobs
+but have no way to drill into a single job. This plan adds a full-screen job detail
+view that serves two personas:
 
----
+- **Project devs**: check PR status, read logs, debug failures, see test results
+- **DevOps / CI maintainers**: analyze job performance, reliability, dependencies,
+  and timing data from CI Visibility
 
-## Prerequisites (already in place)
-
-- `Job.failure_reason: str | None` — populated from API
-- `Job.web_url: str` — populated from API
-- `GitLabClient.get_job_log(job_id, project_id=None) -> str` — returns raw log text;
-  `project_id` defaults to the client's configured project, so no extra argument needed
-- `DataTable.on_data_table_row_selected` already exists in `JobListPanel` and handles
-  separator rows and group-toggle; this plan extends it to also post `JobSelected`
+The screen is designed as a stable shell (meta panel + tabbed content area) that
+grows incrementally — each phase adds a tab without touching the others.
 
 ---
 
-## High-level design
+## Screen architecture
 
-### New file: `src/ddgl/tui/widgets/job_detail.py`
-
-`JobDetailModal(ModalScreen[None])` — the full-screen modal.
-
-```python
-from textual.binding import Binding
-from textual.app import ComposeResult
-from textual.screen import ModalScreen
-from textual.widgets import LoadingIndicator, RichLog, Static
-from textual.containers import Vertical
-from textual import work
-from rich.text import Text
-
-from ddgl.cache.cache import Cache
-from ddgl.client import GitLabClient
-from ddgl.model.job import Job
-from ddgl.tui.gradient import gradient_text
-from ddgl.tui.widgets.status import status_color, status_icon
-
-
-class JobDetailModal(ModalScreen[None]):
-    BINDINGS = [Binding("escape,q", "dismiss", "Close")]
-
-    def __init__(self, job: Job, client: GitLabClient, cache: Cache | None = None):
-        super().__init__()
-        self._job = job
-        self._client = client
-        self._cache = cache
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="job-detail"):
-            yield Static(id="job-meta")
-            yield LoadingIndicator(id="log-loading")
-            yield RichLog(id="job-log", markup=False, highlight=False)
-
-    def on_mount(self) -> None:
-        self.border_title = gradient_text(f"Job #{self._job.id}")
-        self.query_one("#job-meta", Static).update(_render_meta(self._job))
-        self.query_one("#job-log").display = False
-        self._fetch_log()
-
-    @work
-    async def _fetch_log(self) -> None:
-        try:
-            raw = await self._client.get_job_log(self._job.id)
-        except Exception as e:
-            self.query_one("#log-loading").display = False
-            log = self.query_one(RichLog)
-            log.display = True
-            log.write(f"[red]Failed to load log: {e}[/red]")
-            return
-        self.query_one("#log-loading").display = False
-        log = self.query_one(RichLog)
-        log.display = True
-        for line in raw.splitlines():
-            log.write(Text.from_ansi(line))   # preserves ANSI colour codes
+```
+┌─ Header: Job #12345 — build-image ────────────────────────┐
+├──────────────┬────────────────────────────────────────────┤
+│  Job Meta    │  [Log] [Deps] [History] [Tests] [CI Vis]  │
+│              ├────────────────────────────────────────────┤
+│  build-image │                                            │
+│              │                                            │
+│  Stage       │  (active tab content)                      │
+│  build       │                                            │
+│              │                                            │
+│  Status      │                                            │
+│  ✗ failed    │                                            │
+│              │                                            │
+│  Duration    │                                            │
+│  4m 12s      │                                            │
+│              │                                            │
+│  Runner      │                                            │
+│  shared-01   │                                            │
+│  [go, linux] │                                            │
+│              │                                            │
+│  Reason      │                                            │
+│  script_fail │                                            │
+│              │                                            │
+│  URL         │                                            │
+│  gitlab/...  │                                            │
+├──────────────┴────────────────────────────────────────────┤
+│  Footer: q Close  / Search  o Open URL                    │
+└───────────────────────────────────────────────────────────┘
 ```
 
-**Pure helper (testable):**
-
-```python
-def _render_meta(job: Job) -> Text:
-    """Rich Text block: name, stage, status, duration, failure_reason, URL."""
-    color = status_color(job.status)
-    content = Text()
-    content.append(f"{job.name}\n", style="bold")
-    content.append(f"Stage:    {job.stage}\n")
-    content.append("Status:   ")
-    content.append(f"{status_icon(job.status)} {job.status}\n", style=color)
-    content.append(f"Duration: {_fmt_duration(job.duration)}\n")
-    if job.failure_reason:
-        content.append("Reason:   ")
-        content.append(f"{job.failure_reason}\n", style="red")
-    if job.web_url:
-        content.append(f"\nURL: {job.web_url}\n", style="dim")
-    return content
-```
-
-`_fmt_duration` can be imported from `job_list.py` (already public-enough) or
-duplicated as a one-liner.
+- **Full-screen `Screen[None]`** — pushed via `app.push_screen()`, popped with `Escape`/`q`
+- **Left panel**: fixed-width (~28 cols) meta panel with enriched job data
+- **Right panel**: `TabbedContent` — starts with Log only, tabs added per phase
+- **`all_jobs: list[Job]`** passed from day 1 to enable future in-modal navigation
 
 ---
 
-### Changes to `src/ddgl/tui/widgets/job_list.py`
+## Phase 1 — Screen skeleton + meta panel + streaming log ✅
 
-Add `JobSelected` message:
-
-```python
-class JobSelected(Message):
-    def __init__(self, job: Job) -> None:
-        super().__init__()
-        self.job = job
-```
-
-Update the **existing** `on_data_table_row_selected` (currently handles separators
-and group-toggle) to also post `JobSelected` for plain job rows:
-
-```python
-def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-    key = str(event.row_key.value)
-    if key in self._sep_keys:
-        event.stop()
-        return
-    if key.startswith("group:"):
-        event.stop()
-        if key in self._expanded_groups:
-            self._expanded_groups.discard(key)
-        else:
-            self._expanded_groups.add(key)
-        self._recompute()
-        return
-    # Plain job row — post to the app
-    job = self._job_by_row_key.get(key)
-    if job:
-        self.post_message(JobListPanel.JobSelected(job))
-```
+Implemented. Files:
+- `src/ddgl/tui/screens/__init__.py`, `src/ddgl/tui/screens/job_detail.py`
+- `src/ddgl/model/job.py` — added `runner_description`, `runner_tags`, `queued_duration`, `needs`
+- `src/ddgl/tui/widgets/job_list.py` — added `JobSelected` message
+- `src/ddgl/tui/app.py` — `on_job_list_panel_job_selected` handler
+- `src/ddgl/tui/app.tcss` — job detail screen styles
+- `src/ddgl/tui/widgets/help.py` — removed "(coming soon)"
+- `tests/tui/test_screens/test_job_detail.py` — 18 tests for `_render_meta`
 
 ---
 
-### Changes to `src/ddgl/tui/app.py`
+## Phase 2 — Log search
 
-No new `BINDINGS` entry needed — `DataTable` fires `RowSelected` on `Enter` itself.
+### Goal
+`/` or `Ctrl+F` opens a search input overlaid at the bottom of the log tab.
+Matches are highlighted; `n`/`N` (or `Enter`/`Shift+Enter`) jump between them.
 
-Import and handler:
+### Modified files
+- **`src/ddgl/tui/screens/job_detail.py`**:
+  - Add `Input` widget inside the Log tab (hidden by default)
+  - On `/` or `Ctrl+F`: show the input, focus it
+  - On input change: scan `RichLog` content, highlight matches
+  - On `Escape`: hide search, return focus to log
+  - On `n`/`N`: scroll to next/previous match
 
-```python
-from ddgl.tui.widgets.job_detail import JobDetailModal
+- **`src/ddgl/tui/app.tcss`** — style the search overlay
 
-def on_job_list_panel_job_selected(
-    self, message: JobListPanel.JobSelected
-) -> None:
-    self.push_screen(JobDetailModal(message.job, self._client, self._cache))
-```
-
----
-
-### CSS: `src/ddgl/tui/app.tcss`
-
-```css
-JobDetailModal {
-    align: center middle;
-}
-
-#job-detail {
-    width: 90%;
-    height: 90%;
-    background: $surface;
-    border: round $primary;
-    padding: 1 2;
-}
-
-#job-meta {
-    height: auto;
-    border-bottom: solid $panel;
-    padding-bottom: 1;
-    margin-bottom: 1;
-}
-
-#job-log {
-    height: 1fr;
-}
-```
+### Design note
+`RichLog` doesn't natively support highlighting ranges. Approach: when a search
+is active, re-render matching lines with highlighted spans. Cache original `Text`
+objects so we can restore them when search clears.
 
 ---
 
-### Tests: `tests/tui/test_widgets/test_job_detail.py`
+## Phase 3 — Dependency graph
 
-Pure-function tests for `_render_meta` (no Textual app needed):
+### Goal
+A "Dependencies" tab showing the DAG neighborhood centered on the current job:
+which jobs it depends on (upstream) and which jobs depend on it (downstream).
 
-- Contains job name in output
-- Contains stage in output
-- Contains status string and icon
-- Shows duration via `_fmt_duration`
-- Shows `failure_reason` when present; omits it when `None`
-- Shows URL when present; omits it when empty
-- Returns `Text` instance
+### Implementation
+- **Data**: the `needs` field (added in Phase 1) gives direct upstream deps.
+  To find downstream deps, scan all jobs' `needs` lists. When the Dependencies
+  tab is selected, batch-fetch full details for all pipeline jobs using `get_jobs()`
+  from `core/jobs.py` (concurrent + cached).
 
-ANSI stripping note: `Text.from_ansi` is a Rich function — no need to test it
-directly; test that `_render_meta` returns correct plain text with known inputs.
+- **Widget**: use Textual's `Tree` widget:
+  ```
+  build-image
+  ├── ⬆ Depends on
+  │   ├── ✓ setup (success, 1m 2s)
+  │   └── ✓ lint (success, 3m 15s)
+  └── ⬇ Required by
+      ├── ● deploy-staging (running, 2m 30s)
+      └── ○ deploy-prod (pending)
+  ```
+  Each node shows status icon + job name + (status, duration).
+
+### New files
+- `src/ddgl/tui/widgets/job_dag.py` — `JobDAGWidget(Tree)` + `build_dag()` pure fn
+- `tests/tui/test_widgets/test_job_dag.py`
+
+### Modified files
+- `src/ddgl/tui/screens/job_detail.py` — add Dependencies `TabPane`
+- `src/ddgl/tui/app.tcss` — tree widget styles
 
 ---
 
-## Implementation order
+## Phase 4 — Same-job history
 
-1. `job_detail.py` — `_render_meta` pure helper + `JobDetailModal` widget
-2. Tests for `_render_meta` in `test_job_detail.py`
-3. `job_list.py` — add `JobSelected` message, extend `on_data_table_row_selected`
-4. `app.py` — import `JobDetailModal`, add `on_job_list_panel_job_selected`
-5. `app.tcss` — modal styles
+### Goal
+A "History" tab showing the last N runs of this job (by name) across recent
+pipelines on the same ref. Answers "is this flaky?" and "is it getting slower?"
 
-One commit: `feat(tui): job detail modal with log viewer (F4)`
+### Implementation
+- Fetch recent pipelines: `list_pipelines(client, ref, count=10)` from `core/pipeline.py`
+- For each pipeline, fetch jobs and find same-named job
+- Display as `DataTable`: Pipeline | Status | Duration | Date
+
+### New files
+- `src/ddgl/tui/widgets/job_history.py` — `JobHistoryPanel` + `fetch_job_history()`
+- `tests/tui/test_widgets/test_job_history.py`
+
+### Performance note
+Limit to 5-10 pipelines, leverage cache, load lazily on tab select.
+
+---
+
+## Phase 5 — Test results (placeholder)
+
+### Goal
+A "Tests" tab — details TBD, teammate developing "Unified Test Format".
+
+### For now
+- Empty `TabPane("Tests")` with placeholder message
+- Data model in `src/ddgl/model/test_result.py`: `TestCase`, `TestSuite`
+
+---
+
+## Phase 6 — CI Visibility (Datadog integration)
+
+### Goal
+"CI Visibility" tab with metrics from Datadog: failure rate, duration percentiles,
+timing breakdown (queue vs execution), trend data.
+
+### Implementation outline
+- **Config**: `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE` in `config.py`
+- **Client**: new `src/ddgl/datadog/client.py` (httpx-based)
+- **Display**: timing breakdown bar, failure rate, duration trend, flakiness score
+
+### New files
+- `src/ddgl/datadog/__init__.py`, `src/ddgl/datadog/client.py`
+- `src/ddgl/tui/widgets/ci_visibility.py`
+
+---
+
+## Out of scope (separate plans)
+
+- **Artifact browser + CLI download** — separate plan TBD
+- **Log formatting / error extraction** — `format` module
+- **Retry / Cancel actions** — not in this iteration
+- **Collapsible log sections** — `format` module
+- **n/p job navigation** — architecture ready (`all_jobs` passed), bindings deferred

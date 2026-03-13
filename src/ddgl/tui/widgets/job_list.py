@@ -232,6 +232,13 @@ def _group_jobs(jobs: list[Job]) -> list[_DisplayRow]:
 class JobListPanel(DataTable):
     """Right panel: job list as a DataTable with structured filtering and sort modes."""
 
+    class JobSelected(Message):
+        """Posted when the user presses Enter on a plain job row."""
+
+        def __init__(self, job: Job) -> None:
+            super().__init__()
+            self.job = job
+
     class SortModeChanged(Message):
         """Posted when the sort mode changes (e.g. via the `s` key)."""
 
@@ -350,19 +357,23 @@ class JobListPanel(DataTable):
                 return
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Toggle group rows on Enter; individual job rows are handled by the app."""
+        """Toggle group rows on Enter; post JobSelected for plain job rows."""
         key = str(event.row_key.value)
         if key in self._sep_keys:
             event.stop()
             return
-        if not key.startswith("group:"):
+        if key.startswith("group:"):
+            event.stop()
+            if key in self._expanded_groups:
+                self._expanded_groups.discard(key)
+            else:
+                self._expanded_groups.add(key)
+            self._recompute()
             return
-        event.stop()
-        if key in self._expanded_groups:
-            self._expanded_groups.discard(key)
-        else:
-            self._expanded_groups.add(key)
-        self._recompute()
+        # Plain job row — post to the app.
+        job = self._job_by_row_key.get(key)
+        if job:
+            self.post_message(JobListPanel.JobSelected(job))
 
     def _update_border_title(
         self, visible: int | None = None, total: int | None = None

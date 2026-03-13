@@ -23,9 +23,17 @@ class Job(msgspec.Struct):
     started_at: str | None = None
     finished_at: str | None = None
     log: str | None = None
+    # Enriched fields — only populated from the single-job API (get_job),
+    # not from the list-pipeline-jobs endpoint.
+    runner_description: str | None = None
+    runner_tags: tuple[str, ...] = ()
+    queued_duration: float | None = None
+    needs: tuple[str, ...] = ()
 
     @classmethod
     def from_api(cls, data: dict[str, Any], **kwargs: Any) -> Job:
+        runner = data.get("runner") or {}
+        needs_raw = data.get("needs") or []
         return cls(
             id=data["id"],
             name=data["name"],
@@ -39,6 +47,10 @@ class Job(msgspec.Struct):
             created_at=data.get("created_at", ""),
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
+            runner_description=runner.get("description"),
+            runner_tags=tuple(runner.get("tags") or []),
+            queued_duration=data.get("queued_duration"),
+            needs=tuple(n["name"] for n in needs_raw if isinstance(n, dict) and "name" in n),
             **kwargs,
         )
 
