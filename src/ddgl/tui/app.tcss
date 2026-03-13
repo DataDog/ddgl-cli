@@ -104,6 +104,15 @@ FilterButton.-active {
     margin: 0 1;
 }
 
+#job-dag {
+    height: 1fr;
+    padding: 1;
+}
+
+#dag-tree {
+    height: 1fr;
+}
+
 /* -- Help Modal ---------------------------------------------------------- */
 
 HelpModal {

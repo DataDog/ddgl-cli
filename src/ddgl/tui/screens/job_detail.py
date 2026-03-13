@@ -21,6 +21,7 @@ from ddgl.core.jobs import get_job
 from ddgl.core.logs import stream_log
 from ddgl.model.job import Job
 from ddgl.tui.gradient import gradient_text
+from ddgl.tui.widgets.job_dag import JobDAGPanel
 from ddgl.tui.widgets.status import status_color, status_icon
 
 # ---------------------------------------------------------------------------
@@ -127,6 +128,14 @@ class JobDetailScreen(Screen[None]):
                         yield Input(
                             id="log-search",
                             placeholder="Search…",
+                        )
+                    with TabPane("Deps", id="tab-deps"):
+                        yield JobDAGPanel(
+                            self._job,
+                            self._all_jobs,
+                            self._client,
+                            self._cache,
+                            id="job-dag",
                         )
 
     def on_mount(self) -> None:
