@@ -14,6 +14,7 @@ from rich.progress import (
     SpinnerColumn,
     TextColumn,
 )
+from rich.text import Text
 
 from ddgl.cache import Cache
 from ddgl.cli._options import (
@@ -29,8 +30,10 @@ from ddgl.core.jobs import filter_jobs, get_job, list_jobs
 from ddgl.core.logs import get_log
 from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.format import TraceOptions, format_trace, strip_ansi
+from ddgl.format._options import trace_format_options
 from ddgl.render._console import console
-from ddgl.render.log import render_log_section, strip_ansi
+from ddgl.render.log import render_log_section
 
 
 @click.command()
@@ -39,6 +42,7 @@ from ddgl.render.log import render_log_section, strip_ansi
 @click.option("--job", "job_id", default=None, type=int, help="Fetch log for a specific job by ID.")
 @click.option("--output", "output_path", default=None, type=click.Path(), help="Output path (file or directory).")
 @output_options
+@trace_format_options
 @click.pass_context
 def logs(
     ctx: click.Context,
@@ -52,6 +56,12 @@ def logs(
     output_path: str | None,
     output_json: bool,
     no_pager: bool,
+    raw: bool,
+    no_sections: bool,
+    no_strip: bool,
+    no_timestamps: bool,
+    no_highlight: bool,
+    no_color: bool,
 ) -> None:
     """Fetch job logs.
 
@@ -88,10 +98,25 @@ def logs(
             _write_log_to_path(name, text, output_path)
         return
 
+    # Build TraceOptions from flags.
+    if raw:
+        options = TraceOptions.raw()
+    else:
+        options = TraceOptions(
+            sections=not no_sections,
+            strip=not no_strip,
+            timestamps=not no_timestamps,
+            highlight=not no_highlight,
+            no_color=no_color or not console.is_terminal,
+        )
+
     use_pager = not no_pager and console.is_terminal
     with console.pager(styles=True) if use_pager else nullcontext():
         for name, text in results:
-            render_log_section(name, text)
+            if raw:
+                render_log_section(name, [Text(text)])
+            else:
+                render_log_section(name, format_trace(text, options))
             console.print()
 
 
