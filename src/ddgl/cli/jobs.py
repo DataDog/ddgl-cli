@@ -38,7 +38,9 @@ def jobs(ctx: click.Context) -> None:
 @pipeline_resolution_options
 @job_filter_options
 @output_options
+@click.pass_context
 def jobs_list(
+    ctx: click.Context,
     ref: str | None,
     pipeline_id: int | None,
     depth: int,
@@ -49,9 +51,10 @@ def jobs_list(
     no_pager: bool,
 ) -> None:
     """List jobs for a pipeline."""
+    no_cache = (ctx.obj or {}).get("no_cache", False)
     try:
         pipeline, result = asyncio.run(
-            _jobs_list(ref, pipeline_id, depth, failed_only, stage, name_pattern, quiet=output_json)
+            _jobs_list(ref, pipeline_id, depth, failed_only, stage, name_pattern, quiet=output_json, no_cache=no_cache)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -82,9 +85,10 @@ async def _jobs_list(
     name_pattern: str | None,
     *,
     quiet: bool = False,
+    no_cache: bool = False,
 ) -> tuple[Pipeline, list[Job]]:
     config = await load_config()
-    with Cache.open(CACHE_DIR) as cache:
+    with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
         async with GitLabClient(config, cache=cache) as client:
             with nullcontext() if quiet else console.status("Resolving pipeline…"):
                 pipeline = await resolve_pipeline(
@@ -127,6 +131,7 @@ def jobs_get(
     Otherwise: resolve the pipeline, filter jobs, show details for all matches.
     """
     skip_confirm = (ctx.obj or {}).get("yes", False)
+    no_cache = (ctx.obj or {}).get("no_cache", False)
     has_filters = job_id is not None or failed_only or stage or name_pattern
     if not has_filters and not skip_confirm and sys.stdin.isatty():
         click.confirm(
@@ -137,7 +142,7 @@ def jobs_get(
 
     try:
         matched = asyncio.run(
-            _jobs_get(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json)
+            _jobs_get(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -171,9 +176,10 @@ async def _jobs_get(
     job_id: int | None,
     *,
     quiet: bool = False,
+    no_cache: bool = False,
 ) -> list[Job]:
     config = await load_config()
-    with Cache.open(CACHE_DIR) as cache:
+    with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
         async with GitLabClient(config, cache=cache) as client:
             if job_id is not None:
                 with nullcontext() if quiet else console.status("Fetching job…"):

@@ -16,12 +16,14 @@ from ddgl.tui.app import PipelineViewer
 
 @click.command("viz")
 @pipeline_resolution_options
-def viz(ref: str | None, pipeline_id: int | None, depth: int) -> None:
+@click.pass_context
+def viz(ctx: click.Context, ref: str | None, pipeline_id: int | None, depth: int) -> None:
     """Open the interactive pipeline viewer."""
-    asyncio.run(_viz(ref, pipeline_id, depth))
+    no_cache = (ctx.obj or {}).get("no_cache", False)
+    asyncio.run(_viz(ref, pipeline_id, depth, no_cache=no_cache))
 
 
-async def _viz(ref: str | None, pipeline_id: int | None, depth: int) -> None:
+async def _viz(ref: str | None, pipeline_id: int | None, depth: int, *, no_cache: bool = False) -> None:
     try:
         config = await load_config()
     except ConfigError as e:
@@ -29,7 +31,7 @@ async def _viz(ref: str | None, pipeline_id: int | None, depth: int) -> None:
         sys.exit(1)
 
     try:
-        with Cache.open(CACHE_DIR) as cache:
+        with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
             async with GitLabClient(config, cache=cache) as client:
                 pipeline = await resolve_pipeline(
                     client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache

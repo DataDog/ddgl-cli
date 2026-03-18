@@ -69,6 +69,7 @@ def logs(
     Otherwise: resolve the pipeline, filter jobs, fetch all matching logs.
     """
     skip_confirm = (ctx.obj or {}).get("yes", False) or output_json
+    no_cache = (ctx.obj or {}).get("no_cache", False)
     has_filters = job_id is not None or failed_only or stage or name_pattern
     if not has_filters and not skip_confirm and sys.stdin.isatty():
         click.confirm(
@@ -78,7 +79,7 @@ def logs(
 
     try:
         results = asyncio.run(
-            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json)
+            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache)
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -130,11 +131,12 @@ async def _fetch_logs(
     job_id: int | None,
     *,
     quiet: bool = False,
+    no_cache: bool = False,
 ) -> list[tuple[str, str]]:
     """Fetch logs and return [(job_name, log_text), ...]."""
     config = await load_config()
 
-    with Cache.open(CACHE_DIR) as cache:
+    with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
         async with GitLabClient(config, cache=cache) as client:
             if job_id is not None:
                 with nullcontext() if quiet else console.status("Fetching log…"):
