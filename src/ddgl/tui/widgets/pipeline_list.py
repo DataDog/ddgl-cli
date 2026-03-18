@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -14,14 +16,15 @@ from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.status import status_color, status_icon
 
 
-def _fmt_ts(ts: str) -> str:
-    """Return HH:MM from an ISO-8601 timestamp string, or '—'."""
+def _fmt_datetime(ts: str) -> str:
+    """Return 'D Mon HH:MM' from an ISO-8601 timestamp string, or '—'."""
     if not ts:
         return "—"
-    t = ts.find("T")
-    if t == -1 or len(ts) < t + 6:
-        return "—"
-    return ts[t + 1 : t + 6]
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.strftime("%-d %b %H:%M")
+    except ValueError:
+        return ts[:16] if len(ts) >= 16 else "—"
 
 
 class PipelineListPanel(Widget):
@@ -65,7 +68,7 @@ class PipelineListPanel(Widget):
         table.add_column("Status", key="status", width=12)
         table.add_column("ID", key="id", width=7)
         table.add_column("Ref", key="ref")
-        table.add_column("At", key="time", width=5)
+        table.add_column("At", key="time", width=12)
         self._fetch(self._initial_ref or None)
 
     def focus_table(self) -> None:
@@ -93,7 +96,7 @@ class PipelineListPanel(Widget):
                 Text(f"{status_icon(p.status)} {p.status}", style=color),
                 Text(str(p.id), style=color),
                 Text(p.ref, style=color),
-                Text(_fmt_ts(p.created_at), style=color),
+                Text(_fmt_datetime(p.created_at), style=color),
                 key=str(p.id),
             )
 
