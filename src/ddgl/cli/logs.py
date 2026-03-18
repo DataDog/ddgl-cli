@@ -135,7 +135,7 @@ async def _fetch_logs(
     config = await load_config()
 
     with Cache.open(CACHE_DIR) as cache:
-        async with GitLabClient(config) as client:
+        async with GitLabClient(config, cache=cache) as client:
             if job_id is not None:
                 with nullcontext() if quiet else console.status("Fetching log…"):
                     job, text = await asyncio.gather(

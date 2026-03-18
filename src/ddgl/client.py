@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote
 
 import httpx
 
 from ddgl.config import Config
-from ddgl.constants import MAX_PAGES, JobStatus, PipelineScope
+from ddgl.constants import (
+    CACHE_TTL_API_JOB,
+    CACHE_TTL_API_JOB_LIST,
+    CACHE_TTL_API_PIPELINE,
+    CACHE_TTL_API_PIPELINE_LIST,
+    MAX_PAGES,
+    JobStatus,
+    PipelineScope,
+)
 from ddgl.exceptions import (
     ConfigError,
     GitLabAPIError,
@@ -19,6 +29,9 @@ from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
 
+if TYPE_CHECKING:
+    from ddgl.cache import Cache
+
 T = TypeVar("T")
 
 logger = logging.getLogger("ddgl.http")
@@ -27,8 +40,9 @@ logger = logging.getLogger("ddgl.http")
 class GitLabClient:
     """Async GitLab REST API client."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, cache: Cache | None = None) -> None:
         self._config = config
+        self._cache = cache
         self._http = httpx.AsyncClient(
             base_url=config.api_url,
             headers={"PRIVATE-TOKEN": config.private_token},
@@ -54,6 +68,11 @@ class GitLabClient:
         return f"/projects/{quote(pid, safe='')}"
 
     # -- Low-level helpers --
+
+    @staticmethod
+    def _cache_key(path: str, params: dict) -> str:
+        raw = f"{path}?{'&'.join(f'{k}={v}' for k, v in sorted(params.items()))}"
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _raise_for_status(self, resp: httpx.Response) -> None:
         """Translate HTTP errors into typed exceptions.
@@ -81,18 +100,35 @@ class GitLabClient:
                 resp.text[:200] if resp.text else "",
             ) from exc
 
-    async def _get(self, path: str, **params: Any) -> Any:
+    async def _get(self, path: str, ttl: float = 0, **params: Any) -> Any:
         """Fetch a single JSON object (non-paginated).
+
+        If *ttl* > 0 and a cache is configured, results are read from / written
+        to the API_RESPONSES namespace.
 
         Raises:
             NotFoundError: HTTP 404 — resource does not exist.
             GitLabAPIError: any other HTTP error status.
         """
+        if self._cache is not None and ttl > 0:
+            from ddgl.cache import CacheNS
+
+            key = self._cache_key(path, params)
+            hit = self._cache[CacheNS.API_RESPONSES][key]
+            if hit is not None:
+                logger.debug("API cache HIT %s", path)
+                return json.loads(hit)
         logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
         logger.debug("GET %s -> %d", path, resp.status_code)
         self._raise_for_status(resp)
-        return resp.json()
+        data = resp.json()
+        if self._cache is not None and ttl > 0:
+            from ddgl.cache import CacheNS
+
+            key = self._cache_key(path, params)
+            self._cache[CacheNS.API_RESPONSES].set(key, json.dumps(data), ttl=ttl)
+        return data
 
     async def _get_text(self, path: str) -> str:
         """Fetch a plain-text response body.
@@ -111,24 +147,44 @@ class GitLabClient:
         self,
         path: str,
         item_factory: Callable[[dict], T],
+        ttl: float = 0,
         **params: Any,
     ) -> Page[T]:
         """Fetch a single page of paginated results.
+
+        If *ttl* > 0 and a cache is configured, the **raw JSON list** is cached
+        (pagination metadata is not — only the item payload is stored).
 
         Raises:
             NotFoundError: HTTP 404 — resource does not exist.
             GitLabAPIError: any other HTTP error status.
         """
+        if self._cache is not None and ttl > 0:
+            from ddgl.cache import CacheNS
+
+            key = self._cache_key(path, params)
+            hit = self._cache[CacheNS.API_RESPONSES][key]
+            if hit is not None:
+                logger.debug("API cache HIT %s", path)
+                items = [item_factory(d) for d in json.loads(hit)]
+                return Page(items=items, page=1, next_page=None, total_pages=1, total=len(items))
         logger.debug("GET %s", path)
         resp = await self._http.get(path, params=params)
         logger.debug("GET %s -> %d", path, resp.status_code)
         self._raise_for_status(resp)
-        return Page.from_response(resp, item_factory)
+        page = Page.from_response(resp, item_factory)
+        if self._cache is not None and ttl > 0:
+            from ddgl.cache import CacheNS
+
+            key = self._cache_key(path, params)
+            self._cache[CacheNS.API_RESPONSES].set(key, json.dumps(resp.json()), ttl=ttl)
+        return page
 
     async def _paginate(
         self,
         path: str,
         item_factory: Callable[[dict], T],
+        ttl: float = 0,
         **params: Any,
     ) -> AsyncIterator[Page[T]]:
         """Async generator yielding pages until exhausted."""
@@ -136,7 +192,7 @@ class GitLabClient:
         pages_fetched = 0
         while True:
             page = await self._get_page(
-                path, item_factory, page=page_num, **params
+                path, item_factory, ttl=ttl, page=page_num, **params
             )
             yield page
             pages_fetched += 1
@@ -154,11 +210,12 @@ class GitLabClient:
         self,
         path: str,
         item_factory: Callable[[dict], T],
+        ttl: float = 0,
         **params: Any,
     ) -> list[T]:
         """Exhaust pagination and return all items as a flat list."""
         items: list[T] = []
-        async for page in self._paginate(path, item_factory, **params):
+        async for page in self._paginate(path, item_factory, ttl=ttl, **params):
             items.extend(page.items)
         return items
 
@@ -180,7 +237,7 @@ class GitLabClient:
         if scope is not None:
             params["scope"] = scope
         return await self._get_page(
-            f"{base}/pipelines", Pipeline.from_api, **params
+            f"{base}/pipelines", Pipeline.from_api, ttl=CACHE_TTL_API_PIPELINE_LIST, **params
         )
 
     async def iter_pipelines(
@@ -201,6 +258,7 @@ class GitLabClient:
         async for page in self._paginate(
             f"{base}/pipelines",
             Pipeline.from_api,
+            ttl=CACHE_TTL_API_PIPELINE_LIST,
             **params,
         ):
             yield page
@@ -223,6 +281,7 @@ class GitLabClient:
         return await self._get_all(
             f"{base}/pipelines",
             Pipeline.from_api,
+            ttl=CACHE_TTL_API_PIPELINE_LIST,
             **params,
         )
 
@@ -240,7 +299,7 @@ class GitLabClient:
         logger.info("Getting pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         try:
-            data = await self._get(f"{base}/pipelines/{pipeline_id}")
+            data = await self._get(f"{base}/pipelines/{pipeline_id}", ttl=CACHE_TTL_API_PIPELINE)
         except NotFoundError:
             raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
@@ -263,6 +322,7 @@ class GitLabClient:
         return await self._get_page(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
+            ttl=CACHE_TTL_API_JOB_LIST,
             **params,
         )
 
@@ -282,6 +342,7 @@ class GitLabClient:
         async for page in self._paginate(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
+            ttl=CACHE_TTL_API_JOB_LIST,
             **params,
         ):
             yield page
@@ -302,6 +363,7 @@ class GitLabClient:
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
+            ttl=CACHE_TTL_API_JOB_LIST,
             **params,
         )
 
@@ -319,7 +381,7 @@ class GitLabClient:
         logger.info("Getting job %d", job_id)
         base = self._project_path(project_id)
         try:
-            data = await self._get(f"{base}/jobs/{job_id}")
+            data = await self._get(f"{base}/jobs/{job_id}", ttl=CACHE_TTL_API_JOB)
         except NotFoundError:
             raise NotFoundError("job", job_id)
         return Job.from_api(data)

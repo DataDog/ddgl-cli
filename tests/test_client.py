@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
 
+from ddgl.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.config import Config
 from ddgl.exceptions import ConfigError, PaginationLimitError
@@ -342,3 +345,115 @@ class TestPageModel:
         page = Page.from_response(resp, lambda d: d["v"])
         assert page.has_next is False
         assert page.next_page is None
+
+
+# ---------------------------------------------------------------------------
+# API response caching
+# ---------------------------------------------------------------------------
+
+TEST_CONFIG = Config(
+    gitlab_url="https://gitlab.example.com",
+    private_token="test-token",
+    project_id="my-group/my-project",
+)
+
+
+class TestClientCaching:
+    """Tests for API response cache integration in GitLabClient."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache_singleton(self) -> None:
+        Cache._instance = None
+
+    async def test_get_returns_cached_on_second_call(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """Second _get() with same path+params returns cached data; only 1 HTTP call."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100",
+        ).mock(return_value=httpx.Response(200, json=MOCK_PIPELINE_DETAIL))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                r1 = await client.get_pipeline(100)
+                r2 = await client.get_pipeline(100)
+
+        assert r1.id == r2.id == 100
+        assert route.call_count == 1
+
+    async def test_cache_miss_fetches_from_api(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """First call is always a cache miss and hits the API."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100",
+        ).mock(return_value=httpx.Response(200, json=MOCK_PIPELINE_DETAIL))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                result = await client.get_pipeline(100)
+
+        assert result.id == 100
+        assert route.call_count == 1
+
+    async def test_get_text_is_not_cached(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """_get_text() (job logs) is NOT cached by the API response cache."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/jobs/1/trace",
+        ).mock(return_value=httpx.Response(200, text="Build succeeded\nDone."))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_job_log(1)
+                await client.get_job_log(1)
+
+        assert route.call_count == 2
+
+    async def test_different_params_different_cache_keys(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """Different params produce different cache keys."""
+        mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines",
+        ).mock(return_value=_paginated_response(MOCK_PIPELINES))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.fetch_pipelines(ref="main")
+                await client.fetch_pipelines(ref="develop")
+
+        # Two different refs = two different requests
+        calls = mock_api.calls
+        assert len(calls) == 2
+
+    async def test_get_page_cached(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """_get_page() also uses the cache."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                p1 = await client.fetch_jobs(100)
+                p2 = await client.fetch_jobs(100)
+
+        assert len(p1.items) == len(p2.items) == 2
+        assert route.call_count == 1
+
+    async def test_no_cache_means_no_caching(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """When no cache is provided, every call hits the API."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100",
+        ).mock(return_value=httpx.Response(200, json=MOCK_PIPELINE_DETAIL))
+
+        async with GitLabClient(TEST_CONFIG, cache=None) as client:
+            await client.get_pipeline(100)
+            await client.get_pipeline(100)
+
+        assert route.call_count == 2

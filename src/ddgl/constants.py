@@ -9,8 +9,10 @@ MAX_PAGES = 50
 CACHE_TTL_DDTOOL_TOKEN = 3600.0            # 1 h   — ddtool-issued GitLab tokens
 CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change
 CACHE_TTL_FINISHED_JOB = 604800.0         # 1 w   — finished jobs don't change
-CACHE_TTL_API_RESPONSE_SINGLE = 300.0     # 5 min — single-resource GETs (/pipelines/123)
-CACHE_TTL_API_RESPONSE_LIST = 30.0        # 30 s  — list endpoints (/pipelines, /jobs)
+CACHE_TTL_API_PIPELINE_LIST = 10.0        # 10 s  — pipeline list browse
+CACHE_TTL_API_PIPELINE = 30.0             # 30 s  — single pipeline detail
+CACHE_TTL_API_JOB_LIST = 15.0             # 15 s  — job list (burst dedup for history tab)
+CACHE_TTL_API_JOB = 60.0                  # 60 s  — single job detail
 
 
 class PipelineScope(StrEnum):

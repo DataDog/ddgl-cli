@@ -30,7 +30,7 @@ async def _viz(ref: str | None, pipeline_id: int | None, depth: int) -> None:
 
     try:
         with Cache.open(CACHE_DIR) as cache:
-            async with GitLabClient(config) as client:
+            async with GitLabClient(config, cache=cache) as client:
                 pipeline = await resolve_pipeline(
                     client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
                 )

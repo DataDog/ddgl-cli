@@ -69,7 +69,7 @@ async def _list(
         ref = await get_current_branch()
 
     with Cache.open(CACHE_DIR) as cache:
-        async with GitLabClient(config) as client:
+        async with GitLabClient(config, cache=cache) as client:
             spinner = nullcontext() if quiet else console.status("Fetching pipelines…")
             with spinner:
                 result = await list_pipelines(client, ref, scope=scope, count=count, cache=cache)
@@ -100,7 +100,7 @@ def pipelines_get(
 async def _get(ref: str | None, pipeline_id: int | None, depth: int, *, quiet: bool = False):
     config = await load_config()
     with Cache.open(CACHE_DIR) as cache:
-        async with GitLabClient(config) as client:
+        async with GitLabClient(config, cache=cache) as client:
             spinner = nullcontext() if quiet else console.status("Resolving pipeline…")
             with spinner:
                 return await resolve_pipeline(
