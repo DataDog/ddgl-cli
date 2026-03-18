@@ -98,20 +98,10 @@ FilterButton.-active {
     height: 1fr;
 }
 
-#log-search-bar {
+#log-search {
     dock: bottom;
     height: auto;
     margin: 0 1;
-}
-
-#log-search-bar Input {
-    width: 1fr;
-}
-
-#log-search-bar Button {
-    width: auto;
-    min-width: 5;
-    margin-left: 1;
 }
 
 #job-dag {

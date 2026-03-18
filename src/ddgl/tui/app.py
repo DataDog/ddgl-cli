@@ -52,8 +52,6 @@ class PipelineViewer(App[None]):
         Binding("o", "open_url", "Open URL"),
         Binding("p", "switch_pipeline", "Switch pipeline"),
         Binding("question_mark", "help", "Help", key_display="?"),
-        Binding("meta+up", "scroll_top", "Top", show=False),
-        Binding("meta+down", "scroll_bottom", "Bottom", show=False),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -164,6 +162,7 @@ class PipelineViewer(App[None]):
             text=self._text_filter.text,
             statuses=self._text_filter.statuses | self._dropdown_statuses,
             stages=self._text_filter.stages | self._dropdown_stages,
+            regex=self._text_filter.regex,
         )
         self.query_one(JobListPanel).filter_spec = spec
 
@@ -280,12 +279,6 @@ class PipelineViewer(App[None]):
                 message.job, self._client, self._cache, all_jobs=all_jobs
             )
         )
-
-    def action_scroll_top(self) -> None:
-        self.query_one(JobListPanel).scroll_home(animate=False)
-
-    def action_scroll_bottom(self) -> None:
-        self.query_one(JobListPanel).scroll_end(animate=False)
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())

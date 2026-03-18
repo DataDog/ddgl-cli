@@ -5,10 +5,9 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.containers import Horizontal as _HBox
 from textual.screen import Screen
 from textual.widgets import (
-    Button,
+    Footer,
     Input,
     LoadingIndicator,
     RichLog,
@@ -27,6 +26,7 @@ from ddgl.model.trace import LogLine, Section, Trace
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.search import apply_search
 from ddgl.tui.widgets.job_dag import JobDAGPanel
+from ddgl.tui.widgets.search_bar import FuzzySearchInput
 from ddgl.tui.widgets.status import status_color, status_icon
 
 # ---------------------------------------------------------------------------
@@ -128,16 +128,14 @@ class JobDetailScreen(Screen[None]):
 
     BINDINGS = [
         Binding("q", "app.pop_screen", "Close"),
-        Binding("escape", "dismiss_or_close", "Close", show=False),
-        Binding("slash", "open_search", "Search", key_display="/"),
+        Binding("escape", "app.pop_screen", "Close", show=False),
+        Binding("slash", "focus_search", "Search", key_display="/"),
         Binding("n", "next_match", "Next match", show=False),
         Binding("shift+n", "prev_match", "Prev match", show=False),
         Binding("pageup", "page_up_log", "Page up", show=False),
         Binding("pagedown", "page_down_log", "Page down", show=False),
         Binding("ctrl+up", "page_up_log", show=False),
         Binding("ctrl+down", "page_down_log", show=False),
-        Binding("meta+up", "scroll_top_log", "Top", show=False),
-        Binding("meta+down", "scroll_bottom_log", "Bottom", show=False),
         Binding("t", "toggle_sections", "Toggle sections"),
     ]
 
@@ -159,6 +157,7 @@ class JobDetailScreen(Screen[None]):
         self._match_lines: list[int] = []
         self._current_match: int = -1
         self._search_regex: bool = False
+        self._current_search: str = ""
         self._all_collapsed: bool = False
 
     def compose(self) -> ComposeResult:
@@ -172,9 +171,9 @@ class JobDetailScreen(Screen[None]):
                         yield RichLog(
                             id="job-log", markup=False, highlight=False
                         )
-                        with _HBox(id="log-search-bar"):
-                            yield Input(id="log-search", placeholder="Search…")
-                            yield Button(".*", id="log-regex-toggle", variant="default")
+                        yield FuzzySearchInput(
+                            id="log-search", placeholder="Search log…"
+                        )
                     with TabPane("Deps", id="tab-deps"):
                         yield JobDAGPanel(
                             self._job,
@@ -194,13 +193,13 @@ class JobDetailScreen(Screen[None]):
                             "Unified Test Format integration is ready.[/dim]",
                             id="tests-placeholder",
                         )
+        yield Footer()
 
     def on_mount(self) -> None:
         self.title = gradient_text(f"Job #{self._job.id}")
         self.sub_title = self._job.name
         self.query_one("#job-meta", Static).update(_render_meta(self._job))
         self.query_one("#job-log").display = False
-        self.query_one("#log-search-bar").display = False
         self._enrich_job()
         self._fetch_log()
 
@@ -235,8 +234,7 @@ class JobDetailScreen(Screen[None]):
         if self._trace is None:
             return
         self._log_lines = _walk_trace(self._trace)
-        query = self.query_one("#log-search", Input).value
-        self._apply_search(query)
+        self._apply_search(self._current_search)
 
     # -- Scroll ------------------------------------------------------------
 
@@ -245,12 +243,6 @@ class JobDetailScreen(Screen[None]):
 
     def action_page_down_log(self) -> None:
         self.query_one("#job-log", RichLog).scroll_page_down(animate=False)
-
-    def action_scroll_top_log(self) -> None:
-        self.query_one("#job-log", RichLog).scroll_home(animate=False)
-
-    def action_scroll_bottom_log(self) -> None:
-        self.query_one("#job-log", RichLog).scroll_end(animate=False)
 
     # -- Section toggle ----------------------------------------------------
 
@@ -263,38 +255,19 @@ class JobDetailScreen(Screen[None]):
 
     # -- Search ------------------------------------------------------------
 
-    def action_open_search(self) -> None:
-        bar = self.query_one("#log-search-bar")
-        bar.display = True
-        self.query_one("#log-search", Input).focus()
+    def action_focus_search(self) -> None:
+        self.query_one("#log-search", FuzzySearchInput).focus()
 
-    def action_dismiss_or_close(self) -> None:
-        bar = self.query_one("#log-search-bar")
-        if bar.display:
-            self._close_search()
-        else:
-            self.app.pop_screen()
-
-    def _close_search(self) -> None:
-        self.query_one("#log-search-bar").display = False
-        self.query_one("#log-search", Input).value = ""
-        self._apply_search("")
-        self.query_one("#job-log", RichLog).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "log-regex-toggle":
-            self._search_regex = not self._search_regex
-            event.button.variant = "primary" if self._search_regex else "default"
-            query = self.query_one("#log-search", Input).value
-            self._apply_search(query)
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "log-search":
-            self._apply_search(event.value)
+    def on_fuzzy_search_input_search_changed(
+        self, event: FuzzySearchInput.SearchChanged
+    ) -> None:
+        event.stop()
+        self._search_regex = event.regex
+        self._current_search = event.query
+        self._apply_search(event.query)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "log-search":
-            self.action_next_match()
+        self.action_next_match()
 
     def _apply_search(self, query: str) -> None:
         log_widget = self.query_one("#job-log", RichLog)
@@ -324,14 +297,14 @@ class JobDetailScreen(Screen[None]):
             return
         self._current_match = (self._current_match + 1) % len(self._match_lines)
         self._scroll_to_match()
-        self._update_search_indicator(self.query_one("#log-search", Input).value)
+        self._update_search_indicator(self._current_search)
 
     def action_prev_match(self) -> None:
         if not self._match_lines:
             return
         self._current_match = (self._current_match - 1) % len(self._match_lines)
         self._scroll_to_match()
-        self._update_search_indicator(self.query_one("#log-search", Input).value)
+        self._update_search_indicator(self._current_search)
 
     def _scroll_to_match(self) -> None:
         if self._current_match < 0 or not self._match_lines:
@@ -341,12 +314,12 @@ class JobDetailScreen(Screen[None]):
         log_widget.scroll_to(y=line_idx, animate=False)
 
     def _update_search_indicator(self, query: str) -> None:
-        search = self.query_one("#log-search", Input)
+        search = self.query_one("#log-search", FuzzySearchInput)
         if not query:
-            search.border_title = ""
+            search.set_search_indicator("")
         elif self._match_lines:
-            search.border_title = (
+            search.set_search_indicator(
                 f"{self._current_match + 1} of {len(self._match_lines)}"
             )
         else:
-            search.border_title = "No matches"
+            search.set_search_indicator("No matches")

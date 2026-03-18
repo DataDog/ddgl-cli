@@ -127,23 +127,17 @@ Files: `widgets/pipeline_list.py`.
 
 ## P2 — Fast scroll (jump to top/bottom)
 
-Users scrolling through long job logs or large job lists want a way to jump to
-the extremes quickly.  On macOS, `cmd+up` / `cmd+down` are the natural gestures.
-In Textual, these map to `meta+up` / `meta+down` (the terminal sends `ESC + arrow`).
+~~Implemented as `meta+up`/`meta+down` but removed: `meta+` bindings do not
+reliably reach Textual across macOS terminal emulators (iTerm2 default config
+intercepts Option+arrow; cmd+arrow is not forwarded at all).~~
 
-### Job list (main app)
-Add to `PipelineViewer.BINDINGS`:
-- `meta+up` → `action_scroll_top`: calls `job_list.scroll_home()`
-- `meta+down` → `action_scroll_bottom`: calls `job_list.scroll_end()`
+**Re-implement** once a working key combo is confirmed.  Candidates:
+- `g` / `G` (vim-style) — always works but conflicts with typing in search
+- `ctrl+home` / `ctrl+end` — test in target terminal first
+- Configure terminal to forward a specific escape sequence and document it
 
-### Job log (job detail screen)
-Add to `JobDetailScreen.BINDINGS`:
-- `meta+up` → scroll `RichLog` to top (`scroll_home()`)
-- `meta+down` → scroll `RichLog` to bottom (`scroll_end()`)
-
-Note: `ctrl+up` / `ctrl+down` already occupy page-scroll in `JobDetailScreen`.
-`meta+up` / `meta+down` complement them with instant-jump and also work in the
-main app where `ctrl` bindings don't exist yet.
+The scroll actions themselves are one-liners (`scroll_home()` / `scroll_end()`);
+only the binding is the open question.
 
 Files: `tui/app.py`, `tui/screens/job_detail.py`.
 
@@ -252,3 +246,38 @@ Avoids per-line focus complexity (which `RichLog` doesn't natively support).
 Files: `tui/screens/job_detail.py`.
 Tests: `tests/tui/test_screens/test_job_detail.py` — add tests for `_walk_trace`
 with collapsed sections.
+
+---
+
+## P6 — Per-section click-to-collapse in log view
+
+`RichLog` does not support click events on individual lines (it is a read-only
+scrollable widget).  To support clicking on section headers to toggle collapse,
+the log tab would need to be re-implemented using a different widget:
+
+- **Option A**: Replace `RichLog` with a `ListView` where each item is a
+  `ListItem(Static(...))`.  `ListView` sends `ItemSelected` on click/enter,
+  allowing per-row interaction.  Downside: `ListView` re-renders the whole
+  list on changes; may be slow for large logs.
+
+- **Option B**: Keep `RichLog` for display and overlay an invisible `DataTable`
+  whose rows correspond to log lines.  Handle `RowHighlighted` events.
+
+Option A is simpler and should be explored first.
+
+Files: `tui/screens/job_detail.py`, possibly new `tui/widgets/log_view.py`.
+
+---
+
+## P7 — Log line selection and copy-paste
+
+Users want to highlight and copy individual log lines (e.g. to paste error
+messages).  This is blocked by `RichLog` not supporting selection.
+
+Implement together with P6 (switching to `ListView`): once log lines are
+`ListItem` widgets, the focused item can be copied to the clipboard via
+`pyperclip` or `subprocess.run(["pbcopy"])` on macOS.
+
+Add `c` keybinding: copy the content of the currently-focused log line.
+
+Files: `tui/screens/job_detail.py`.

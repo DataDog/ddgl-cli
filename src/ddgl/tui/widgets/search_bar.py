@@ -88,9 +88,27 @@ class FuzzySearchInput(Widget):
 
     _regex: reactive[bool] = reactive(False)
 
+    def __init__(self, *, placeholder: str = "Filter jobs...", **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._placeholder = placeholder
+
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="Filter jobs...", id="fuzzy-input")
+        yield Input(placeholder=self._placeholder, id="fuzzy-input")
         yield Button(".*", id="regex-toggle", variant="default")
+
+    @property
+    def value(self) -> str:
+        try:
+            return self.query_one("#fuzzy-input", Input).value
+        except Exception:
+            return ""
+
+    def set_search_indicator(self, text: str) -> None:
+        """Update the border_title of the inner Input (used for match-count display)."""
+        try:
+            self.query_one("#fuzzy-input", Input).border_title = text
+        except Exception:
+            pass
 
     def focus(self, scroll_visible: bool = True) -> Widget:  # type: ignore[override]
         self.query_one("#fuzzy-input", Input).focus(scroll_visible=scroll_visible)
