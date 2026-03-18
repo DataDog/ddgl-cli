@@ -186,7 +186,12 @@ def _apply_filter(jobs: list[Job], spec: FilterSpec) -> list[Job]:
 
 
 def _filter_is_active(spec: FilterSpec) -> bool:
-    return bool(spec.text or spec.statuses or spec.stages)
+    """Return True when a text search is active and grouping should be suppressed.
+
+    Status/stage dropdown filters still apply but don't flatten the view —
+    matrix groups are shown within the filtered result set.
+    """
+    return bool(spec.text)
 
 
 # ---------------------------------------------------------------------------
