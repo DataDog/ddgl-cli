@@ -5,8 +5,10 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal as _HBox
 from textual.screen import Screen
 from textual.widgets import (
+    Button,
     Input,
     LoadingIndicator,
     RichLog,
@@ -23,6 +25,7 @@ from ddgl.format import parse_trace
 from ddgl.model.job import Job
 from ddgl.model.trace import LogLine, Section, Trace
 from ddgl.tui.gradient import gradient_text
+from ddgl.tui.search import apply_search
 from ddgl.tui.widgets.job_dag import JobDAGPanel
 from ddgl.tui.widgets.job_history import JobHistoryPanel
 from ddgl.tui.widgets.status import status_color, status_icon
@@ -108,23 +111,6 @@ def _collect_nodes(
             out.append(txt)
 
 
-def _highlight_text(original: Text, query: str) -> Text:
-    """Return a copy of *original* with all case-insensitive *query* matches highlighted."""
-    plain_lower = original.plain.lower()
-    query_lower = query.lower()
-    if query_lower not in plain_lower:
-        return original
-    result = original.copy()
-    start = 0
-    while True:
-        idx = plain_lower.find(query_lower, start)
-        if idx == -1:
-            break
-        result.stylize("reverse bold", idx, idx + len(query))
-        start = idx + 1
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Screen
 # ---------------------------------------------------------------------------
@@ -143,6 +129,8 @@ class JobDetailScreen(Screen[None]):
         Binding("pagedown", "page_down_log", "Page down", show=False),
         Binding("ctrl+up", "page_up_log", show=False),
         Binding("ctrl+down", "page_down_log", show=False),
+        Binding("meta+up", "scroll_top_log", "Top", show=False),
+        Binding("meta+down", "scroll_bottom_log", "Bottom", show=False),
     ]
 
     def __init__(
@@ -161,6 +149,7 @@ class JobDetailScreen(Screen[None]):
         self._log_lines: list[Text] = []
         self._match_lines: list[int] = []
         self._current_match: int = -1
+        self._search_regex: bool = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="job-detail-root"):
@@ -173,10 +162,9 @@ class JobDetailScreen(Screen[None]):
                         yield RichLog(
                             id="job-log", markup=False, highlight=False
                         )
-                        yield Input(
-                            id="log-search",
-                            placeholder="Search…",
-                        )
+                        with _HBox(id="log-search-bar"):
+                            yield Input(id="log-search", placeholder="Search…")
+                            yield Button(".*", id="log-regex-toggle", variant="default")
                     with TabPane("Deps", id="tab-deps"):
                         yield JobDAGPanel(
                             self._job,
@@ -204,7 +192,7 @@ class JobDetailScreen(Screen[None]):
         self.sub_title = self._job.name
         self.query_one("#job-meta", Static).update(_render_meta(self._job))
         self.query_one("#job-log").display = False
-        self.query_one("#log-search").display = False
+        self.query_one("#log-search-bar").display = False
         self._enrich_job()
         self._fetch_log()
 
@@ -244,26 +232,38 @@ class JobDetailScreen(Screen[None]):
     def action_page_down_log(self) -> None:
         self.query_one("#job-log", RichLog).scroll_page_down(animate=False)
 
+    def action_scroll_top_log(self) -> None:
+        self.query_one("#job-log", RichLog).scroll_home(animate=False)
+
+    def action_scroll_bottom_log(self) -> None:
+        self.query_one("#job-log", RichLog).scroll_end(animate=False)
+
     # -- Search ------------------------------------------------------------
 
     def action_open_search(self) -> None:
-        search = self.query_one("#log-search", Input)
-        search.display = True
-        search.focus()
+        bar = self.query_one("#log-search-bar")
+        bar.display = True
+        self.query_one("#log-search", Input).focus()
 
     def action_dismiss_or_close(self) -> None:
-        search = self.query_one("#log-search", Input)
-        if search.display:
+        bar = self.query_one("#log-search-bar")
+        if bar.display:
             self._close_search()
         else:
             self.app.pop_screen()
 
     def _close_search(self) -> None:
-        search = self.query_one("#log-search", Input)
-        search.display = False
-        search.value = ""
+        self.query_one("#log-search-bar").display = False
+        self.query_one("#log-search", Input).value = ""
         self._apply_search("")
         self.query_one("#job-log", RichLog).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "log-regex-toggle":
+            self._search_regex = not self._search_regex
+            event.button.variant = "primary" if self._search_regex else "default"
+            query = self.query_one("#log-search", Input).value
+            self._apply_search(query)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "log-search":
@@ -285,10 +285,10 @@ class JobDetailScreen(Screen[None]):
             self._update_search_indicator("")
             return
 
-        query_lower = query.lower()
         for i, line in enumerate(self._log_lines):
-            log_widget.write(_highlight_text(line, query))
-            if query_lower in line.plain.lower():
+            highlighted, spans = apply_search(line, query, regex=self._search_regex)
+            log_widget.write(highlighted)
+            if spans:
                 self._match_lines.append(i)
 
         if self._match_lines:

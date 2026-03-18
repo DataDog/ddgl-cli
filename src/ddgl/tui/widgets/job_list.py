@@ -13,7 +13,7 @@ from textual.widgets import DataTable
 
 from ddgl.model.job import Job
 from ddgl.tui.gradient import gradient_text
-from ddgl.tui.widgets.search_bar import FilterSpec, fuzzy_match
+from ddgl.tui.widgets.search_bar import FilterSpec, job_text_matches
 from ddgl.tui.widgets.status import status_color, status_icon
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def _apply_filter(jobs: list[Job], spec: FilterSpec) -> list[Job]:
     if spec.stages:
         result = [j for j in result if j.stage.lower() in spec.stages]
     if spec.text:
-        result = [j for j in result if fuzzy_match(spec.text, j.name)]
+        result = [j for j in result if job_text_matches(j.name, spec)]
     return result
 
 

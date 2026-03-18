@@ -7,10 +7,10 @@ from rich.text import Text
 from ddgl.constants import JobStatus
 from ddgl.tui.screens.job_detail import (
     _fmt_duration,
-    _highlight_text,
     _render_meta,
     _walk_trace,
 )
+from ddgl.tui.search import apply_search
 
 from .._stubs import make_job
 
@@ -166,41 +166,55 @@ def test_render_meta_omits_queued_when_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _highlight_text
+# apply_search (replaces _highlight_text)
 # ---------------------------------------------------------------------------
 
 
 def test_highlight_no_match_returns_original() -> None:
     original = Text("hello world")
-    result = _highlight_text(original, "xyz")
+    result, spans = apply_search(original, "xyz")
     assert result is original
+    assert spans == []
 
 
 def test_highlight_match_returns_copy() -> None:
     original = Text("hello world")
-    result = _highlight_text(original, "world")
+    result, spans = apply_search(original, "world")
     assert result is not original
     assert result.plain == original.plain
+    assert len(spans) == 1
 
 
 def test_highlight_preserves_plain_text() -> None:
     original = Text("error: build failed")
-    result = _highlight_text(original, "error")
+    result, _ = apply_search(original, "error")
     assert result.plain == "error: build failed"
 
 
 def test_highlight_case_insensitive() -> None:
     original = Text("ERROR: build FAILED")
-    result = _highlight_text(original, "error")
+    result, spans = apply_search(original, "error")
     assert result is not original
-    assert result.plain == original.plain
+    assert len(spans) == 1
 
 
 def test_highlight_multiple_matches() -> None:
     original = Text("foo bar foo baz foo")
-    result = _highlight_text(original, "foo")
-    spans = [s for s in result._spans if "reverse" in str(s.style)]
+    result, spans = apply_search(original, "foo")
     assert len(spans) == 3
+
+
+def test_highlight_regex_mode() -> None:
+    original = Text("error: timeout after 30s")
+    result, spans = apply_search(original, r"error.*\d+s", regex=True)
+    assert len(spans) == 1
+
+
+def test_highlight_invalid_regex_returns_no_matches() -> None:
+    original = Text("hello world")
+    result, spans = apply_search(original, "[invalid", regex=True)
+    assert result is original
+    assert spans == []
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,8 @@ class PipelineViewer(App[None]):
         Binding("o", "open_url", "Open URL"),
         Binding("p", "switch_pipeline", "Switch pipeline"),
         Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("meta+up", "scroll_top", "Top", show=False),
+        Binding("meta+down", "scroll_bottom", "Bottom", show=False),
     ]
 
     pipeline: reactive[Pipeline | None] = reactive(None)
@@ -138,6 +140,7 @@ class PipelineViewer(App[None]):
         self, message: FuzzySearchInput.SearchChanged
     ) -> None:
         self._text_filter = parse_query(message.query)
+        self._text_filter.regex = message.regex
         # Sync dropdown button labels to reflect tokens typed in the search box.
         self.query_one("#status-filter", FilterButton).set_selected(
             self._text_filter.statuses
@@ -277,6 +280,12 @@ class PipelineViewer(App[None]):
                 message.job, self._client, self._cache, all_jobs=all_jobs
             )
         )
+
+    def action_scroll_top(self) -> None:
+        self.query_one(JobListPanel).scroll_home(animate=False)
+
+    def action_scroll_bottom(self) -> None:
+        self.query_one(JobListPanel).scroll_end(animate=False)
 
     def action_help(self) -> None:
         self.push_screen(HelpModal())
