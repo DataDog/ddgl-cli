@@ -27,7 +27,6 @@ from ddgl.model.trace import LogLine, Section, Trace
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.search import apply_search
 from ddgl.tui.widgets.job_dag import JobDAGPanel
-from ddgl.tui.widgets.job_history import JobHistoryPanel
 from ddgl.tui.widgets.status import status_color, status_icon
 
 # ---------------------------------------------------------------------------
@@ -174,11 +173,9 @@ class JobDetailScreen(Screen[None]):
                             id="job-dag",
                         )
                     with TabPane("History", id="tab-history"):
-                        yield JobHistoryPanel(
-                            self._job,
-                            self._client,
-                            self._cache,
-                            id="job-history",
+                        yield Static(
+                            "[dim]Job history will be available in a future update.[/dim]",
+                            id="history-placeholder",
                         )
                     with TabPane("Tests", id="tab-tests"):
                         yield Static(
