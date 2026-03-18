@@ -8,6 +8,7 @@ from ddgl.constants import JobStatus
 from ddgl.tui.screens.job_detail import (
     _fmt_duration,
     _render_meta,
+    _set_collapsed,
     _walk_trace,
 )
 from ddgl.tui.search import apply_search
@@ -287,3 +288,51 @@ def test_walk_trace_multiple_top_level_nodes() -> None:
     result = _walk_trace(_trace(_logline("a"), _logline("b"), _logline("c")))
     assert len(result) == 3
     assert [t.plain for t in result] == ["a", "b", "c"]
+
+
+# ---------------------------------------------------------------------------
+# _set_collapsed
+# ---------------------------------------------------------------------------
+
+
+def test_set_collapsed_collapses_top_level_sections() -> None:
+    sec = _section("build", children=[_logline("out")])
+    _set_collapsed([sec], collapsed=True)
+    assert sec.collapsed is True
+
+
+def test_set_collapsed_expands_top_level_sections() -> None:
+    sec = _section("build", collapsed=True, children=[_logline("out")])
+    _set_collapsed([sec], collapsed=False)
+    assert sec.collapsed is False
+
+
+def test_set_collapsed_recurses_into_children() -> None:
+    inner = _section("inner", children=[_logline("x")])
+    outer = _section("outer", children=[inner])
+    _set_collapsed([outer], collapsed=True)
+    assert outer.collapsed is True
+    assert inner.collapsed is True
+
+
+def test_set_collapsed_skips_loglines() -> None:
+    line = _logline("hello")
+    sec = _section("s", children=[line])
+    _set_collapsed([sec, line], collapsed=True)  # should not raise
+    assert sec.collapsed is True
+
+
+def test_walk_trace_after_set_collapsed_hides_children() -> None:
+    sec = _section("build", children=[_logline("hidden")])
+    _set_collapsed([sec], collapsed=True)
+    result = _walk_trace(_trace(sec))
+    assert len(result) == 1
+    assert not any("hidden" in t.plain for t in result)
+
+
+def test_walk_trace_after_set_collapsed_false_shows_children() -> None:
+    sec = _section("build", collapsed=True, children=[_logline("visible")])
+    _set_collapsed([sec], collapsed=False)
+    result = _walk_trace(_trace(sec))
+    assert len(result) == 2
+    assert any("visible" in t.plain for t in result)

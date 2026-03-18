@@ -73,6 +73,14 @@ _SECTION_COLOR = "dark_orange"
 _SECTION_INDENT = "  "
 
 
+def _set_collapsed(nodes: list[Section | LogLine], collapsed: bool) -> None:
+    """Recursively set the *collapsed* flag on every Section in *nodes*."""
+    for node in nodes:
+        if isinstance(node, Section):
+            node.collapsed = collapsed
+            _set_collapsed(node.children, collapsed)
+
+
 def _walk_trace(trace: Trace) -> list[Text]:
     """Convert a Trace IR to a flat list of Rich Text objects for RichLog display.
 
@@ -130,6 +138,7 @@ class JobDetailScreen(Screen[None]):
         Binding("ctrl+down", "page_down_log", show=False),
         Binding("meta+up", "scroll_top_log", "Top", show=False),
         Binding("meta+down", "scroll_bottom_log", "Bottom", show=False),
+        Binding("t", "toggle_sections", "Toggle sections"),
     ]
 
     def __init__(
@@ -145,10 +154,12 @@ class JobDetailScreen(Screen[None]):
         self._client = client
         self._cache = cache
         self._all_jobs = all_jobs or []
+        self._trace: Trace | None = None
         self._log_lines: list[Text] = []
         self._match_lines: list[int] = []
         self._current_match: int = -1
         self._search_regex: bool = False
+        self._all_collapsed: bool = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="job-detail-root"):
@@ -211,15 +222,21 @@ class JobDetailScreen(Screen[None]):
         loading = self.query_one("#log-loading", LoadingIndicator)
         try:
             raw = await get_log(self._client, self._job.id, cache=self._cache)
-            trace = parse_trace(raw)
-            self._log_lines = _walk_trace(trace)
-            for text in self._log_lines:
-                log_widget.write(text)
+            self._trace = parse_trace(raw)
+            self._render_log()
         except Exception as e:
             log_widget.write(Text(f"Failed to load log: {e}", style="red"))
         loading.display = False
         log_widget.display = True
         log_widget.focus()
+
+    def _render_log(self) -> None:
+        """Rebuild _log_lines from the current trace state and redraw the log widget."""
+        if self._trace is None:
+            return
+        self._log_lines = _walk_trace(self._trace)
+        query = self.query_one("#log-search", Input).value
+        self._apply_search(query)
 
     # -- Scroll ------------------------------------------------------------
 
@@ -234,6 +251,15 @@ class JobDetailScreen(Screen[None]):
 
     def action_scroll_bottom_log(self) -> None:
         self.query_one("#job-log", RichLog).scroll_end(animate=False)
+
+    # -- Section toggle ----------------------------------------------------
+
+    def action_toggle_sections(self) -> None:
+        if self._trace is None:
+            return
+        self._all_collapsed = not self._all_collapsed
+        _set_collapsed(self._trace.children, self._all_collapsed)
+        self._render_log()
 
     # -- Search ------------------------------------------------------------
 
