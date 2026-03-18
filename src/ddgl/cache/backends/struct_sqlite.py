@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 import time
 import types
 from collections.abc import Sequence
@@ -57,19 +58,19 @@ class StructSqliteBackend(_SqliteBackend):
         self._known_hashes: dict[str, str] = {}
         super().__init__(path)
 
-    def _create_tables(self) -> None:
+    def _create_tables(self, conn: sqlite3.Connection) -> None:
         # Only the schema-version registry is created eagerly; data tables are
         # created lazily via _ensure_table() on the first write.
-        self._conn.execute(
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS _schema_versions ("
             "  table_name TEXT PRIMARY KEY,"
             "  schema_hash TEXT NOT NULL"
             ")"
         )
-        self._conn.commit()
+        conn.commit()
         logger.debug("StructSqliteBackend initialised")
 
-    def _ensure_table(self, table_name: str, cls: type) -> None:
+    def _ensure_table(self, conn: sqlite3.Connection, table_name: str, cls: type) -> None:
         """Create (or recreate on schema change) the table for *cls*."""
         current_hash = _schema_hash(cls)
 
@@ -78,7 +79,7 @@ class StructSqliteBackend(_SqliteBackend):
             logger.debug("_ensure_table(%r) — in-memory cache hit", table_name)
             return
 
-        row = self._conn.execute(
+        row = conn.execute(
             "SELECT schema_hash FROM _schema_versions WHERE table_name = ?",
             (table_name,),
         ).fetchone()
@@ -93,11 +94,11 @@ class StructSqliteBackend(_SqliteBackend):
                 "Schema change detected for table %r — dropping stale cache",
                 table_name,
             )
-            self._conn.execute(f"DROP TABLE IF EXISTS {table_name}")  # noqa: S608
+            conn.execute(f"DROP TABLE IF EXISTS {table_name}")  # noqa: S608
 
         fields = msgspec.structs.fields(cls)  # type: ignore[arg-type]
         col_defs = ", ".join(f"{f.name} {_sqlite_type(f.type)}" for f in fields)
-        self._conn.execute(
+        conn.execute(
             f"CREATE TABLE {table_name} ("  # noqa: S608
             f"  project_id TEXT NOT NULL,"
             f"  object_id TEXT NOT NULL,"
@@ -106,20 +107,20 @@ class StructSqliteBackend(_SqliteBackend):
             f"  PRIMARY KEY (project_id, object_id)"
             f")"
         )
-        self._conn.execute(
+        conn.execute(
             "INSERT OR REPLACE INTO _schema_versions (table_name, schema_hash)"
             " VALUES (?, ?)",
             (table_name, current_hash),
         )
-        self._conn.commit()
+        conn.commit()
         self._known_hashes[table_name] = current_hash
         logger.debug("_ensure_table(%r) — table created/recreated", table_name)
 
     _EXCLUDED_COLS = frozenset({"project_id", "object_id", "expires_at"})
 
-    def _table_exists(self, table_name: str) -> bool:
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
         return bool(
-            self._conn.execute(
+            conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                 (table_name,),
             ).fetchone()
@@ -164,21 +165,23 @@ class StructSqliteBackend(_SqliteBackend):
         project_id = str(key[1])
         object_id = str(key[2])
 
-        if not self._table_exists(table_name):
-            logger.debug("get(%r) — table does not exist", table_name)
-            return None
+        with self._connect() as conn:
+            if not self._table_exists(conn, table_name):
+                logger.debug("get(%r) — table does not exist", table_name)
+                return None
 
-        cursor = self._conn.execute(
-            f"SELECT * FROM {table_name}"  # noqa: S608
-            f" WHERE project_id=? AND object_id=? AND expires_at>?",
-            (project_id, object_id, time.time()),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            logger.debug("get(%r/%s/%s) miss", table_name, project_id, object_id)
-            return None
+            cursor = conn.execute(
+                f"SELECT * FROM {table_name}"  # noqa: S608
+                f" WHERE project_id=? AND object_id=? AND expires_at>?",
+                (project_id, object_id, time.time()),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                logger.debug("get(%r/%s/%s) miss", table_name, project_id, object_id)
+                return None
 
-        col_names = [desc[0] for desc in cursor.description]
+            col_names = [desc[0] for desc in cursor.description]
+
         row_dict = self._row_to_dict(col_names, row)
 
         if cls is None:
@@ -202,7 +205,6 @@ class StructSqliteBackend(_SqliteBackend):
         object_id = str(key[2])
 
         struct_cls = type(value)
-        self._ensure_table(table_name, struct_cls)
 
         fields = msgspec.structs.fields(struct_cls)  # type: ignore[arg-type]
         builtins = msgspec.to_builtins(value)
@@ -214,13 +216,16 @@ class StructSqliteBackend(_SqliteBackend):
 
         placeholders = ", ".join("?" * len(col_names))
         col_list = ", ".join(col_names)
-        self._conn.execute(
-            f"INSERT OR REPLACE INTO {table_name}"  # noqa: S608
-            f" (project_id, object_id, {col_list}, expires_at)"
-            f" VALUES (?, ?, {placeholders}, ?)",
-            [project_id, object_id, *values, time.time() + ttl],
-        )
-        self._conn.commit()
+
+        with self._connect() as conn:
+            self._ensure_table(conn, table_name, struct_cls)
+            conn.execute(
+                f"INSERT OR REPLACE INTO {table_name}"  # noqa: S608
+                f" (project_id, object_id, {col_list}, expires_at)"
+                f" VALUES (?, ?, {placeholders}, ?)",
+                [project_id, object_id, *values, time.time() + ttl],
+            )
+            conn.commit()
         logger.debug("set(%r/%s/%s) ttl=%.0fs", table_name, project_id, object_id, ttl)
 
     def get_many(
@@ -245,28 +250,30 @@ class StructSqliteBackend(_SqliteBackend):
 
         table_name = str(key_prefix[0])
 
-        if not self._table_exists(table_name):
-            logger.debug("get_many(%r) — table does not exist", table_name)
-            return []
+        with self._connect() as conn:
+            if not self._table_exists(conn, table_name):
+                logger.debug("get_many(%r) — table does not exist", table_name)
+                return []
 
-        placeholders = ", ".join("?" * len(ids))
-        conditions: list[str] = [f"object_id IN ({placeholders})", "expires_at > ?"]
-        params: list[object] = [str(i) for i in ids]
-        params.append(time.time())
+            placeholders = ", ".join("?" * len(ids))
+            conditions: list[str] = [f"object_id IN ({placeholders})", "expires_at > ?"]
+            params: list[object] = [str(i) for i in ids]
+            params.append(time.time())
 
-        if len(key_prefix) > 1:
-            conditions.insert(0, "project_id = ?")
-            params.insert(0, str(key_prefix[1]))
+            if len(key_prefix) > 1:
+                conditions.insert(0, "project_id = ?")
+                params.insert(0, str(key_prefix[1]))
 
-        where = " AND ".join(conditions)
-        cursor = self._conn.execute(
-            f"SELECT * FROM {table_name} WHERE {where}",  # noqa: S608
-            params,
-        )
-        col_names = [desc[0] for desc in cursor.description]
+            where = " AND ".join(conditions)
+            cursor = conn.execute(
+                f"SELECT * FROM {table_name} WHERE {where}",  # noqa: S608
+                params,
+            )
+            col_names = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
 
         results: list[object] = []
-        for row in cursor.fetchall():
+        for row in rows:
             row_dict = self._row_to_dict(col_names, row)
             if cls is None:
                 results.append(row_dict)

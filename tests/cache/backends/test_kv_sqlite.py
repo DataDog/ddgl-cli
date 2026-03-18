@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from ddgl.cache.backends.kv_sqlite import KvSqliteBackend
@@ -42,10 +43,25 @@ class TestKvSqliteBackend:
         b1.set(("fresh",), "new", ttl=3600.0)
         b1.close()
 
-        b2 = KvSqliteBackend(path)  # GC runs here
-        row_count = b2._conn.execute("SELECT COUNT(*) FROM kv").fetchone()[0]
+        KvSqliteBackend(path)  # GC runs here
+        conn = sqlite3.connect(str(path))
+        row_count = conn.execute("SELECT COUNT(*) FROM kv").fetchone()[0]
+        conn.close()
         assert row_count == 1  # only the fresh row survives
 
     def test_close_is_safe(self, tmp_path: Path) -> None:
         b = KvSqliteBackend(tmp_path / "kv.db")
         b.close()  # should not raise
+
+    def test_concurrent_access(self, tmp_path: Path) -> None:
+        """Two backends on the same DB file can interleave writes without locking errors."""
+        path = tmp_path / "kv.db"
+        b1 = KvSqliteBackend(path)
+        b2 = KvSqliteBackend(path)
+
+        for i in range(20):
+            b1.set((f"a{i}",), f"val_a{i}", ttl=60.0)
+            b2.set((f"b{i}",), f"val_b{i}", ttl=60.0)
+
+        assert b1.get(("b5",)) == "val_b5"
+        assert b2.get(("a5",)) == "val_a5"

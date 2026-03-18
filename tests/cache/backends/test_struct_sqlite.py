@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import msgspec
@@ -156,8 +157,10 @@ class TestStructSqliteBackend:
         b1.set(("widgets", "proj1", 2), WIDGET, ttl=TTL)
         b1.close()
 
-        b2 = StructSqliteBackend(path)
-        row_count = b2._conn.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
+        StructSqliteBackend(path)  # GC runs here
+        conn = sqlite3.connect(str(path))
+        row_count = conn.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
+        conn.close()
         assert row_count == 1
 
     def test_schema_change_drops_stale_table(self, tmp_path: Path) -> None:
@@ -188,11 +191,13 @@ class TestStructSqliteBackend:
 
         # Manually corrupt the schema_hash so _ensure_table won't drop the
         # table — we want to exercise the get() safety net, not the set() path.
-        b._conn.execute(
+        conn = sqlite3.connect(str(path))
+        conn.execute(
             "UPDATE _schema_versions SET schema_hash=? WHERE table_name=?",
             (_schema_hash(WidgetV3), "widgets"),
         )
-        b._conn.commit()
+        conn.commit()
+        conn.close()
 
         # WidgetV3 has a required field `required_new` not present in the
         # stored Widget row — msgspec.convert must fail.
@@ -283,3 +288,21 @@ class TestStructSqliteBackendGetMany:
         assert len(results) == 1
         assert isinstance(results[0], dict)
         assert results[0]["name"] == "sprocket"  # type: ignore[index]
+
+
+class TestStructSqliteConcurrentAccess:
+    def test_concurrent_access(self, tmp_path: Path) -> None:
+        """Two backends on the same DB file can interleave writes without locking errors."""
+        path = tmp_path / "structs.db"
+        b1 = StructSqliteBackend(path)
+        b2 = StructSqliteBackend(path)
+
+        for i in range(20):
+            w = Widget(name=f"w{i}", count=i, score=float(i), active=True)
+            b1.set(("widgets", "proj1", i), w, ttl=TTL)
+            b2.set(("widgets", "proj2", i), w, ttl=TTL)
+
+        r1 = b1.get(("widgets", "proj2", 5), cls=Widget)
+        r2 = b2.get(("widgets", "proj1", 5), cls=Widget)
+        assert r1 is not None and r1.name == "w5"
+        assert r2 is not None and r2.name == "w5"

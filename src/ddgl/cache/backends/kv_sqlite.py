@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 
 from ddgl.cache.backends.base import Key
@@ -17,22 +18,23 @@ class KvSqliteBackend(_SqliteBackend):
     TTL is required on every write.
     """
 
-    def _create_tables(self) -> None:
-        self._conn.execute(
+    def _create_tables(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS kv ("
             "  key        TEXT PRIMARY KEY,"
             "  value      TEXT NOT NULL,"
             "  expires_at REAL NOT NULL"
             ")"
         )
-        self._conn.commit()
+        conn.commit()
 
     def get(self, key: Key) -> object | None:
         k = str(key)
-        row = self._conn.execute(
-            "SELECT value FROM kv WHERE key = ? AND expires_at > ?",
-            (k, time.time()),
-        ).fetchone()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM kv WHERE key = ? AND expires_at > ?",
+                (k, time.time()),
+            ).fetchone()
         if row:
             logger.debug("get(%r) hit", k)
             return row[0]
@@ -42,8 +44,9 @@ class KvSqliteBackend(_SqliteBackend):
     def set(self, key: Key, value: object, ttl: float) -> None:
         k = str(key)
         logger.debug("set(%r) ttl=%.0fs", k, ttl)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)",
-            (k, str(value), time.time() + ttl),
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)",
+                (k, str(value), time.time() + ttl),
+            )
+            conn.commit()
