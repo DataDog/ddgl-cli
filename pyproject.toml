@@ -7,8 +7,21 @@ name = "ddgl"
 version = "0.1.0"
 description = "Terminal-based GitLab client with TUI support"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.12"
+authors = [
+    { name = "Pierre-Louis Veyrenc", email = "pierrelouis.veyrenc@datadoghq.com" },
+]
+keywords = ["gitlab", "tui", "cli", "devops", "ci"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "click>=8.1",
     "httpx>=0.27",
@@ -17,6 +30,10 @@ dependencies = [
     "rich-click>=1.8",
     "textual>=1.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/DataDog/ddgl"
+Issues = "https://github.com/DataDog/ddgl/issues"
 
 [project.scripts]
 ddgl = "ddgl.cli:main"
@@ -31,6 +48,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ddgl"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "LICENSE", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
