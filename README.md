@@ -1,172 +1,200 @@
 # ddgl
 
-Terminal-based GitLab client.
+Terminal-based GitLab CI client — browse pipelines, stream logs, and triage failures from your terminal.
 
-## Setup
+<!-- TODO: screenshot / asciinema of `ddgl viz` -->
 
-```bash
-uv sync
-```
+## Features
 
-Authentication is resolved in order:
-1. `GITLAB_TOKEN` environment variable
-2. `ddtool auth gitlab token` subprocess fallback
+- **Branch-aware** — auto-detects your current git branch and resolves the latest pipeline with no arguments
+- **Interactive TUI** (`ddgl viz`) — full pipeline browser with job list, status/stage filters, fuzzy or regex search, and matrix job grouping
+- **Job detail view** — streaming log with collapsible sections, dependency graph (DAG), and keyboard navigation
+- **Smart log formatting** — ANSI colors preserved, sections folded, optional timestamps, syntax highlighting
+- **Scripting-friendly** — `--json` output on every command, pipe-friendly, `--no-cache` for force-refresh
+- **Local caching** — finished pipelines and logs cached for one week; repeated queries are instant
 
-Optionally set `GITLAB_PROJECT_ID` (e.g. `my-group/my-project`) or let ddgl detect it from the git remote.
+## Installation
 
-## Using the async client
-
-`GitLabClient` is an async context manager backed by `httpx`:
-
-```python
-from ddgl.config import load_config
-from ddgl.client import GitLabClient
-
-config = await load_config()
-
-async with GitLabClient(config) as client:
-    pipeline = await client.get_pipeline(12345)
-    print(pipeline.status, pipeline.ref)
-```
-
-### Method naming convention
-
-Public methods on the client follow a naming convention that tells you how pagination is handled:
-
-| Prefix | Returns | Pagination | Example |
-|---|---|---|---|
-| `get_` | `T` | None (single object) | `get_pipeline(id)` |
-| `fetch_` | `Page[T]` | Single page | `fetch_pipelines(ref="main")` |
-| `iter_` | `AsyncIterator[Page[T]]` | Streams all pages | `iter_pipelines()` |
-| `get_all_` | `list[T]` | Exhausts all pages | `get_all_jobs(pipeline_id)` |
-
-#### `fetch_` -- single page
-
-Returns a `Page[T]` containing the items and pagination metadata. Use this when you only need the first page or want manual control over pagination.
-
-```python
-page = await client.fetch_pipelines(ref="main", per_page=10)
-for p in page.items:
-    print(p.id, p.status)
-if page.has_next:
-    print(f"Page {page.page} of {page.total_pages}")
-```
-
-#### `iter_` -- stream pages
-
-Async iterator that yields `Page[T]` objects until all pages are consumed. Use this for streaming large result sets (e.g. in a TUI).
-
-```python
-async for page in client.iter_pipelines(ref="main"):
-    for p in page.items:
-        print(p.id, p.status)
-```
-
-#### `get_all_` -- flat list
-
-Exhausts pagination and returns a flat `list[T]`. Use this when the result set is bounded (e.g. jobs for a single pipeline).
-
-```python
-jobs = await client.get_all_jobs(pipeline_id=12345)
-failed = [j for j in jobs if j.has_failed]
-```
-
-#### Pagination limit
-
-All paginating methods (`iter_`, `get_all_`) raise `PaginationLimitError` if they exceed `MAX_PAGES` (defined in `constants.py`, default 50). This is a safety net -- if you hit it, something is probably wrong.
-
-## Caching
-
-`ddgl` uses a layered, namespace-aware cache stored under `~/.cache/ddgl/` (or whichever directory is passed to `Cache.open`).
-
-### Opening the cache
-
-`Cache` is a singleton context manager. Open it once at startup and close it on exit:
-
-```python
-from pathlib import Path
-from ddgl.cache import Cache
-
-with Cache.open(Path("~/.cache/ddgl").expanduser()) as cache:
-    ...
-```
-
-Pass `bypass=True` to disable reads (writes still go through — useful for force-refresh):
-
-```python
-with Cache.open(cache_dir, bypass=True) as cache:
-    ...
-```
-
-### Namespaces
-
-Each namespace has a dedicated backend and key shape, declared in `CacheNS`:
-
-| Namespace | Backend | Key shape | Stored as |
-|---|---|---|---|
-| `CacheNS.PROJECTS` | JSON file | `(git_root_path,)` | In-memory dict, flushed on close |
-| `CacheNS.TOKENS` | JSON file | `(gitlab_url,)` | In-memory dict, flushed on close |
-| `CacheNS.API_RESPONSES` | SQLite KV | `(request_hash,)` | `TEXT` rows |
-| `CacheNS.OBJECTS` | SQLite structs | `(table_name, project_id, object_id)` | One table per struct type |
-| `CacheNS.LOGS` | Text files | `(job_id,)` | One file per job |
-
-### Reading and writing
-
-Access a namespace via `cache[CacheNS.X]`, then index into it with the key components. TTL is always required on writes.
-
-```python
-# flat namespace (1 component)
-hit = cache[CacheNS.API_RESPONSES]["abc123"]
-cache[CacheNS.API_RESPONSES].set("abc123", json_str, ttl=30.0)
-
-# nested namespace — chain subscripts or use a tuple shortcut
-pipeline = cache[CacheNS.OBJECTS]["pipelines"]["proj42"][pipeline_id]
-cache[CacheNS.OBJECTS].set(("pipelines", "proj42", pipeline_id), obj, ttl=3600.0)
-```
-
-Intermediate subscripts return a proxy, so you can bind a sub-namespace and reuse it:
-
-```python
-pipelines = cache[CacheNS.OBJECTS]["pipelines"]["proj42"]
-hit = pipelines[pipeline_id]
-pipelines.set(pipeline_id, obj, ttl=3600.0)
-```
-
-### Bulk reads (`get_all`)
-
-`StructSqliteBackend` (used by `CacheNS.OBJECTS`) supports fetching all rows that match a key prefix:
-
-```python
-# all pipelines for a project
-all_pipelines = cache[CacheNS.OBJECTS]["pipelines"]["proj42"].get_all(cls=Pipeline)
-
-# all objects in a table regardless of project
-everything = cache[CacheNS.OBJECTS]["pipelines"].get_all(cls=Pipeline)
-```
-
-`get_all` raises `NotImplementedError` on backends that don't support bulk reads.
-
-### Backends
-
-| Backend | File | Notes |
-|---|---|---|
-| `JsonBackend` | `*.json` | In-memory; flushed atomically on `close()` or process exit |
-| `KvSqliteBackend` | `*.sqlite` | Simple key→text SQLite store |
-| `StructSqliteBackend` | `*.sqlite` | One table per `msgspec.Struct` type; schema-hash versioned |
-| `TextFileBackend` | directory | One file per key; TTL tracked via sidecar `.expires` files |
-
-All backends create their storage file/directory automatically. Expired entries are pruned on open (GC). If a struct schema changes between versions, the stale table is dropped and recreated automatically.
-
-## CLI
+Requires Python ≥ 3.12.
 
 ```bash
-ddgl pipelines --ref main -n 20
-ddgl logs <job_id>
+# Recommended — uv
+uv tool install git+https://github.com/DataDog/ddgl
+
+# Or pip
+pip install git+https://github.com/DataDog/ddgl
 ```
+
+## Authentication & Configuration
+
+Set `GITLAB_TOKEN` to a [personal access token](https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html) with `read_api` scope. If the variable is not set, `ddtool auth gitlab token` is tried automatically (Datadog internal).
+
+The project is auto-detected from the `origin` git remote when run inside a repository. You can override any setting with environment variables:
+
+| Variable            | Default             | Description                                        |
+| ------------------- | ------------------- | -------------------------------------------------- |
+| `GITLAB_TOKEN`      | —                   | Personal access token (required)                   |
+| `GITLAB_URL`        | `gitlab.ddbuild.io` | GitLab instance base URL                           |
+| `GITLAB_PROJECT_ID` | auto-detected       | Project path, e.g. `my-group/my-project`           |
+| `DDGL_LOG_LEVEL`    | `WARNING`           | Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+## Quick Start
+
+```bash
+# Latest pipeline for current branch
+ddgl pipelines get
+
+# Open interactive TUI
+ddgl viz
+
+# List failed jobs for the latest pipeline on the current branch
+ddgl jobs list --failed
+
+# Show the logs for a specific job
+ddgl logs --job <id>
+```
+
+## Common Workflows
+
+### Check pipeline status
+
+```bash
+ddgl pipelines get                  # latest pipeline on current branch
+ddgl pipelines get --ref main       # specific branch
+ddgl pipelines list -n 10           # last 10 pipelines
+ddgl pipelines list --scope running # only running pipelines
+```
+
+### Triage failed jobs
+
+```bash
+ddgl jobs list --failed
+ddgl jobs list --failed --stage build
+ddgl jobs list --name "lint.*"      # regex filter on job name
+ddgl jobs get --failed              # full details for all failed jobs
+```
+
+### Read job logs
+
+```bash
+ddgl logs --failed                  # all failed logs in current pipeline
+ddgl logs --job 12345               # single job by ID
+ddgl logs --job 12345 --raw         # skip formatting
+ddgl logs --job 12345 --timestamps  # include ISO timestamps
+ddgl logs --job 12345 --strip       # strip ANSI codes (plain text)
+ddgl logs --failed --stage test     # failed logs filtered to one stage
+```
+
+### Save or pipe output
+
+```bash
+ddgl logs --job 12345 --output /tmp/build.log
+ddgl logs --job 12345 --output /tmp/logs/      # one file per job (already-existing directory)
+ddgl logs --failed --strip --output /tmp/logs/ # plain-text dump of all failed logs
+ddgl jobs list --failed --json | jq '.[].name'
+ddgl pipelines list --json | jq '.[] | select(.status == "failed") | .id'
+```
+
+### Format a saved trace
+
+```bash
+ddgl format /path/to/trace.log
+cat trace.log | ddgl format -
+```
+
+### Force-refresh (bypass cache)
+
+```bash
+ddgl --no-cache pipelines get
+ddgl --no-cache logs --failed
+```
+
+### Walk back through commit history
+
+By default ddgl searches the last 10 commits for a pipeline. Increase `--depth` when working on a branch with many commits since the last pipeline run:
+
+```bash
+ddgl pipelines get --depth 50
+ddgl jobs list --failed --depth 50
+```
+
+## Interactive TUI (`ddgl viz`)
+
+```bash
+ddgl viz                     # current branch
+ddgl viz --ref feature/foo   # specific branch
+ddgl viz --pipeline 98765    # specific pipeline ID
+```
+
+**Layout**: pipeline list sidebar (left) · job table (center) · filter bar and footer (bottom).
+
+**Search**: fuzzy match by default. Toggle regex with the `.*` button. Use special tokens to combine filters:
+
+```
+status:failed stage:build lint    # failed jobs in "build" stage matching "lint"
+```
+
+### Keybindings — main view
+
+| Key      | Action                               |
+| -------- | ------------------------------------ |
+| `/`      | Focus search                         |
+| `Ctrl+K` | Clear search                         |
+| `s`      | Cycle sort: Stage → A–Z → Start time |
+| `Space`  | Expand / collapse matrix job group   |
+| `r`      | Refresh pipeline and jobs            |
+| `p`      | Switch pipeline (focus sidebar)      |
+| `o`      | Open job or pipeline in browser      |
+| `?`      | Show help                            |
+| `q`      | Quit                                 |
+
+### Keybindings — job detail (Enter)
+
+| Key                 | Action                                      |
+| ------------------- | ------------------------------------------- |
+| `/`                 | Search in log                               |
+| `n` / `N`           | Next / previous match                       |
+| `t`                 | Toggle all log sections (collapse / expand) |
+| `Ctrl+↑` / `Ctrl+↓` | Fast scroll                                 |
+| `Escape` / `q`      | Close                                       |
+
+**Tabs**: Log · Deps (dependency graph) · History *(coming soon)* · Tests *(coming soon)*
+
+## Global Options
+
+These flags are available on all commands:
+
+| Flag              | Description                                                 |
+| ----------------- | ----------------------------------------------------------- |
+| `--ref <ref>`     | Git ref (branch, tag, or SHA); defaults to current branch   |
+| `--pipeline <id>` | Pin a specific pipeline by ID                               |
+| `--depth <n>`     | Commits to walk when searching for a pipeline (default: 10) |
+| `--no-cache`      | Bypass cache reads (writes still populate the cache)        |
+| `--json`          | JSON output                                                 |
+| `--no-pager`      | Disable the pager                                           |
+| `-v` / `-vv`      | Verbose / very verbose output                               |
+| `-y` / `--yes`    | Skip confirmation prompts                                   |
+
+Every command and subcommand accepts `--help` for the full option list:
+
+```bash
+ddgl --help
+ddgl logs --help
+ddgl jobs list --help
+```
+
+## Roadmap
+
+- **Job history tab** — same job across recent pipelines for flakiness detection
+- **Test results** — parsed test output in job detail view
+- **YAML-based dependency graph** — replace N API calls with a single `git show` + parse
 
 ## Development
 
 ```bash
+uv sync
 uv run pytest -v
-uv run ruff check src/ tests/
+uv run ruff check --fix
 ```
+
+See [DEVELOPER.md](DEVELOPER.md) for the overall architecture and contributor guidelines.
