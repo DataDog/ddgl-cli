@@ -45,7 +45,7 @@ class GitLabClient:
         self._cache = cache
         self._http = httpx.AsyncClient(
             base_url=config.api_url,
-            headers={"PRIVATE-TOKEN": config.private_token},
+            headers={"Authorization": f"Bearer {config.private_token}"},
             timeout=30.0,
         )
 

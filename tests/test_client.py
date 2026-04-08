@@ -296,7 +296,7 @@ class TestClientErrors:
         await client.fetch_pipelines()
 
         request = route.calls[0].request
-        assert request.headers["PRIVATE-TOKEN"] == "test-token"
+        assert request.headers["Authorization"] == "Bearer test-token"
 
 
 class TestPageModel:
