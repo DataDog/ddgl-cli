@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import re
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -202,7 +203,10 @@ def _write_log_to_path(name: str, text: str, output_path: str) -> None:
     out = Path(output_path)
     clean = strip_ansi(text)
     if out.is_dir():
-        (out / f"{name}.log").write_text(clean)
+        # Sanitize the job name to make sure it is a valid filename
+        name = re.sub(r'[^\w\-.]', '_', name)
+        p = out.joinpath(f"{name}.log")
+        p.write_text(clean)
     else:
         with open(out, "a") as f:
             f.write(f"─── {name} ───\n{clean}\n")
