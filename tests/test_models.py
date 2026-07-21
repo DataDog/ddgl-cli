@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import msgspec
+
 from ddgl.constants import JobStatus, PipelineStatus
+from ddgl.model.attach import AttachEvent
 from ddgl.model.job import Job
 from ddgl.model.log import JobLog
 from ddgl.model.pipeline import Pipeline
@@ -126,3 +129,38 @@ class TestJobLog:
         assert log.clean == ""
         assert log.sections == []
         assert log.lines == []
+
+
+class TestAttachEvent:
+    def test_defaults(self) -> None:
+        e = AttachEvent(kind="heartbeat", ts="2025-01-01T00:00:00Z")
+        assert e.pipeline_id is None
+        assert e.failed_jobs == ()
+
+    def test_job_transition_fields(self) -> None:
+        e = AttachEvent(
+            kind="job", ts="2025-01-01T00:00:00Z",
+            job_id=1, job_name="build:unit",
+            old_status="running", status="failed", duration=135.0,
+        )
+        assert e.kind == "job"
+        assert e.old_status == "running"
+        assert e.status == "failed"
+
+    def test_result_fields(self) -> None:
+        e = AttachEvent(
+            kind="result", ts="2025-01-01T00:31:57Z",
+            pipeline_id=918342, status="failed",
+            failed_jobs=("build:unit", "lint:ruff"),
+            duration=1914.0, reason="terminal",
+        )
+        assert e.reason == "terminal"
+        assert e.failed_jobs == ("build:unit", "lint:ruff")
+
+    def test_json_roundtrip(self) -> None:
+        e = AttachEvent(
+            kind="snapshot", ts="2025-01-01T00:00:00Z",
+            pipeline_id=1, status="running", jobs_total=5, jobs_done=1,
+        )
+        decoded = msgspec.json.decode(msgspec.json.encode(e), type=AttachEvent)
+        assert decoded == e
