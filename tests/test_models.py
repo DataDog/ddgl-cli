@@ -135,6 +135,9 @@ class TestAttachEvent:
     def test_defaults(self) -> None:
         e = AttachEvent(kind="heartbeat", ts="2025-01-01T00:00:00Z")
         assert e.pipeline_id is None
+        assert e.ref is None
+        assert e.current_stage is None
+        assert e.job_stage is None
         assert e.failed_jobs == ()
 
     def test_job_transition_fields(self) -> None:

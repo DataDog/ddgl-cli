@@ -116,17 +116,41 @@ def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
     return total, done, failed
 
 
+def _current_stage(jobs: list[Job]) -> str | None:
+    """Best-effort 'what stage are we in' for the live view's headline.
+
+    Picks the stage of the first not-yet-done job — GitLab returns jobs in
+    stage order, so this is normally the active stage. Falls back to the
+    last job's stage once everything is done, or None for an empty list.
+    """
+    for job in jobs:
+        if job.status not in _JOB_DONE:
+            return job.stage
+    return jobs[-1].stage if jobs else None
+
+
+def _context(pipeline: Pipeline, jobs: list[Job]) -> dict[str, object]:
+    """Rollup fields attached to every event (see AttachEvent's docstring)."""
+    total, done, failed = _rollup(jobs)
+    return {
+        "ref": pipeline.ref,
+        "current_stage": _current_stage(jobs),
+        "jobs_total": total,
+        "jobs_done": done,
+        "failed_jobs": failed,
+    }
+
+
 def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> AttachEvent:
     elapsed = pipeline.elapsed
-    _, _, failed = _rollup(jobs)
     return AttachEvent(
         kind="result",
         ts=_now(),
         pipeline_id=pipeline.id,
         status=str(pipeline.status),
-        failed_jobs=failed,
         duration=elapsed.total_seconds() if elapsed is not None else None,
         reason=reason,
+        **_context(pipeline, jobs),
     )
 
 
@@ -215,19 +239,11 @@ async def attach(
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     _cache_terminal_jobs(cache, project_id, jobs)
 
-    jobs_total, jobs_done, failed_jobs = _rollup(jobs)
+    ctx = _context(pipeline, jobs)
     logger.info(
-        "attach: resolved pipeline %d (%s), %d jobs", pipeline.id, pipeline.status, jobs_total
+        "attach: resolved pipeline %d (%s), %d jobs", pipeline.id, pipeline.status, ctx["jobs_total"]
     )
-    yield AttachEvent(
-        kind="snapshot",
-        ts=_now(),
-        pipeline_id=pipeline.id,
-        status=str(pipeline.status),
-        jobs_total=jobs_total,
-        jobs_done=jobs_done,
-        failed_jobs=failed_jobs,
-    )
+    yield AttachEvent(kind="snapshot", ts=_now(), pipeline_id=pipeline.id, status=str(pipeline.status), **ctx)
 
     if pipeline.is_finished:
         yield _result_event(pipeline, jobs, reason="terminal")
@@ -245,17 +261,18 @@ async def attach(
             newer = await _find_newer_pipeline(client, pipeline.ref, pipeline.id, cache=cache)
             if newer is not None:
                 logger.info("attach: following newer pipeline %d (was %d)", newer.id, pipeline.id)
+                newer_jobs = await client.get_all_jobs(newer.id, fresh=True)
+                _cache_terminal_jobs(cache, project_id, newer_jobs)
+                _cache_terminal_pipeline(cache, project_id, newer)
                 yield AttachEvent(
                     kind="switched",
                     ts=_now(),
                     pipeline_id=newer.id,
                     message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
                             f"switching from #{pipeline.id}",
+                    **_context(newer, newer_jobs),
                 )
-                pipeline = newer
-                jobs = await client.get_all_jobs(pipeline.id, fresh=True)
-                _cache_terminal_jobs(cache, project_id, jobs)
-                _cache_terminal_pipeline(cache, project_id, pipeline)
+                pipeline, jobs = newer, newer_jobs
                 if pipeline.is_finished:
                     # The pipeline we just switched to may already be done
                     # (e.g. a fast re-push). Don't wait for another tick.
@@ -268,6 +285,7 @@ async def attach(
         _cache_terminal_pipeline(cache, project_id, fresh_pipeline)
         _cache_terminal_jobs(cache, project_id, fresh_jobs)
 
+        ctx = _context(fresh_pipeline, fresh_jobs)
         changed = False
 
         if fresh_pipeline.status != pipeline.status:
@@ -277,6 +295,7 @@ async def attach(
                 pipeline_id=fresh_pipeline.id,
                 old_status=str(pipeline.status),
                 status=str(fresh_pipeline.status),
+                **ctx,
             )
             changed = True
 
@@ -289,19 +308,17 @@ async def attach(
                     ts=_now(),
                     job_id=job.id,
                     job_name=job.name,
+                    job_stage=job.stage,
                     old_status=str(prev) if prev is not None else None,
                     status=str(job.status),
                     duration=job.duration,
                     message=job.failure_reason if job.has_failed else None,
+                    **ctx,
                 )
                 changed = True
 
         if not changed and heartbeat:
-            hb_total, hb_done, hb_failed = _rollup(fresh_jobs)
-            yield AttachEvent(
-                kind="heartbeat", ts=_now(),
-                jobs_total=hb_total, jobs_done=hb_done, failed_jobs=hb_failed,
-            )
+            yield AttachEvent(kind="heartbeat", ts=_now(), **ctx)
 
         pipeline, jobs = fresh_pipeline, fresh_jobs
 

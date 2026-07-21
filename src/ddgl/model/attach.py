@@ -12,24 +12,37 @@ class AttachEvent(msgspec.Struct):
 
     One `kind`-tagged struct rather than a class hierarchy: renderers switch
     on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
-    Fields are optional and populated according to `kind`:
 
-    - snapshot:  pipeline_id, status, jobs_total, jobs_done, failed_jobs
-    - job:       job_id, job_name, old_status, status, duration
-    - pipeline:  pipeline_id, old_status, status
-    - heartbeat: jobs_total, jobs_done, failed_jobs
-    - switched:  pipeline_id, message (old -> new pipeline id, as text)
-    - result:    pipeline_id, status, failed_jobs, duration, reason
-                 (reason is "terminal" or "timeout")
+    `ref`, `current_stage`, `jobs_total`, `jobs_done`, and `failed_jobs` are
+    the current *rollup* — populated on every event, not just
+    snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
+    single-line view) should never need to track cross-event state just to
+    answer "how many jobs are done right now" or "what stage are we in" —
+    the latest event always has the answer. `current_stage` is a heuristic
+    (the stage of the first not-yet-done job, falling back to the last job's
+    stage once everything is done) — not an authoritative GitLab concept.
+
+    Kind-specific fields, otherwise unset:
+    - job:       job_id, job_name, job_stage (that job's own stage — distinct
+                 from the contextual `current_stage` above), old_status,
+                 status, duration, message (the job's failure_reason, when
+                 failed)
+    - pipeline:  old_status, status
+    - switched:  message (human-readable description of the switch)
+    - result:    status, duration (pipeline elapsed seconds), reason
+                 ("terminal" or "timeout")
     """
 
     kind: AttachEventKind
     ts: str
     pipeline_id: int | None = None
+    ref: str | None = None
+    current_stage: str | None = None
     status: str | None = None
     old_status: str | None = None
     job_id: int | None = None
     job_name: str | None = None
+    job_stage: str | None = None
     duration: float | None = None
     message: str | None = None
     jobs_total: int | None = None

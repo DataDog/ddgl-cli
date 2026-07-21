@@ -116,14 +116,20 @@ class TestAttachHappyPath:
         assert snapshot.pipeline_id == 1
         assert snapshot.jobs_total == 2
         assert snapshot.jobs_done == 0
+        # Context fields: populated even on kinds that aren't obviously
+        # "about" them, so renderers never need cross-event state.
+        assert snapshot.ref == "main"
+        assert snapshot.current_stage == "test"  # first not-done job's stage
 
         job_events = [e for e in events if e.kind == "job"]
         assert (job_events[0].job_name, job_events[0].old_status, job_events[0].status) == ("a", "created", "running")
+        assert job_events[0].job_stage == "test"  # that job's own stage
 
         result = events[-1]
         assert result.status == "success"
         assert result.reason == "terminal"
         assert result.failed_jobs == ()
+        assert result.ref == "main"
 
 
 class TestAttachFailure:
@@ -249,6 +255,9 @@ class TestAttachHeartbeat:
         ]
         events = await _collect(client, ref="main", heartbeat=True)
         assert "heartbeat" in [e.kind for e in events]
+        beat = next(e for e in events if e.kind == "heartbeat")
+        assert (beat.jobs_total, beat.jobs_done) == (1, 0)
+        assert beat.ref == "main"
 
     async def test_no_heartbeat_by_default(
         self, client: GitLabClient, mock_api: respx.MockRouter
