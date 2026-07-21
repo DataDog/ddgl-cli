@@ -399,6 +399,36 @@ class TestClientCaching:
         assert result.id == 100
         assert route.call_count == 1
 
+    async def test_get_pipeline_fresh_bypasses_cache(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """fresh=True re-hits the API even when a prior call cached the response."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100",
+        ).mock(return_value=httpx.Response(200, json=MOCK_PIPELINE_DETAIL))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_pipeline(100)
+                await client.get_pipeline(100, fresh=True)
+
+        assert route.call_count == 2
+
+    async def test_get_all_jobs_fresh_bypasses_cache(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """fresh=True re-hits the API even when a prior call cached the response."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_all_jobs(100)
+                await client.get_all_jobs(100, fresh=True)
+
+        assert route.call_count == 2
+
     async def test_get_text_is_not_cached(
         self, tmp_path: Path, mock_api: respx.MockRouter
     ) -> None:

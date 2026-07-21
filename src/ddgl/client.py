@@ -292,8 +292,15 @@ class GitLabClient:
         self,
         pipeline_id: int,
         project_id: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> Pipeline:
         """Get details of a single pipeline.
+
+        If *fresh* is True, bypasses the low-level API response cache (both
+        read and write) for this call. Used by `ddgl attach` when polling a
+        running pipeline, where serving stale cached status would make the
+        poll interval meaningless.
 
         Raises:
             NotFoundError: pipeline does not exist.
@@ -301,8 +308,9 @@ class GitLabClient:
         """
         logger.info("Getting pipeline %d", pipeline_id)
         base = self._project_path(project_id)
+        ttl = 0 if fresh else CACHE_TTL_API_PIPELINE
         try:
-            data = await self._get(f"{base}/pipelines/{pipeline_id}", ttl=CACHE_TTL_API_PIPELINE)
+            data = await self._get(f"{base}/pipelines/{pipeline_id}", ttl=ttl)
         except NotFoundError:
             raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
@@ -356,17 +364,25 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        *,
+        fresh: bool = False,
     ) -> list[Job]:
-        """Get all jobs for a pipeline (exhausts pagination)."""
+        """Get all jobs for a pipeline (exhausts pagination).
+
+        If *fresh* is True, bypasses the low-level API response cache for
+        each page fetched. Used by `ddgl attach` when polling running job
+        status (see `get_pipeline`).
+        """
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if scope is not None:
             params["scope"] = scope
+        ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            ttl=CACHE_TTL_API_JOB_LIST,
+            ttl=ttl,
             **params,
         )
 
