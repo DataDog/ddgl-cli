@@ -129,19 +129,28 @@ def _current_stage(jobs: list[Job]) -> str | None:
     return jobs[-1].stage if jobs else None
 
 
-def _context(pipeline: Pipeline, jobs: list[Job]) -> dict[str, object]:
-    """Rollup fields attached to every event (see AttachEvent's docstring)."""
+def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) -> dict[str, object]:
+    """Rollup fields attached to every event (see AttachEvent's docstring).
+
+    Calls `estimator` here — not in the renderer — because this is where
+    real Pipeline/Job domain objects exist. Renderers only ever see the
+    resulting `eta_seconds` field on the event, never the estimator itself.
+    """
     total, done, failed = _rollup(jobs)
+    remaining = estimator.estimate_remaining(pipeline, jobs)
     return {
         "ref": pipeline.ref,
         "current_stage": _current_stage(jobs),
         "jobs_total": total,
         "jobs_done": done,
         "failed_jobs": failed,
+        "eta_seconds": remaining.total_seconds() if remaining is not None else None,
     }
 
 
-def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> AttachEvent:
+def _result_event(
+    pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator, *, reason: str
+) -> AttachEvent:
     elapsed = pipeline.elapsed
     return AttachEvent(
         kind="result",
@@ -150,7 +159,7 @@ def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> Attach
         status=str(pipeline.status),
         duration=elapsed.total_seconds() if elapsed is not None else None,
         reason=reason,
-        **_context(pipeline, jobs),
+        **_context(pipeline, jobs, estimator),
     )
 
 
@@ -212,6 +221,7 @@ async def attach(
     follow: bool = False,
     timeout: float | None = None,
     cache: Cache | None = None,
+    estimator: DurationEstimator | None = None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
 
@@ -224,8 +234,12 @@ async def attach(
     per transition, a `heartbeat` on quiet ticks (if enabled), a `switched`
     event on follow-rebind -> emit a final `result` event and return once the
     pipeline is terminal or `timeout` elapses.
+
+    `estimator` defaults to NullEstimator (v1 ships no ETA implementation);
+    see DurationEstimator's docstring for the seam this leaves for later.
     """
     project_id = client._config.project_id or ""
+    estimator = estimator or NullEstimator()
     deadline = time.monotonic() + timeout if timeout is not None else None
 
     pipeline = await _resolve_or_wait(
@@ -239,19 +253,19 @@ async def attach(
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     _cache_terminal_jobs(cache, project_id, jobs)
 
-    ctx = _context(pipeline, jobs)
+    ctx = _context(pipeline, jobs, estimator)
     logger.info(
         "attach: resolved pipeline %d (%s), %d jobs", pipeline.id, pipeline.status, ctx["jobs_total"]
     )
     yield AttachEvent(kind="snapshot", ts=_now(), pipeline_id=pipeline.id, status=str(pipeline.status), **ctx)
 
     if pipeline.is_finished:
-        yield _result_event(pipeline, jobs, reason="terminal")
+        yield _result_event(pipeline, jobs, estimator, reason="terminal")
         return
 
     while True:
         if deadline is not None and time.monotonic() >= deadline:
-            yield _result_event(pipeline, jobs, reason="timeout")
+            yield _result_event(pipeline, jobs, estimator, reason="timeout")
             return
 
         sleep_for = interval if deadline is None else min(interval, deadline - time.monotonic())
@@ -270,13 +284,13 @@ async def attach(
                     pipeline_id=newer.id,
                     message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
                             f"switching from #{pipeline.id}",
-                    **_context(newer, newer_jobs),
+                    **_context(newer, newer_jobs, estimator),
                 )
                 pipeline, jobs = newer, newer_jobs
                 if pipeline.is_finished:
                     # The pipeline we just switched to may already be done
                     # (e.g. a fast re-push). Don't wait for another tick.
-                    yield _result_event(pipeline, jobs, reason="terminal")
+                    yield _result_event(pipeline, jobs, estimator, reason="terminal")
                     return
                 continue
 
@@ -285,7 +299,7 @@ async def attach(
         _cache_terminal_pipeline(cache, project_id, fresh_pipeline)
         _cache_terminal_jobs(cache, project_id, fresh_jobs)
 
-        ctx = _context(fresh_pipeline, fresh_jobs)
+        ctx = _context(fresh_pipeline, fresh_jobs, estimator)
         changed = False
 
         if fresh_pipeline.status != pipeline.status:
@@ -324,5 +338,5 @@ async def attach(
 
         if pipeline.is_finished:
             logger.info("attach: pipeline %d reached terminal status %s", pipeline.id, pipeline.status)
-            yield _result_event(pipeline, jobs, reason="terminal")
+            yield _result_event(pipeline, jobs, estimator, reason="terminal")
             return

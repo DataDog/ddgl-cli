@@ -13,14 +13,17 @@ class AttachEvent(msgspec.Struct):
     One `kind`-tagged struct rather than a class hierarchy: renderers switch
     on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
 
-    `ref`, `current_stage`, `jobs_total`, `jobs_done`, and `failed_jobs` are
-    the current *rollup* — populated on every event, not just
-    snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
-    single-line view) should never need to track cross-event state just to
-    answer "how many jobs are done right now" or "what stage are we in" —
-    the latest event always has the answer. `current_stage` is a heuristic
-    (the stage of the first not-yet-done job, falling back to the last job's
-    stage once everything is done) — not an authoritative GitLab concept.
+    `ref`, `current_stage`, `jobs_total`, `jobs_done`, `failed_jobs`, and
+    `eta_seconds` are the current *rollup* — populated on every event, not
+    just snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
+    single-line view) should never need to track cross-event state, or hold
+    a Pipeline/Job domain object, just to answer "how many jobs are done
+    right now" or "how long until this is done" — the latest event always
+    has the answer. `current_stage` is a heuristic (the stage of the first
+    not-yet-done job, falling back to the last job's stage once everything
+    is done) — not an authoritative GitLab concept. `eta_seconds` is None
+    unless an estimator was passed to attach() (v1 ships none — see
+    core/attach.py's DurationEstimator seam).
 
     Kind-specific fields, otherwise unset:
     - job:       job_id, job_name, job_stage (that job's own stage — distinct
@@ -48,4 +51,5 @@ class AttachEvent(msgspec.Struct):
     jobs_total: int | None = None
     jobs_done: int | None = None
     failed_jobs: tuple[str, ...] = ()
+    eta_seconds: float | None = None
     reason: str | None = None
