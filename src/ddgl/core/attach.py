@@ -138,9 +138,11 @@ def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) 
     """
     total, done, failed = _rollup(jobs)
     remaining = estimator.estimate_remaining(pipeline, jobs)
+    elapsed = pipeline.elapsed
     return {
         "ref": pipeline.ref,
         "current_stage": _current_stage(jobs),
+        "pipeline_elapsed": elapsed.total_seconds() if elapsed is not None else None,
         "jobs_total": total,
         "jobs_done": done,
         "failed_jobs": failed,

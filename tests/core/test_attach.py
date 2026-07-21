@@ -132,6 +132,7 @@ class TestAttachHappyPath:
         # "about" them, so renderers never need cross-event state.
         assert snapshot.ref == "main"
         assert snapshot.current_stage == "test"  # first not-done job's stage
+        assert snapshot.pipeline_elapsed is not None and snapshot.pipeline_elapsed > 0
 
         job_events = [e for e in events if e.kind == "job"]
         assert (job_events[0].job_name, job_events[0].old_status, job_events[0].status) == ("a", "created", "running")

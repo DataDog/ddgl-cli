@@ -137,6 +137,7 @@ class TestAttachEvent:
         assert e.pipeline_id is None
         assert e.ref is None
         assert e.current_stage is None
+        assert e.pipeline_elapsed is None
         assert e.job_stage is None
         assert e.failed_jobs == ()
 

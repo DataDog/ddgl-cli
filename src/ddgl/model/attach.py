@@ -13,27 +13,29 @@ class AttachEvent(msgspec.Struct):
     One `kind`-tagged struct rather than a class hierarchy: renderers switch
     on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
 
-    `ref`, `current_stage`, `jobs_total`, `jobs_done`, `failed_jobs`, and
-    `eta_seconds` are the current *rollup* — populated on every event, not
-    just snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
-    single-line view) should never need to track cross-event state, or hold
-    a Pipeline/Job domain object, just to answer "how many jobs are done
-    right now" or "how long until this is done" — the latest event always
-    has the answer. `current_stage` is a heuristic (the stage of the first
-    not-yet-done job, falling back to the last job's stage once everything
-    is done) — not an authoritative GitLab concept. `eta_seconds` is None
-    unless an estimator was passed to attach() (v1 ships none — see
-    core/attach.py's DurationEstimator seam).
+    `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`,
+    `failed_jobs`, and `eta_seconds` are the current *rollup* — populated on
+    every event, not just snapshot/heartbeat. This is deliberate: a renderer
+    (e.g. the live single-line view) should never need to track cross-event
+    state, or hold a Pipeline/Job domain object, just to answer "how many
+    jobs are done right now" or "how long has this been running" — the
+    latest event always has the answer. `current_stage` is a heuristic (the
+    stage of the first not-yet-done job, falling back to the last job's
+    stage once everything is done) — not an authoritative GitLab concept.
+    `eta_seconds` is None unless an estimator was passed to attach() (v1
+    ships none — see core/attach.py's DurationEstimator seam).
 
     Kind-specific fields, otherwise unset:
     - job:       job_id, job_name, job_stage (that job's own stage — distinct
                  from the contextual `current_stage` above), old_status,
-                 status, duration, message (the job's failure_reason, when
-                 failed)
+                 status, duration (that job's own duration), message (the
+                 job's failure_reason, when failed)
     - pipeline:  old_status, status
     - switched:  message (human-readable description of the switch)
-    - result:    status, duration (pipeline elapsed seconds), reason
-                 ("terminal" or "timeout")
+    - result:    status, duration (final pipeline elapsed seconds — same
+                 value as `pipeline_elapsed` at that point, kept as its own
+                 field since `duration` already has this meaning here),
+                 reason ("terminal" or "timeout")
     """
 
     kind: AttachEventKind
@@ -41,6 +43,7 @@ class AttachEvent(msgspec.Struct):
     pipeline_id: int | None = None
     ref: str | None = None
     current_stage: str | None = None
+    pipeline_elapsed: float | None = None
     status: str | None = None
     old_status: str | None = None
     job_id: int | None = None
