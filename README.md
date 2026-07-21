@@ -8,6 +8,7 @@ Terminal-based GitLab CI client — browse pipelines, stream logs, and triage fa
 
 - **Branch-aware** — auto-detects your current git branch and resolves the latest pipeline with no arguments
 - **Interactive TUI** (`ddgl viz`) — full pipeline browser with job list, status/stage filters, fuzzy or regex search, and matrix job grouping
+- **Blocking wait** (`ddgl attach`) — block until a pipeline finishes, streaming progress; a live status line for humans, an append-only/JSONL event stream for scripts and coding agents
 - **Job detail view** — streaming log with collapsible sections, dependency graph (DAG), and keyboard navigation
 - **Smart log formatting** — ANSI colors preserved, sections folded, optional timestamps, syntax highlighting
 - **Scripting-friendly** — `--json` output on every command, pipe-friendly, `--no-cache` for force-refresh
@@ -159,6 +160,41 @@ status:failed stage:build lint    # failed jobs in "build" stage matching "lint"
 | `Escape` / `q`      | Close                                       |
 
 **Tabs**: Log · Deps (dependency graph) · History *(coming soon)* · Tests *(coming soon)*
+
+## Blocking on a Pipeline (`ddgl attach`)
+
+Blocks until a pipeline reaches a terminal state, streaming progress as it goes. Resolves a pipeline the same way as every other command (`--ref` / `--pipeline` / `--depth`), and by default waits for one to appear if you attach right after pushing.
+
+```bash
+ddgl attach                       # current branch — waits if no pipeline exists yet
+ddgl attach --pipeline 98765      # pin a specific pipeline
+ddgl attach --timeout 300         # give up after 5 minutes (exit 124) instead of blocking forever
+ddgl attach --follow              # switch to a newer pipeline on the ref if one appears (e.g. a re-push)
+```
+
+**Output** auto-detects the audience, like every other command's `console.is_terminal` + `--json` behavior:
+
+| Mode | When | What you get |
+| --- | --- | --- |
+| **Live** | stdout is a TTY, or `--live` | A single redrawing status line: current stage, job counts, elapsed time |
+| **Lines** | stdout isn't a TTY (default), or `--plain` | Append-only, human-readable lines — one per event, always ending in a `[FINAL]` line with the outcome |
+| **JSONL** | `--json` (forced even in a TTY) | One JSON object per event, same information as Lines mode |
+
+`--detail {none,minimal,normal,full}` controls how much shows up in **Lines mode only** (job-level transitions, extra failure detail) — Live mode's single status line and `--json`'s JSONL always include everything. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
+
+**Exit codes** follow the GNU `timeout` convention, so shell scripts and CI-babysitting agents can branch on them directly:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Pipeline succeeded |
+| `1` | Pipeline failed or was canceled |
+| `2` | Unexpected/config error |
+| `124` | `--timeout` elapsed while the pipeline was still running |
+
+```bash
+ddgl attach && ./deploy.sh                  # only deploy on success
+ddgl attach --pipeline 98765 --timeout 300  # bounded wait; loop/re-invoke on exit 124
+```
 
 ## Global Options
 

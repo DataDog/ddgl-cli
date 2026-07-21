@@ -32,7 +32,7 @@ _DETAIL_CHOICES = ("none", "minimal", "normal", "full")
 )
 @click.option(
     "--detail", type=click.Choice(_DETAIL_CHOICES), default="normal", show_default=True,
-    help="Content level of event lines.",
+    help="Content level of event lines. Only affects plain-line output — no effect on --live or --json.",
 )
 @click.option(
     "--no-wait", is_flag=True, default=False,

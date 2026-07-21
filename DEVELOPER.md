@@ -186,6 +186,8 @@ All `iter_` and `get_all_` methods raise `PaginationLimitError` after `MAX_PAGES
 
 `_get()` accepts a `ttl` parameter. If `ttl > 0` and a cache is open, the raw JSON response is stored in `CacheNS.API_RESPONSES` keyed by a hash of the path and query params. This is separate from the structured object cache managed by `core/`.
 
+`get_pipeline()` and `get_all_jobs()` additionally accept `fresh: bool = False`, which passes `ttl=0` instead of the default TTL for that one call — bypassing this low-level cache entirely (read and write). Used by `core/attach.py`'s poll loop: polling a running pipeline through the normal 30s/15s cached reads would make the poll interval meaningless.
+
 ---
 
 ### Core
@@ -273,6 +275,42 @@ async def stream_log(
 ```
 
 Cache-first: if the log is cached, yields lines from cache. Otherwise streams from the API and caches if the log turns out to be complete.
+
+#### `core/attach.py`
+
+```python
+async def attach(
+    client: GitLabClient,
+    *,
+    ref: str | None = None,
+    pipeline_id: int | None = None,
+    depth: int = 10,
+    interval: float = 10.0,
+    heartbeat: bool = False,
+    wait_for_start: bool = True,
+    follow: bool = False,
+    timeout: float | None = None,
+    cache: Cache | None = None,
+    estimator: DurationEstimator | None = None,
+) -> AsyncIterator[AttachEvent]
+```
+
+Powers `ddgl attach`: blocks on a CI pipeline, yielding `AttachEvent`s until it reaches a terminal state or `timeout` elapses. Stateless — no retry/resume concept. Every call resolves (or waits for) the pipeline, emits a full snapshot, then polls every `interval` seconds and diffs pipeline/job status into events. Re-invoking after a stop (e.g. a calling harness enforced its own timeout) just runs this same sequence again against GitLab, which is the whole resumability story.
+
+Polling reads bypass the client's response cache (`fresh=True` on `get_pipeline`/`get_all_jobs` — see [Client](#client)) so `interval` is the true detection latency, not `max(interval, cache_ttl)`. Terminal jobs and `SUCCESS` pipelines are still written to the durable object cache from the poll loop, mirroring `core/jobs.py` and `core/pipeline.py`'s own rules, since polling bypasses their cache-write wrappers.
+
+`AttachEvent` (`model/attach.py`) is one `kind`-tagged `msgspec.Struct` (`snapshot` / `job` / `pipeline` / `heartbeat` / `switched` / `result`) rather than a class hierarchy — renderers switch on `.kind`. Rollup fields (`ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`, `failed_jobs`, `eta_seconds`) are populated on *every* event via an internal `_context()` helper, not just snapshot/heartbeat — a renderer should never need to track cross-event state, or hold a `Pipeline`/`Job` object, to answer "how many jobs are done right now."
+
+`--detail` (which already-emitted event kinds a renderer shows) is deliberately **not** an engine concept — the engine always emits the full stream; filtering is a `render/attach.py` concern.
+
+##### ETA seam (`DurationEstimator`)
+
+```python
+class DurationEstimator(Protocol):
+    def estimate_remaining(self, pipeline: Pipeline, jobs: list[Job]) -> timedelta | None: ...
+```
+
+There's no ETA field in the GitLab API. `attach()` calls an injected `estimator` (default `NullEstimator`, which always returns `None`) inside `_context()` — this has to happen in the engine, not a renderer, because it's the only place real `Pipeline`/`Job` domain objects exist; the result is exposed to renderers as `AttachEvent.eta_seconds`, keeping the estimator itself out of the render layer entirely. v1 ships no estimation logic; a future estimator (preferred: backed by Datadog CI Visibility historical durations, rather than querying GitLab pipeline history) plugs in here with no change to `attach()` or the renderers.
 
 ---
 
@@ -486,6 +524,11 @@ Public API in `format/__init__.py`:
 Separate from `format/`. Provides `render_pipeline_table`, `render_job_table`, `render_job_detail`, etc. — functions that take domain objects and return Rich renderables, used by CLI commands.
 
 `_console.py` holds the shared `console` and `err_console` instances.
+
+`render/attach.py` is a bit different: it consumes an `AsyncIterator[AttachEvent]` (see `core/attach.py` above) rather than a single already-fetched domain object, since it's rendering a live stream. Two entry points, both returning the final `result` event so the CLI can map it to an exit code:
+
+- `render_lines(events, as_json=..., detail=...)` — the default non-TTY output and `--json`'s JSONL are the *same* renderer; `as_json` is a boolean on the same consumption loop, not a separate function, since it's the same event stream just formatted differently. Prints with `markup=False, highlight=False, soft_wrap=True` — literal `[TAG]` text must never be read as Rich markup, and a long line (a long job name, or a JSONL object) must never be word-wrapped across multiple physical lines.
+- `render_live(events)` — a Rich `Live` single redrawing line for the human TTY case.
 
 ---
 
