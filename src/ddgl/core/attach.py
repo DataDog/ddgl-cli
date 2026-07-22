@@ -8,9 +8,14 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ddgl.cache.cache_config import CacheNS
-from ddgl.constants import CACHE_TTL_FINISHED_JOB, JobStatus, PipelineStatus
+from ddgl.constants import (
+    CACHE_TTL_FINISHED_JOB,
+    MAX_CONSECUTIVE_POLL_FAILURES,
+    JobStatus,
+    PipelineStatus,
+)
 from ddgl.core.pipeline import list_pipelines, resolve_pipeline
-from ddgl.exceptions import NoPipelineFoundError
+from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
 
 if TYPE_CHECKING:
@@ -297,6 +302,8 @@ async def attach(
         yield _result_event(pipeline, jobs, estimator, reason="terminal")
         return
 
+    consecutive_failures = 0
+
     while True:
         if deadline is not None and time.monotonic() >= deadline:
             yield _result_event(pipeline, jobs, estimator, reason="timeout")
@@ -306,10 +313,26 @@ async def attach(
         await asyncio.sleep(max(sleep_for, 0))
 
         if follow:
-            newer = await _find_newer_pipeline(client, pipeline.ref, pipeline.id, cache=cache)
+            # Opportunistic: a failure here just means "no follow this tick"
+            # (the client already retried transient errors internally). It
+            # never counts toward giving up — the main poll below still gets
+            # its own independent attempt at the current pipeline regardless.
+            try:
+                newer = await _find_newer_pipeline(client, pipeline.ref, pipeline.id, cache=cache)
+            except GitLabAPIError as exc:
+                logger.warning("attach: follow-check failed (%s), will retry next tick", exc)
+                newer = None
+            if newer is not None:
+                try:
+                    newer_jobs = await client.get_all_jobs(newer.id, fresh=True)
+                except GitLabAPIError as exc:
+                    logger.warning(
+                        "attach: found newer pipeline %d but failed to fetch its jobs (%s); "
+                        "staying on #%d, will retry next tick", newer.id, exc, pipeline.id,
+                    )
+                    newer = None
             if newer is not None:
                 logger.info("attach: following newer pipeline %d (was %d)", newer.id, pipeline.id)
-                newer_jobs = await client.get_all_jobs(newer.id, fresh=True)
                 _cache_terminal_jobs(cache, project_id, newer_jobs)
                 _cache_terminal_pipeline(cache, project_id, newer)
                 yield AttachEvent(
@@ -327,8 +350,33 @@ async def attach(
                     return
                 continue
 
-        fresh_pipeline = await client.get_pipeline(pipeline.id, fresh=True)
-        fresh_jobs = await client.get_all_jobs(pipeline.id, fresh=True)
+        # The main poll fetch: pipeline status + full job list for THIS
+        # tick. The client already retries transient (408/429/5xx) failures
+        # internally (see client.py's _get_response) — reaching here means
+        # those retries were exhausted, or the error wasn't transient at all
+        # (e.g. a genuine 4xx). Either way, one bad tick must not kill a
+        # long-running attach: skip it and try again next interval, up to
+        # MAX_CONSECUTIVE_POLL_FAILURES before finally giving up. This is
+        # exactly the "500 mid-poll on a pipeline with hundreds of jobs"
+        # scenario attach hits in practice on large, long-running pipelines.
+        try:
+            fresh_pipeline = await client.get_pipeline(pipeline.id, fresh=True)
+            fresh_jobs = await client.get_all_jobs(pipeline.id, fresh=True)
+        except GitLabAPIError as exc:
+            consecutive_failures += 1
+            if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES:
+                logger.warning(
+                    "attach: poll failed %d times in a row (%s), giving up",
+                    consecutive_failures, exc,
+                )
+                raise
+            logger.warning(
+                "attach: poll tick failed (%s), skipping — retrying in %.0fs (failure %d/%d)",
+                exc, interval, consecutive_failures, MAX_CONSECUTIVE_POLL_FAILURES,
+            )
+            continue
+        consecutive_failures = 0
+
         _cache_terminal_pipeline(cache, project_id, fresh_pipeline)
         _cache_terminal_jobs(cache, project_id, fresh_jobs)
 

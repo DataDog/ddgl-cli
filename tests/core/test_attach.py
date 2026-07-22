@@ -13,7 +13,7 @@ from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
 from ddgl.core.attach import DurationEstimator, NullEstimator, _current_stage, attach
-from ddgl.exceptions import NoPipelineFoundError
+from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
@@ -432,3 +432,128 @@ class TestAttachCaching:
         assert cache[CacheNS.OBJECTS][("jobs", _PROJECT_ID, 10)] is not None
         # SUCCESS pipeline was written to the durable object cache.
         assert cache[CacheNS.OBJECTS][("pipelines", _PROJECT_ID, 1)] is not None
+
+
+# ---------------------------------------------------------------------------
+# Poll resilience: one bad tick (e.g. a 500 mid-poll on a large pipeline —
+# the exact scenario hit in practice) must not kill a long-running attach.
+# These monkeypatch client methods directly rather than going through respx,
+# so the engine's tick-skip logic is tested in isolation from the client's
+# own per-call retry logic (already covered by tests/test_client.py).
+# ---------------------------------------------------------------------------
+
+
+class TestAttachPollResilience:
+    async def test_transient_tick_failure_is_skipped_not_fatal(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_resolve(mock_api, pipeline_id=1)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[_job_payload(10, "success", "a")])
+        )
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
+            return_value=Response(200, json=_pipeline_payload(1, "success"))
+        )
+
+        real_get_pipeline = client.get_pipeline
+        calls = {"n": 0}
+
+        async def flaky_get_pipeline(pipeline_id: int, **kwargs: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise GitLabAPIError(500, "GET", "/fake", "boom")
+            return await real_get_pipeline(pipeline_id, **kwargs)
+
+        monkeypatch.setattr(client, "get_pipeline", flaky_get_pipeline)
+
+        events = await _collect(client, ref="main")
+        assert calls["n"] == 2  # tick1 failed, tick2 is what actually succeeded
+        assert events[-1].kind == "result"
+        assert events[-1].status == "success"
+        # The failed tick produced no events at all — it's silently skipped,
+        # not surfaced as a warning/error event (design decision: log-only).
+        assert all(e.kind != "result" or e is events[-1] for e in events)
+
+    async def test_gives_up_after_max_consecutive_failures(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
+
+        _mock_resolve(mock_api, pipeline_id=1)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[])
+        )
+        calls = {"n": 0}
+
+        async def always_failing_get_pipeline(pipeline_id: int, **kwargs: Any) -> Any:
+            calls["n"] += 1
+            raise GitLabAPIError(500, "GET", "/fake", "boom")
+
+        monkeypatch.setattr(client, "get_pipeline", always_failing_get_pipeline)
+
+        with pytest.raises(GitLabAPIError):
+            await _collect(client, ref="main")
+        # Discriminates "tolerates a run of failures before giving up" from
+        # merely "eventually raises" (which the old, unfixed engine also
+        # did — just on the very first failure).
+        assert calls["n"] == MAX_CONSECUTIVE_POLL_FAILURES
+
+    async def test_follow_check_failure_does_not_block_main_poll(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_resolve(mock_api, pipeline_id=1)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[_job_payload(10, "success", "a")])
+        )
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
+            return_value=Response(200, json=_pipeline_payload(1, "success"))
+        )
+
+        async def always_failing_list_pipelines(*args: Any, **kwargs: Any) -> Any:
+            raise GitLabAPIError(500, "GET", "/fake", "boom")
+
+        import ddgl.core.attach as attach_module
+        monkeypatch.setattr(attach_module, "list_pipelines", always_failing_list_pipelines)
+
+        events = await _collect(client, ref="main", follow=True)
+        # Despite the follow-check failing every single tick, the main poll
+        # still runs in the same tick and reaches a normal result — a
+        # follow failure is silent and never fatal to the attach itself.
+        assert events[-1].kind == "result"
+        assert events[-1].status == "success"
+
+    async def test_follow_job_fetch_failure_stays_on_old_pipeline(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        call_state = {"list_calls": 0}
+
+        def _list_side_effect(request: Any, **kwargs: Any) -> Response:
+            call_state["list_calls"] += 1
+            if call_state["list_calls"] == 1:
+                return Response(200, json=[_pipeline_payload(1, "running")])  # initial resolve
+            return Response(200, json=[_pipeline_payload(2, "running", ref="main")])  # every follow-check
+
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(side_effect=_list_side_effect)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[_job_payload(10, "success", "a")])
+        )
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
+            return_value=Response(200, json=_pipeline_payload(1, "success"))
+        )
+
+        real_get_all_jobs = client.get_all_jobs
+
+        async def flaky_get_all_jobs(pipeline_id: int, **kwargs: Any) -> Any:
+            if pipeline_id == 2:  # the "newer" pipeline's job fetch always fails
+                raise GitLabAPIError(500, "GET", "/fake", "boom")
+            return await real_get_all_jobs(pipeline_id, **kwargs)
+
+        monkeypatch.setattr(client, "get_all_jobs", flaky_get_all_jobs)
+
+        events = await _collect(client, ref="main", follow=True)
+        # The follow attempt always dies at the job-fetch step for #2, so we
+        # never actually switch — no 'switched' event, and attach completes
+        # normally on the original pipeline (#1) instead.
+        assert "switched" not in [e.kind for e in events]
+        assert events[-1].pipeline_id == 1
+        assert events[-1].status == "success"

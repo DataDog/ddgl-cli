@@ -331,6 +331,73 @@ class TestGetPipeline:
         assert result.duration == 299
 
 
+class TestRetryOnTransientError:
+    """Tests for GitLabClient._get_response's retry-on-transient-failure
+    logic, exercised via get_pipeline() as a representative caller."""
+
+    async def test_succeeds_after_one_retryable_failure(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.Response(503, json={"message": "unavailable"}),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        result = await client.get_pipeline(100)
+        assert result.id == 100
+        assert route.call_count == 2
+
+    async def test_succeeds_after_connection_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.ConnectError("connection reset"),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        result = await client.get_pipeline(100)
+        assert result.id == 100
+        assert route.call_count == 2
+
+    async def test_non_retryable_status_fails_immediately(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100").mock(
+            return_value=httpx.Response(400, json={"message": "bad request"})
+        )
+        with pytest.raises(GitLabAPIError):
+            await client.get_pipeline(100)
+        assert route.call_count == 1  # no retry attempted for a non-retryable status
+
+    async def test_exhausts_retries_and_raises_from_final_response(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100").mock(
+            return_value=httpx.Response(500, json={"message": "still broken"})
+        )
+        with pytest.raises(GitLabAPIError):
+            await client.get_pipeline(100)
+        assert route.call_count == 3  # RETRY_ATTEMPTS: exhausted, then raised
+
+    async def test_respects_retry_after_header(
+        self, client: GitLabClient, mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sleeps: list[float] = []
+
+        async def _fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "7"}),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        await client.get_pipeline(100)
+        assert sleeps == [7.0]  # honored the header, not the default backoff
+
+
 class TestGetJobLog:
     async def test_returns_text(
         self, client: GitLabClient, mock_api: respx.MockRouter
