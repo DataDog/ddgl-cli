@@ -182,7 +182,11 @@ All `iter_` and `get_all_` methods raise `PaginationLimitError` after `MAX_PAGES
 `_raise_for_status()` translates HTTP errors:
 - `404` on the project itself → `ConfigError` (project not found / wrong ID)
 - `404` on a sub-resource → `NotFoundError` (resource doesn't exist)
-- Other HTTP errors → `GitLabAPIError` (has `is_retryable` property for 408/429/5xx)
+- Other HTTP errors → `GitLabAPIError` (has `is_retryable` property for `RETRYABLE_STATUS_CODES`, `{408, 429, 500, 502, 503, 504}` — a shared constant in `exceptions.py`, not duplicated in `client.py`)
+
+#### Retry
+
+`_get_response()` (the raw HTTP GET underneath `_get`/`_get_text`/`_get_page`, so every `get_`/`fetch_`/`iter_`/`get_all_` method benefits uniformly) retries a connection-level failure or a `RETRYABLE_STATUS_CODES` response up to `RETRY_ATTEMPTS` (3) times, backing off `RETRY_BACKOFF_SECONDS` (`0.5s`, `1.5s`) between attempts. A `429`'s `Retry-After` header, when present, is honored in place of the fixed backoff. Retry happens *before* `_raise_for_status()` runs — it only ever sees the final response, so error *mapping* (`ConfigError`/`NotFoundError`/`GitLabAPIError`) is unaffected by retrying.
 
 #### Low-level API caching
 
@@ -307,7 +311,7 @@ Polling reads bypass the client's response cache (`fresh=True` on `get_pipeline`
 
 `current_stage` is the OLDEST stage that still has an incomplete job (the one actually holding up progress), not the most-recently-started one — GitLab's jobs endpoint returns jobs newest-ID-first with no stage-sequence field, so "first in the list" is not a reliable proxy for "most advanced."
 
-A GitLab API error at any point (e.g. a 5xx mid-pagination) propagates as `GitLabAPIError` out of `attach()`; `cli/attach.py` catches it and maps it to exit code 2, same as `ConfigError`/`NoPipelineFoundError`/`NotFoundError`.
+A `GitLabAPIError` while *resolving* the pipeline (before the poll loop starts) propagates immediately; `cli/attach.py` catches it and maps it to exit code 2, same as `ConfigError`/`NoPipelineFoundError`/`NotFoundError`. Once inside the steady-state poll loop, though, a single bad tick is not fatal: the client has already retried transient failures internally (see [Retry](#retry) above), so reaching the engine at all means those retries were exhausted, or the error wasn't transient. Either way, `attach()` logs a warning (`logger.warning`, visible with `-v`; no visible event is emitted — this is deliberately log-only, not a new `AttachEvent` kind) and skips the tick, keeping the last known state, rather than propagating. This is capped at `MAX_CONSECUTIVE_POLL_FAILURES` (5) consecutive failures before finally giving up and re-raising — so a `--timeout`-less `attach` against a genuinely dead GitLab instance doesn't poll forever with no way to stop but Ctrl-C. The `--follow` check and a newly-followed pipeline's job fetch get the same log-and-skip treatment but **never** count toward that threshold: follow is opportunistic, so a failure there just means "no follow this tick" — the main poll for the current pipeline still gets its own independent attempt in the same tick.
 
 `--detail` (which already-emitted event kinds a renderer shows) is deliberately **not** an engine concept — the engine always emits the full stream; filtering is a `render/attach.py` concern.
 
