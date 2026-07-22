@@ -119,14 +119,27 @@ def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
 def _current_stage(jobs: list[Job]) -> str | None:
     """Best-effort 'what stage are we in' for the live view's headline.
 
-    Picks the stage of the first not-yet-done job — GitLab returns jobs in
-    stage order, so this is normally the active stage. Falls back to the
-    last job's stage once everything is done, or None for an empty list.
+    The OLDEST stage that still has at least one not-yet-done job — the
+    stage actually holding up progress, not the most-recently-started one.
+    "Oldest" is approximated by each stage's minimum job ID: GitLab returns
+    jobs newest-ID-first (not in stage order — there is no API field for
+    stage sequence), but job IDs are assigned in roughly creation order, and
+    jobs are normally created stage-by-stage at pipeline start. Falls back
+    to the oldest stage overall once everything is done, or None for an
+    empty job list.
     """
+    if not jobs:
+        return None
+
+    min_id_by_stage: dict[str, int] = {}
+    incomplete_stages: set[str] = set()
     for job in jobs:
+        min_id_by_stage[job.stage] = min(min_id_by_stage.get(job.stage, job.id), job.id)
         if job.status not in _JOB_DONE:
-            return job.stage
-    return jobs[-1].stage if jobs else None
+            incomplete_stages.add(job.stage)
+
+    candidates = incomplete_stages or min_id_by_stage.keys()
+    return min(candidates, key=lambda s: min_id_by_stage[s])
 
 
 def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) -> dict[str, object]:
@@ -140,6 +153,7 @@ def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) 
     remaining = estimator.estimate_remaining(pipeline, jobs)
     elapsed = pipeline.elapsed
     return {
+        "pipeline_id": pipeline.id,
         "ref": pipeline.ref,
         "current_stage": _current_stage(jobs),
         "pipeline_elapsed": elapsed.total_seconds() if elapsed is not None else None,
@@ -157,11 +171,10 @@ def _result_event(
     return AttachEvent(
         kind="result",
         ts=_now(),
-        pipeline_id=pipeline.id,
         status=str(pipeline.status),
         duration=elapsed.total_seconds() if elapsed is not None else None,
         reason=reason,
-        **_context(pipeline, jobs, estimator),
+        **_context(pipeline, jobs, estimator),  # includes pipeline_id
     )
 
 
@@ -278,7 +291,7 @@ async def attach(
     logger.info(
         "attach: loaded %d jobs for pipeline %d (%s)", ctx["jobs_total"], pipeline.id, pipeline.status
     )
-    yield AttachEvent(kind="snapshot", ts=_now(), pipeline_id=pipeline.id, status=str(pipeline.status), **ctx)
+    yield AttachEvent(kind="snapshot", ts=_now(), status=str(pipeline.status), **ctx)  # ctx includes pipeline_id
 
     if pipeline.is_finished:
         yield _result_event(pipeline, jobs, estimator, reason="terminal")
@@ -302,10 +315,9 @@ async def attach(
                 yield AttachEvent(
                     kind="switched",
                     ts=_now(),
-                    pipeline_id=newer.id,
                     message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
                             f"switching from #{pipeline.id}",
-                    **_context(newer, newer_jobs, estimator),
+                    **_context(newer, newer_jobs, estimator),  # includes pipeline_id (= newer.id)
                 )
                 pipeline, jobs = newer, newer_jobs
                 if pipeline.is_finished:
@@ -327,10 +339,9 @@ async def attach(
             yield AttachEvent(
                 kind="pipeline",
                 ts=_now(),
-                pipeline_id=fresh_pipeline.id,
                 old_status=str(pipeline.status),
                 status=str(fresh_pipeline.status),
-                **ctx,
+                **ctx,  # includes pipeline_id (= fresh_pipeline.id)
             )
             changed = True
 

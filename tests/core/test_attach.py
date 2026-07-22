@@ -12,7 +12,7 @@ from httpx import Response
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.core.attach import DurationEstimator, NullEstimator, attach
+from ddgl.core.attach import DurationEstimator, NullEstimator, _current_stage, attach
 from ddgl.exceptions import NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
 from ddgl.model.job import Job
@@ -37,6 +37,57 @@ class TestNullEstimator:
 
     def test_satisfies_protocol(self) -> None:
         assert isinstance(NullEstimator(), DurationEstimator)
+
+
+# ---------------------------------------------------------------------------
+# _current_stage — "oldest stage still holding incomplete jobs"
+# ---------------------------------------------------------------------------
+
+
+def _job(job_id: int, stage: str, status: JobStatus) -> Job:
+    return Job(id=job_id, name=f"job-{job_id}", stage=stage, status=status)
+
+
+class TestCurrentStage:
+    def test_empty_returns_none(self) -> None:
+        assert _current_stage([]) is None
+
+    def test_single_stage(self) -> None:
+        jobs = [_job(1, "build", JobStatus.RUNNING), _job(2, "build", JobStatus.CREATED)]
+        assert _current_stage(jobs) == "build"
+
+    def test_returns_oldest_incomplete_stage_not_most_advanced(self) -> None:
+        """Regression: must pick the EARLIEST (lowest min job ID) stage that
+        still has incomplete work — the bottleneck — not whichever stage
+        happens to have the highest-ID (most recently created/advanced) job.
+
+        Deliberately constructed so a naive 'first not-done job in list
+        order' (the old, buggy behavior) would pick the wrong stage: GitLab
+        returns jobs newest-ID-first, so a highest-ID-first list places the
+        most-advanced stage's job before the oldest stage's job.
+        """
+        jobs = [
+            _job(30, "deploy", JobStatus.RUNNING),   # newest, most-advanced stage — still incomplete
+            _job(20, "test", JobStatus.SUCCESS),      # test stage: done
+            _job(10, "build", JobStatus.RUNNING),     # oldest stage — still incomplete: this is the answer
+        ]
+        assert _current_stage(jobs) == "build"
+
+    def test_ignores_stage_with_no_incomplete_jobs(self) -> None:
+        jobs = [
+            _job(10, "build", JobStatus.SUCCESS),   # done — not a candidate
+            _job(20, "test", JobStatus.RUNNING),    # oldest remaining incomplete stage
+            _job(30, "deploy", JobStatus.CREATED),
+        ]
+        assert _current_stage(jobs) == "test"
+
+    def test_all_done_falls_back_to_oldest_stage_overall(self) -> None:
+        jobs = [
+            _job(30, "deploy", JobStatus.SUCCESS),
+            _job(10, "build", JobStatus.SUCCESS),
+            _job(20, "test", JobStatus.SUCCESS),
+        ]
+        assert _current_stage(jobs) == "build"
 
 
 class _FakeEstimator:
@@ -126,6 +177,12 @@ class TestAttachHappyPath:
         # transition is checked before job transitions — matches tick2
         # here: pipeline flips before jobs do.
         assert kinds == ["snapshot", "snapshot", "job", "pipeline", "job", "job", "result"]
+        # Regression: pipeline_id was only ever set explicitly on some event
+        # kinds; "job" and "heartbeat" events fell through to the struct's
+        # None default because _context() didn't include it. Every event
+        # here has a real, resolved pipeline — none should show pipeline_id
+        # as None.
+        assert all(e.pipeline_id == 1 for e in events)
 
         early_snapshot = events[0]
         assert early_snapshot.pipeline_id == 1
@@ -309,6 +366,7 @@ class TestAttachHeartbeat:
         beat = next(e for e in events if e.kind == "heartbeat")
         assert (beat.jobs_total, beat.jobs_done) == (1, 0)
         assert beat.ref == "main"
+        assert beat.pipeline_id == 1  # regression: heartbeat used to fall through to None
 
     async def test_no_heartbeat_by_default(
         self, client: GitLabClient, mock_api: respx.MockRouter

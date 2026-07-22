@@ -13,18 +13,19 @@ class AttachEvent(msgspec.Struct):
     One `kind`-tagged struct rather than a class hierarchy: renderers switch
     on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
 
-    `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`,
-    `failed_jobs`, and `eta_seconds` are the current *rollup* — populated on
-    every event that has a resolved pipeline, not just snapshot/heartbeat.
-    This is deliberate: a renderer (e.g. the live single-line view) should
-    never need to track cross-event state, or hold a Pipeline/Job domain
-    object, just to answer "how many jobs are done right now" or "how long
-    has this been running" — the latest event always has the answer.
-    `current_stage` is a heuristic (the stage of the first not-yet-done job,
-    falling back to the last job's stage once everything is done) — not an
-    authoritative GitLab concept. `eta_seconds` is None unless an estimator
-    was passed to attach() (v1 ships none — see core/attach.py's
-    DurationEstimator seam).
+    `pipeline_id`, `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`,
+    `jobs_done`, `failed_jobs`, and `eta_seconds` are the current *rollup* —
+    populated on every event that has a resolved pipeline, not just
+    snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
+    single-line view) should never need to track cross-event state, or hold
+    a Pipeline/Job domain object, just to answer "how many jobs are done
+    right now" or "how long has this been running" — the latest event
+    always has the answer. `current_stage` is a heuristic: the OLDEST stage
+    that still has an incomplete job (the bottleneck), approximated by each
+    stage's minimum job ID since GitLab returns jobs newest-ID-first, not in
+    stage order — not an authoritative GitLab concept. `eta_seconds` is None
+    unless an estimator was passed to attach() (v1 ships none — see
+    core/attach.py's DurationEstimator seam).
 
     Exceptions to "every event has the rollup": attach() emits TWO
     `snapshot` events. The first fires immediately after resolving the
