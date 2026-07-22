@@ -252,12 +252,31 @@ async def attach(
         yield AttachEvent(kind="result", ts=_now(), reason="timeout")
         return
 
+    # Emit an early snapshot immediately — before the job list fetch below,
+    # which can take a long time on a pipeline with hundreds of jobs (even
+    # with parallel pagination) — so a human sees "attached" right away
+    # instead of a frozen terminal. Job counts are unknown at this point:
+    # GitLab has no job-count endpoint (see
+    # docs/superpowers/specs/2026-07-21-attach-delta-polling-future-work.md),
+    # so jobs_total/jobs_done/current_stage stay at their None/() defaults
+    # until the second snapshot below.
+    logger.info("attach: attached to pipeline %d (%s)", pipeline.id, pipeline.status)
+    elapsed = pipeline.elapsed
+    yield AttachEvent(
+        kind="snapshot",
+        ts=_now(),
+        pipeline_id=pipeline.id,
+        ref=pipeline.ref,
+        status=str(pipeline.status),
+        pipeline_elapsed=elapsed.total_seconds() if elapsed is not None else None,
+    )
+
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     _cache_terminal_jobs(cache, project_id, jobs)
 
     ctx = _context(pipeline, jobs, estimator)
     logger.info(
-        "attach: resolved pipeline %d (%s), %d jobs", pipeline.id, pipeline.status, ctx["jobs_total"]
+        "attach: loaded %d jobs for pipeline %d (%s)", ctx["jobs_total"], pipeline.id, pipeline.status
     )
     yield AttachEvent(kind="snapshot", ts=_now(), pipeline_id=pipeline.id, status=str(pipeline.status), **ctx)
 

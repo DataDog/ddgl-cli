@@ -120,11 +120,21 @@ class TestAttachHappyPath:
 
         events = await _collect(client, ref="main")
         kinds = [e.kind for e in events]
-        # Within a tick, a pipeline transition is checked (and emitted) before
-        # job transitions — matches tick2 here: pipeline flips before jobs do.
-        assert kinds == ["snapshot", "job", "pipeline", "job", "job", "result"]
+        # attach() emits TWO snapshots: an early one right after resolving
+        # the pipeline (before the — potentially slow — job fetch), then a
+        # full one once jobs are loaded. Within a tick, a pipeline
+        # transition is checked before job transitions — matches tick2
+        # here: pipeline flips before jobs do.
+        assert kinds == ["snapshot", "snapshot", "job", "pipeline", "job", "job", "result"]
 
-        snapshot = events[0]
+        early_snapshot = events[0]
+        assert early_snapshot.pipeline_id == 1
+        assert early_snapshot.ref == "main"
+        assert early_snapshot.jobs_total is None  # jobs not loaded yet
+        assert early_snapshot.jobs_done is None
+        assert early_snapshot.pipeline_elapsed is not None and early_snapshot.pipeline_elapsed > 0
+
+        snapshot = events[1]
         assert snapshot.pipeline_id == 1
         assert snapshot.jobs_total == 2
         assert snapshot.jobs_done == 0
@@ -168,7 +178,8 @@ class TestAttachHappyPath:
             return_value=Response(200, json=[_job_payload(10, "success", "a")])
         )
         events = await _collect(client, ref="main", estimator=_FakeEstimator())
-        assert events[0].eta_seconds == 42.0  # snapshot
+        assert events[0].eta_seconds is None  # early snapshot: jobs not loaded, no context yet
+        assert events[1].eta_seconds == 42.0  # full snapshot
         assert events[-1].eta_seconds == 42.0  # result
 
 
@@ -208,7 +219,7 @@ class TestAttachAlreadyTerminal:
             return_value=Response(200, json=[_job_payload(10, "success", "a")])
         )
         events = await _collect(client, ref="main")
-        assert [e.kind for e in events] == ["snapshot", "result"]
+        assert [e.kind for e in events] == ["snapshot", "snapshot", "result"]
         assert events[-1].reason == "terminal"
 
 

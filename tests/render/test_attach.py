@@ -7,7 +7,7 @@ import msgspec
 import pytest
 
 from ddgl.model.attach import AttachEvent
-from ddgl.render.attach import event_to_text, render_lines, render_live
+from ddgl.render.attach import _live_markup, event_to_text, render_lines, render_live
 
 # ---------------------------------------------------------------------------
 # event_to_text
@@ -21,9 +21,20 @@ class TestEventToText:
             pipeline_id=918342, ref="feature/checkout", status="running", jobs_total=40, jobs_done=0,
         )
         text = event_to_text(e)
+        assert "40 jobs" in text
+
+    def test_snapshot_with_no_jobs_loaded_yet_shows_loading(self) -> None:
+        """attach()'s early snapshot (before the job fetch) has jobs_total
+        None — must render as 'loading jobs…', never the string 'None jobs'."""
+        e = AttachEvent(
+            kind="snapshot", ts="2026-07-21T12:00:03+00:00",
+            pipeline_id=918342, ref="feature/checkout", status="running",
+        )
+        text = event_to_text(e)
+        assert "None" not in text
+        assert "loading jobs" in text
         assert text.startswith("[12:00:03][INFO]")
         assert "attach #918342 feature/checkout" in text
-        assert "running, 40 jobs" in text
 
     def test_job_without_duration(self) -> None:
         e = AttachEvent(
@@ -182,6 +193,26 @@ class TestRenderLines:
         job_lines = [line for line in out.splitlines() if line and "[JOB]" in line]
         assert len(job_lines) == 1
         assert "a" * 200 in job_lines[0]
+
+
+class TestLiveMarkup:
+    def test_loading_state_before_jobs_are_known(self) -> None:
+        """render_live's Rich Live only preserves its FINAL frame when
+        captured non-interactively, so the 'loading jobs…' mid-run state
+        (attach()'s early snapshot) can only be verified at this level."""
+        e = AttachEvent(kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running")
+        markup = _live_markup(e)
+        assert "None" not in markup
+        assert "loading jobs" in markup
+
+    def test_normal_state_shows_counts(self) -> None:
+        e = AttachEvent(
+            kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running",
+            jobs_total=40, jobs_done=18, failed_jobs=("a", "b"),
+        )
+        markup = _live_markup(e)
+        assert "18/40 jobs" in markup
+        assert "2 failed" in markup
 
 
 class TestRenderLive:

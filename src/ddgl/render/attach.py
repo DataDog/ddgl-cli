@@ -53,7 +53,11 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     ts = _hhmmss(event.ts)
     if event.kind == "snapshot":
         ref = f" {event.ref}" if event.ref else ""
-        return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {event.jobs_total} jobs"
+        # jobs_total is None on attach()'s first ("attached, jobs not yet
+        # loaded") snapshot — see AttachEvent's docstring. Must not render
+        # as the literal string "None jobs".
+        jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
+        return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
     if event.kind == "job":
         old = event.old_status or "new"
         line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
@@ -124,16 +128,20 @@ async def render_lines(
 def _live_markup(event: AttachEvent) -> str:
     """Build the redrawing single-line status. Every non-result event
     carries the same rollup fields (see AttachEvent's docstring), so this
-    doesn't need to branch on `.kind`."""
+    doesn't need to branch on `.kind` — except jobs_total, which is None on
+    attach()'s first ("attached, jobs not yet loaded") snapshot."""
     bits = [f"[dim]#{event.pipeline_id}[/dim]"]
     if event.ref:
         bits.append(f"[bold]{event.ref}[/bold]")
     if event.current_stage:
         bits.append(f"[italic]{event.current_stage}[/italic]")
-    counts = f"{event.jobs_done}/{event.jobs_total} jobs"
-    if event.failed_jobs:
-        counts += f", {len(event.failed_jobs)} failed"
-    bits.append(f"[dim]{counts}[/dim]")
+    if event.jobs_total is None:
+        bits.append("[dim]loading jobs…[/dim]")
+    else:
+        counts = f"{event.jobs_done}/{event.jobs_total} jobs"
+        if event.failed_jobs:
+            counts += f", {len(event.failed_jobs)} failed"
+        bits.append(f"[dim]{counts}[/dim]")
     if event.pipeline_elapsed is not None:
         bits.append(f"[dim]{format_duration(event.pipeline_elapsed)} elapsed[/dim]")
     if event.eta_seconds is not None:
