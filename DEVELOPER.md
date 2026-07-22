@@ -175,6 +175,8 @@ Every paginated resource exposes three variants following a consistent naming co
 
 All `iter_` and `get_all_` methods raise `PaginationLimitError` after `MAX_PAGES` pages (default: 50). If you hit this in practice, something has gone wrong.
 
+`get_all_` methods (`_get_all` internally) fetch page 1 first, then fetch the remaining pages **concurrently** — bounded by `MAX_CONCURRENT_PAGE_FETCHES` — rather than one at a time, since page 1's `x-total-pages` header tells us up front how many pages there are. This collapses N sequential round-trips into ~2 for a large result set (e.g. a pipeline with hundreds of jobs). `iter_` methods stay strictly sequential — they're a streaming API, so there's no "total" to fetch ahead of. `get_all_`'s `PaginationLimitError` check also differs slightly as a result: it fails fast against page 1's header, before firing the concurrent batch, rather than mid-loop like `iter_`.
+
 #### Error handling
 
 `_raise_for_status()` translates HTTP errors:
@@ -295,11 +297,15 @@ async def attach(
 ) -> AsyncIterator[AttachEvent]
 ```
 
-Powers `ddgl attach`: blocks on a CI pipeline, yielding `AttachEvent`s until it reaches a terminal state or `timeout` elapses. Stateless — no retry/resume concept. Every call resolves (or waits for) the pipeline, emits a full snapshot, then polls every `interval` seconds and diffs pipeline/job status into events. Re-invoking after a stop (e.g. a calling harness enforced its own timeout) just runs this same sequence again against GitLab, which is the whole resumability story.
+Powers `ddgl attach`: blocks on a CI pipeline, yielding `AttachEvent`s until it reaches a terminal state or `timeout` elapses. Stateless — no retry/resume concept. Every call resolves (or waits for) the pipeline, emits an early snapshot, fetches jobs and emits a full snapshot, then polls every `interval` seconds and diffs pipeline/job status into events. Re-invoking after a stop (e.g. a calling harness enforced its own timeout) just runs this same sequence again against GitLab, which is the whole resumability story.
 
-Polling reads bypass the client's response cache (`fresh=True` on `get_pipeline`/`get_all_jobs` — see [Client](#client)) so `interval` is the true detection latency, not `max(interval, cache_ttl)`. Terminal jobs and `SUCCESS` pipelines are still written to the durable object cache from the poll loop, mirroring `core/jobs.py` and `core/pipeline.py`'s own rules, since polling bypasses their cache-write wrappers.
+The **early snapshot** fires immediately after resolving the pipeline — before fetching jobs, which GitLab has no count endpoint for and can take real time on a pipeline with hundreds of jobs even with parallel pagination (below). Without it, `attach` would sit silent for that entire fetch. Its `jobs_total`/`jobs_done`/`current_stage` are `None`/unset (see `AttachEvent`'s docstring); renderers must treat `jobs_total is None` as "still loading," not zero jobs.
 
-`AttachEvent` (`model/attach.py`) is one `kind`-tagged `msgspec.Struct` (`snapshot` / `job` / `pipeline` / `heartbeat` / `switched` / `result`) rather than a class hierarchy — renderers switch on `.kind`. Rollup fields (`ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`, `failed_jobs`, `eta_seconds`) are populated on *every* event via an internal `_context()` helper, not just snapshot/heartbeat — a renderer should never need to track cross-event state, or hold a `Pipeline`/`Job` object, to answer "how many jobs are done right now."
+Polling reads bypass the client's response cache (`fresh=True` on `get_pipeline`/`get_all_jobs` — see [Client](#client)) so `interval` is the true detection latency, not `max(interval, cache_ttl)`. `get_all_jobs` also fetches its pages concurrently (see [Client](#client) → Pagination methods), which matters here: on a large pipeline the sequential-pagination job fetch used to take over a minute. Terminal jobs and `SUCCESS` pipelines are still written to the durable object cache from the poll loop, mirroring `core/jobs.py` and `core/pipeline.py`'s own rules, since polling bypasses their cache-write wrappers.
+
+`AttachEvent` (`model/attach.py`) is one `kind`-tagged `msgspec.Struct` (`snapshot` / `job` / `pipeline` / `heartbeat` / `switched` / `result`) rather than a class hierarchy — renderers switch on `.kind`. Rollup fields (`ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`, `failed_jobs`, `eta_seconds`) are populated on every event that has a resolved pipeline via an internal `_context()` helper, not just snapshot/heartbeat — a renderer should never need to track cross-event state, or hold a `Pipeline`/`Job` object, to answer "how many jobs are done right now." The early snapshot above is the one exception (no jobs loaded yet to compute a rollup from).
+
+A GitLab API error at any point (e.g. a 5xx mid-pagination) propagates as `GitLabAPIError` out of `attach()`; `cli/attach.py` catches it and maps it to exit code 2, same as `ConfigError`/`NoPipelineFoundError`/`NotFoundError`.
 
 `--detail` (which already-emitted event kinds a renderer shows) is deliberately **not** an engine concept — the engine always emits the full stream; filtering is a `render/attach.py` concern.
 
