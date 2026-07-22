@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -18,6 +19,7 @@ from ddgl.constants import (
     CACHE_TTL_API_JOB_LIST,
     CACHE_TTL_API_PIPELINE,
     CACHE_TTL_API_PIPELINE_LIST,
+    MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
     JobStatus,
     PipelineScope,
@@ -216,9 +218,67 @@ class GitLabClient:
         ttl: float = 0,
         **params: Any,
     ) -> list[T]:
-        """Exhaust pagination and return all items as a flat list."""
-        items: list[T] = []
-        async for page in self._paginate(path, item_factory, ttl=ttl, **params):
+        """Exhaust pagination and return all items as a flat list.
+
+        Fetches page 1 first (to learn the total page count from GitLab's
+        `x-total-pages` header), then fetches the remaining pages
+        concurrently — bounded by `MAX_CONCURRENT_PAGE_FETCHES` — instead of
+        one at a time. Collapses N sequential round-trips into ~2 for large
+        result sets (e.g. a pipeline with hundreds of jobs).
+
+        Raises:
+            PaginationLimitError: total pages exceeds MAX_PAGES.
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status, from any page. If a
+                later page fails after earlier ones succeeded, still-pending
+                page fetches are canceled rather than left to complete
+                unobserved.
+        """
+        first = await self._get_page(path, item_factory, ttl=ttl, page=1, **params)
+        items: list[T] = list(first.items)
+
+        if not first.has_next:
+            return items
+
+        total_pages = first.total_pages
+        if total_pages is None:
+            # No page count available. Not reachable via the normal HTTP
+            # response path (GitLab always reports x-total-pages), but the
+            # per-page cache-hit branch of _get_page synthesizes has_next as
+            # False for a lone cached page — so total_pages is only ever
+            # None here if has_next was somehow still True. Fall back to a
+            # sequential fetch (can't reuse _paginate: it always starts its
+            # own internal page counter at 1, so passing page=first.next_page
+            # into it would collide with its own page= kwarg).
+            page_num = first.next_page
+            pages_fetched = 1  # page 1 already counted
+            while page_num is not None:
+                if pages_fetched >= MAX_PAGES:
+                    raise PaginationLimitError(MAX_PAGES, None)
+                page = await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+                items.extend(page.items)
+                pages_fetched += 1
+                page_num = page.next_page
+            return items
+
+        if total_pages > MAX_PAGES:
+            raise PaginationLimitError(MAX_PAGES, total_pages)
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_PAGE_FETCHES)
+
+        async def _fetch(page_num: int) -> Page[T]:
+            async with semaphore:
+                return await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+
+        tasks = [asyncio.create_task(_fetch(n)) for n in range(2, total_pages + 1)]
+        try:
+            pages = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            raise
+
+        for page in pages:
             items.extend(page.items)
         return items
 
