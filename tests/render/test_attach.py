@@ -82,6 +82,13 @@ class TestEventToText:
         )
         assert event_to_text(e) == "[12:10:00][BEAT]  22/40 jobs, 4 failed"
 
+    def test_poll(self) -> None:
+        e = AttachEvent(
+            kind="poll", ts="2026-07-21T12:10:00+00:00",
+            jobs_total=40, jobs_done=22, failed_jobs=("a", "b"), current_stage="test",
+        )
+        assert event_to_text(e) == "[12:10:00][POLL]  22/40 jobs · 2 failed · test"
+
     def test_switched(self) -> None:
         e = AttachEvent(kind="switched", ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found")
         assert event_to_text(e) == "[12:00:00][WARN]  newer pipeline #2 found"
@@ -207,33 +214,43 @@ class TestRenderLines:
         assert "[PIPE]" in out
         assert "[WARN]" in out
 
-    async def test_rollup_suffix_appended_to_job_line(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """--plain must show totals (completion, stage, failure count)
-        alongside transition messages, not only on dedicated summary
-        lines — a job transition line should carry the same rollup that
-        a heartbeat/snapshot line does."""
+    async def test_poll_summary_follows_all_transitions_in_a_tick(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The engine emits a distinct post-poll summary once the tick's
+        transition burst is complete; transitions themselves stay concise."""
         job = AttachEvent(
             kind="job", ts="2026-07-21T12:00:00+00:00",
             job_name="build", old_status="running", status="success",
             jobs_total=10, jobs_done=4, failed_jobs=("lint",), current_stage="test",
         )
-        await render_lines(_events(job, _RESULT))
+        poll = AttachEvent(
+            kind="poll", ts="2026-07-21T12:00:00+00:00",
+            jobs_total=10, jobs_done=4, failed_jobs=("lint",), current_stage="test",
+        )
+        await render_lines(_events(job, poll, _RESULT))
         out = capsys.readouterr().out
         job_line = next(line for line in out.splitlines() if "[JOB]" in line)
-        assert "4/10 jobs" in job_line
-        assert "1 failed" in job_line
-        assert "test" in job_line
+        poll_line = next(line for line in out.splitlines() if "[POLL]" in line)
+        assert "4/10 jobs" not in job_line
+        assert "1 failed" not in job_line
+        assert "test" not in job_line
+        assert "4/10 jobs" in poll_line
+        assert "1 failed" in poll_line
+        assert "test" in poll_line
 
-    async def test_rollup_suffix_omitted_when_jobs_not_yet_loaded(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """The pre-job-fetch snapshot/pipeline events have jobs_total=None
-        — the rollup suffix must not render a broken 'None/None jobs'."""
-        pipeline_before_jobs_loaded = AttachEvent(
-            kind="pipeline", ts="2026-07-21T12:00:00+00:00", old_status="created", status="running",
+    async def test_minimal_shows_poll_summary_but_not_transition(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        job = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="build", old_status="running", status="success",
         )
-        await render_lines(_events(pipeline_before_jobs_loaded, _RESULT))
+        poll = AttachEvent(kind="poll", ts="2026-07-21T12:00:00+00:00", jobs_total=10, jobs_done=4)
+        await render_lines(_events(job, poll, _RESULT), detail="minimal")
         out = capsys.readouterr().out
-        pipe_line = next(line for line in out.splitlines() if "[PIPE]" in line)
-        assert "None" not in pipe_line
+        assert "[JOB]" not in out
+        assert "[POLL]" in out
 
     async def test_result_line_always_present_regardless_of_detail(
         self, capsys: pytest.CaptureFixture[str]

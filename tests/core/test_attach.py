@@ -173,10 +173,12 @@ class TestAttachHappyPath:
         kinds = [e.kind for e in events]
         # attach() emits TWO snapshots: an early one right after resolving
         # the pipeline (before the — potentially slow — job fetch), then a
-        # full one once jobs are loaded. Within a tick, a pipeline
-        # transition is checked before job transitions — matches tick2
-        # here: pipeline flips before jobs do.
-        assert kinds == ["snapshot", "snapshot", "job", "pipeline", "job", "job", "result"]
+        # full one once jobs are loaded. Every changed tick ends with one
+        # poll rollup; within a tick, a pipeline transition is checked before
+        # job transitions — matches tick2 here: pipeline flips before jobs do.
+        assert kinds == [
+            "snapshot", "snapshot", "job", "poll", "pipeline", "job", "job", "poll", "result"
+        ]
         # Regression: pipeline_id was only ever set explicitly on some event
         # kinds; "job" and "heartbeat" events fell through to the struct's
         # None default because _context() didn't include it. Every event
@@ -346,6 +348,28 @@ class TestAttachFollow:
 
 
 class TestAttachHeartbeat:
+    async def test_emits_one_poll_summary_after_each_changed_tick(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        _mock_resolve(mock_api, pipeline_id=1)
+        jobs_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs")
+        jobs_route.side_effect = [
+            Response(200, json=[_job_payload(10, "created", "a"), _job_payload(11, "created", "b")]),
+            Response(200, json=[_job_payload(10, "running", "a"), _job_payload(11, "created", "b")]),
+            Response(200, json=[_job_payload(10, "success", "a"), _job_payload(11, "success", "b")]),
+        ]
+        pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
+        pipeline_route.side_effect = [
+            Response(200, json=_pipeline_payload(1, "running")),
+            Response(200, json=_pipeline_payload(1, "success")),
+        ]
+
+        events = await _collect(client, ref="main")
+        polls = [e for e in events if e.kind == "poll"]
+        assert len(polls) == 2
+        assert (polls[0].jobs_total, polls[0].jobs_done) == (2, 0)
+        assert (polls[1].jobs_total, polls[1].jobs_done) == (2, 2)
+
     async def test_emits_tally_on_quiet_tick(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
@@ -363,6 +387,7 @@ class TestAttachHeartbeat:
         ]
         events = await _collect(client, ref="main", heartbeat=True)
         assert "heartbeat" in [e.kind for e in events]
+        assert [e.kind for e in events].count("poll") == 1
         beat = next(e for e in events if e.kind == "heartbeat")
         assert (beat.jobs_total, beat.jobs_done) == (1, 0)
         assert beat.ref == "main"
@@ -385,6 +410,7 @@ class TestAttachHeartbeat:
         ]
         events = await _collect(client, ref="main", heartbeat=False)
         assert "heartbeat" not in [e.kind for e in events]
+        assert [e.kind for e in events].count("poll") == 1
 
 
 class TestAttachTimeoutWhileRunning:

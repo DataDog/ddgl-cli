@@ -4,7 +4,7 @@ from typing import Literal
 
 import msgspec
 
-AttachEventKind = Literal["snapshot", "job", "pipeline", "heartbeat", "switched", "result"]
+AttachEventKind = Literal["snapshot", "job", "pipeline", "poll", "heartbeat", "switched", "result"]
 
 
 class AttachEvent(msgspec.Struct):
@@ -16,7 +16,7 @@ class AttachEvent(msgspec.Struct):
     `pipeline_id`, `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`,
     `jobs_done`, `failed_jobs`, and `eta_seconds` are the current *rollup* —
     populated on every event that has a resolved pipeline, not just
-    snapshot/heartbeat. This is deliberate: a renderer (e.g. the live
+    snapshot/poll/heartbeat. This is deliberate: a renderer (e.g. the live
     single-line view) should never need to track cross-event state, or hold
     a Pipeline/Job domain object, just to answer "how many jobs are done
     right now" or "how long has this been running" — the latest event
@@ -45,6 +45,7 @@ class AttachEvent(msgspec.Struct):
                  status, duration (that job's own duration), message (the
                  job's failure_reason, when failed)
     - pipeline:  old_status, status
+    - poll:      the post-poll rollup summary
     - switched:  message (human-readable description of the switch)
     - result:    status, duration (final pipeline elapsed seconds — same
                  value as `pipeline_elapsed` at that point, kept as its own

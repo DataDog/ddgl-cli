@@ -185,11 +185,11 @@ ddgl attach --follow              # switch to a newer pipeline on the ref if one
 | Level | Lines mode | Live mode |
 | --- | --- | --- |
 | `none` | only the final `[FINAL]` line | bare spinner, no text, until the final state |
-| `minimal` | only summary lines (snapshot/heartbeat) | ref + job counts + elapsed time only |
+| `minimal` | only summary lines (snapshot/poll/heartbeat) | ref + job counts + elapsed time only |
 | `normal` (default) | + pipeline transitions, `--follow` rebinds, and job transitions that reach a terminal state | + current stage + ETA |
 | `full` | everything, including in-progress job transitions and failure messages | same as `normal`, but failed jobs are named instead of counted |
 
-At every level above `none`, job/pipeline/switched lines in Lines mode carry the same rollup summary (job counts, failure count, current stage) that dedicated snapshot/heartbeat lines do — so totals stay visible alongside each transition, not only on separate summary lines. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
+At every level above `none`, a changed poll tick prints its transitions first, then one `[POLL]` rollup line (job counts, failure count, current stage). This keeps transition lines concise while giving each completed poll a single summary. On a quiet tick, no line is printed unless `--heartbeat` is set; then it prints `[BEAT]` with the same rollup. `--json` always receives these events in full fidelity.
 
 **Exit codes** follow the GNU `timeout` convention, so shell scripts and CI-babysitting agents can branch on them directly:
 

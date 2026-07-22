@@ -43,12 +43,8 @@ def _final_text(event: AttachEvent) -> str:
     return text
 
 
-def _rollup_suffix(event: AttachEvent) -> str:
-    """Rollup summary appended to job/pipeline/switched lines, so --detail's
-    'summaries' (completion, stage, failure count) show up alongside each
-    transition, not only on dedicated snapshot/heartbeat lines. Omitted
-    entirely when jobs_total is unknown (the pre-job-fetch snapshot only —
-    other kinds always carry a rollup, see AttachEvent's docstring)."""
+def _poll_summary(event: AttachEvent) -> str:
+    """Format the rollup emitted once after a changed poll tick."""
     if event.jobs_total is None:
         return ""
     bits = [f"{event.jobs_done}/{event.jobs_total} jobs"]
@@ -56,7 +52,7 @@ def _rollup_suffix(event: AttachEvent) -> str:
         bits.append(f"{len(event.failed_jobs)} failed")
     if event.current_stage:
         bits.append(event.current_stage)
-    return " · " + " · ".join(bits)
+    return " · ".join(bits)
 
 
 def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
@@ -81,17 +77,19 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
             line += f" ({format_duration(event.duration)})"
         if detail == "full" and event.message:
             line += f" — {event.message}"
-        return line + _rollup_suffix(event)
+        return line
     if event.kind == "pipeline":
-        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}" + _rollup_suffix(event)
+        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
+    if event.kind == "poll":
+        return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
     if event.kind == "heartbeat":
         return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
     if event.kind == "switched":
-        return f"[{ts}]{_tag('WARN')}{event.message}" + _rollup_suffix(event)
+        return f"[{ts}]{_tag('WARN')}{event.message}"
     return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
 
 
-_SUMMARY_KINDS = frozenset({"snapshot", "heartbeat"})
+_SUMMARY_KINDS = frozenset({"snapshot", "poll", "heartbeat"})
 _TERMINAL_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
 
 

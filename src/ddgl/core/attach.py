@@ -251,9 +251,9 @@ async def attach(
 
     Flow: resolve (or wait for) the pipeline -> emit a full snapshot -> poll
     every `interval` seconds (cache-bypassed) -> emit a `pipeline`/`job` event
-    per transition, a `heartbeat` on quiet ticks (if enabled), a `switched`
-    event on follow-rebind -> emit a final `result` event and return once the
-    pipeline is terminal or `timeout` elapses.
+    per transition followed by one `poll` rollup, a `heartbeat` on quiet ticks
+    (if enabled), a `switched` event on follow-rebind -> emit a final `result`
+    event and return once the pipeline is terminal or `timeout` elapses.
 
     `estimator` defaults to NullEstimator (v1 ships no ETA implementation);
     see DurationEstimator's docstring for the seam this leaves for later.
@@ -348,6 +348,7 @@ async def attach(
                     # (e.g. a fast re-push). Don't wait for another tick.
                     yield _result_event(pipeline, jobs, estimator, reason="terminal")
                     return
+                yield AttachEvent(kind="poll", ts=_now(), **_context(pipeline, jobs, estimator))
                 continue
 
         # The main poll fetch: pipeline status + full job list for THIS
@@ -411,7 +412,9 @@ async def attach(
                 )
                 changed = True
 
-        if not changed and heartbeat:
+        if changed:
+            yield AttachEvent(kind="poll", ts=_now(), **ctx)
+        elif heartbeat:
             yield AttachEvent(kind="heartbeat", ts=_now(), **ctx)
 
         pipeline, jobs = fresh_pipeline, fresh_jobs
