@@ -12,7 +12,12 @@ from ddgl.cli._options import CACHE_DIR, pipeline_resolution_options
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
 from ddgl.core.attach import attach
-from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
+from ddgl.exceptions import (
+    ConfigError,
+    GitLabAPIError,
+    NoPipelineFoundError,
+    NotFoundError,
+)
 from ddgl.model.attach import AttachEvent
 from ddgl.render._console import console
 from ddgl.render.attach import render_lines, render_live
@@ -139,7 +144,7 @@ async def _attach(
                     result = await render_live(events)
                 else:
                     result = await render_lines(events, as_json=output_json, detail=detail)
-    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError) as e:
         click.echo(f"Error: {e}", err=True)
         return 2
 
