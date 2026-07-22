@@ -43,12 +43,22 @@ def _final_text(event: AttachEvent) -> str:
     return text
 
 
+_ROLLUP_SUFFIX_KINDS = frozenset({"job", "pipeline", "switched"})
+
+
 def _rollup_suffix(event: AttachEvent) -> str:
     """Rollup summary appended to job/pipeline/switched lines, so --detail's
     'summaries' (completion, stage, failure count) show up alongside each
     transition, not only on dedicated snapshot/heartbeat lines. Omitted
     entirely when jobs_total is unknown (the pre-job-fetch snapshot only —
-    other kinds always carry a rollup, see AttachEvent's docstring)."""
+    other kinds always carry a rollup, see AttachEvent's docstring).
+
+    core/attach.py computes one ctx dict per poll tick and reuses it across
+    every job/pipeline/switched event yielded that tick, so several
+    transitions landing in the same tick produce byte-identical output from
+    this function. render_lines dedupes consecutive repeats of this exact
+    string so the summary shows once per tick, not once per transition —
+    see render_lines' `last_rollup_suffix` tracking."""
     if event.jobs_total is None:
         return ""
     bits = [f"{event.jobs_done}/{event.jobs_total} jobs"]
@@ -59,12 +69,17 @@ def _rollup_suffix(event: AttachEvent) -> str:
     return " · " + " · ".join(bits)
 
 
-def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
+def event_to_text(event: AttachEvent, detail: str = "normal", *, show_rollup: bool = True) -> str:
     """Render a single AttachEvent as one human-readable, agent-greppable line.
 
     Does not decide whether the event should be shown at all — that's a
     --detail *filtering* concern (see _visible_at / render_lines). This only
     formats a given event once the caller has decided to show it.
+
+    show_rollup controls whether a job/pipeline/switched line's rollup
+    suffix (see _rollup_suffix) is included at all — render_lines sets this
+    to False to collapse repeats of the exact same suffix within one poll
+    tick's burst of events. Irrelevant for other kinds.
     """
     ts = _hhmmss(event.ts)
     if event.kind == "snapshot":
@@ -81,13 +96,15 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
             line += f" ({format_duration(event.duration)})"
         if detail == "full" and event.message:
             line += f" — {event.message}"
-        return line + _rollup_suffix(event)
+        return line + (_rollup_suffix(event) if show_rollup else "")
     if event.kind == "pipeline":
-        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}" + _rollup_suffix(event)
+        line = f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
+        return line + (_rollup_suffix(event) if show_rollup else "")
     if event.kind == "heartbeat":
         return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
     if event.kind == "switched":
-        return f"[{ts}]{_tag('WARN')}{event.message}" + _rollup_suffix(event)
+        line = f"[{ts}]{_tag('WARN')}{event.message}"
+        return line + (_rollup_suffix(event) if show_rollup else "")
     return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
 
 
@@ -144,10 +161,18 @@ async def render_lines(
     width by default, which would silently split one event across multiple
     lines).
 
+    Consecutive job/pipeline/switched lines carrying the exact same rollup
+    suffix (see _rollup_suffix) collapse to showing it only on the first —
+    core/attach.py yields several such events per poll tick sharing one ctx
+    dict, so without this the same totals would repeat once per transition
+    instead of once per tick. `last_rollup_suffix` tracks this across the
+    loop; only affects those three kinds (see _ROLLUP_SUFFIX_KINDS).
+
     Returns the final `result` event so the caller can map it to an exit
     code — attach() always ends with one.
     """
     result: AttachEvent | None = None
+    last_rollup_suffix: str | None = None
     async for event in events:
         if event.kind == "result":
             result = event
@@ -158,7 +183,14 @@ async def render_lines(
             continue
         if not _visible_at(event, detail):
             continue
-        console.print(event_to_text(event, detail), highlight=False, markup=False, soft_wrap=True)
+        show_rollup = True
+        if event.kind in _ROLLUP_SUFFIX_KINDS:
+            suffix = _rollup_suffix(event)
+            show_rollup = suffix != last_rollup_suffix
+            last_rollup_suffix = suffix
+        console.print(
+            event_to_text(event, detail, show_rollup=show_rollup), highlight=False, markup=False, soft_wrap=True
+        )
     assert result is not None, "attach() event stream ended without a result event"
     return result
 

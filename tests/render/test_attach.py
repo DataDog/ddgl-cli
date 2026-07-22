@@ -235,6 +235,52 @@ class TestRenderLines:
         pipe_line = next(line for line in out.splitlines() if "[PIPE]" in line)
         assert "None" not in pipe_line
 
+    async def test_rollup_suffix_not_repeated_within_the_same_poll_tick(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """core/attach.py computes one ctx dict per poll tick and reuses it
+        across every job/pipeline event yielded that tick (see _context's
+        call sites) — so several job transitions landing in the same tick
+        carry byte-identical rollup numbers. Only the first line of such a
+        burst should carry the suffix; repeating it on every line is noise,
+        not information, on a pipeline where many jobs finish in one tick."""
+        same_tick_kwargs = {"jobs_total": 10, "jobs_done": 4, "current_stage": "test"}
+        job_a = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="a", old_status="running", status="success", **same_tick_kwargs,
+        )
+        job_b = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="b", old_status="running", status="success", **same_tick_kwargs,
+        )
+        await render_lines(_events(job_a, job_b, _RESULT))
+        out = capsys.readouterr().out
+        job_lines = [line for line in out.splitlines() if "[JOB]" in line]
+        assert len(job_lines) == 2
+        assert "4/10 jobs" in job_lines[0]
+        assert "4/10 jobs" not in job_lines[1]
+
+    async def test_rollup_suffix_reappears_once_numbers_change(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A later tick with genuinely new numbers must still get its own
+        suffix — dedup only collapses immediately-adjacent duplicates."""
+        job_a = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="a", old_status="running", status="success",
+            jobs_total=10, jobs_done=4, current_stage="test",
+        )
+        job_b = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:10+00:00",
+            job_name="b", old_status="running", status="success",
+            jobs_total=10, jobs_done=5, current_stage="test",
+        )
+        await render_lines(_events(job_a, job_b, _RESULT))
+        out = capsys.readouterr().out
+        job_lines = [line for line in out.splitlines() if "[JOB]" in line]
+        assert "4/10 jobs" in job_lines[0]
+        assert "5/10 jobs" in job_lines[1]
+
     async def test_result_line_always_present_regardless_of_detail(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

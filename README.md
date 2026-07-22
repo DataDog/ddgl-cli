@@ -189,7 +189,7 @@ ddgl attach --follow              # switch to a newer pipeline on the ref if one
 | `normal` (default) | + pipeline transitions, `--follow` rebinds, and job transitions that reach a terminal state | + current stage + ETA |
 | `full` | everything, including in-progress job transitions and failure messages | same as `normal`, but failed jobs are named instead of counted |
 
-At every level above `none`, job/pipeline/switched lines in Lines mode carry the same rollup summary (job counts, failure count, current stage) that dedicated snapshot/heartbeat lines do — so totals stay visible alongside each transition, not only on separate summary lines. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
+At every level above `none`, job/pipeline/switched lines in Lines mode carry the same rollup summary (job counts, failure count, current stage) that dedicated snapshot/heartbeat lines do — so totals stay visible alongside each transition, not only on separate summary lines. That summary shows once per poll interval, not once per transition: several jobs finishing in the same poll tick share identical totals, so only the first of that burst gets the suffix, not each one. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
 
 **Exit codes** follow the GNU `timeout` convention, so shell scripts and CI-babysitting agents can branch on them directly:
 
