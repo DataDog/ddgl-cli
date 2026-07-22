@@ -157,20 +157,83 @@ class TestRenderLines:
         decoded = [msgspec.json.decode(line, type=AttachEvent) for line in lines]
         assert decoded == [_SNAPSHOT, _RESULT]
 
-    async def test_detail_none_suppresses_snapshot_and_job(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_detail_none_shows_only_result(self, capsys: pytest.CaptureFixture[str]) -> None:
         await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail="none")
         out = capsys.readouterr().out
         assert "[INFO]" not in out
         assert "[JOB]" not in out
         assert "[BEAT]" not in out
-        assert "[PIPE]" in out
+        assert "[PIPE]" not in out
         assert "[FINAL]" in out
 
-    async def test_detail_minimal_shows_snapshot_but_not_job(self, capsys: pytest.CaptureFixture[str]) -> None:
-        await render_lines(_events(_SNAPSHOT, _JOB, _RESULT), detail="minimal")
+    async def test_detail_minimal_shows_summaries_but_not_job_or_pipeline(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail="minimal")
         out = capsys.readouterr().out
         assert "[INFO]" in out
+        assert "[BEAT]" in out
         assert "[JOB]" not in out
+        assert "[PIPE]" not in out
+
+    async def test_detail_normal_shows_job_only_when_terminal(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """At --detail normal, job transitions are the one kind gated by
+        status: only transitions reaching a terminal state (success/
+        failed/canceled/skipped) are shown — the created→running/
+        running→pending blips that dominate on a large pipeline are not."""
+        in_progress = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="build", old_status="created", status="running",
+        )
+        terminal = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:01+00:00",
+            job_name="build", old_status="running", status="success",
+        )
+        await render_lines(_events(in_progress, terminal, _RESULT), detail="normal")
+        out = capsys.readouterr().out
+        job_lines = [line for line in out.splitlines() if "[JOB]" in line]
+        assert len(job_lines) == 1
+        assert "running→success" in job_lines[0]
+
+    async def test_detail_normal_shows_pipeline_and_switched_unconditionally(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Pipeline transitions and --follow rebinds are rare/low-noise
+        compared to job transitions, so unlike "job" they aren't gated by
+        terminal status at the normal level."""
+        switched = AttachEvent(kind="switched", ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found")
+        await render_lines(_events(_PIPELINE, switched, _RESULT), detail="normal")
+        out = capsys.readouterr().out
+        assert "[PIPE]" in out
+        assert "[WARN]" in out
+
+    async def test_rollup_suffix_appended_to_job_line(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """--plain must show totals (completion, stage, failure count)
+        alongside transition messages, not only on dedicated summary
+        lines — a job transition line should carry the same rollup that
+        a heartbeat/snapshot line does."""
+        job = AttachEvent(
+            kind="job", ts="2026-07-21T12:00:00+00:00",
+            job_name="build", old_status="running", status="success",
+            jobs_total=10, jobs_done=4, failed_jobs=("lint",), current_stage="test",
+        )
+        await render_lines(_events(job, _RESULT))
+        out = capsys.readouterr().out
+        job_line = next(line for line in out.splitlines() if "[JOB]" in line)
+        assert "4/10 jobs" in job_line
+        assert "1 failed" in job_line
+        assert "test" in job_line
+
+    async def test_rollup_suffix_omitted_when_jobs_not_yet_loaded(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The pre-job-fetch snapshot/pipeline events have jobs_total=None
+        — the rollup suffix must not render a broken 'None/None jobs'."""
+        pipeline_before_jobs_loaded = AttachEvent(
+            kind="pipeline", ts="2026-07-21T12:00:00+00:00", old_status="created", status="running",
+        )
+        await render_lines(_events(pipeline_before_jobs_loaded, _RESULT))
+        out = capsys.readouterr().out
+        pipe_line = next(line for line in out.splitlines() if "[PIPE]" in line)
+        assert "None" not in pipe_line
 
     async def test_result_line_always_present_regardless_of_detail(
         self, capsys: pytest.CaptureFixture[str]
@@ -201,18 +264,51 @@ class TestLiveMarkup:
         captured non-interactively, so the 'loading jobs…' mid-run state
         (attach()'s early snapshot) can only be verified at this level."""
         e = AttachEvent(kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running")
-        markup = _live_markup(e)
+        markup = _live_markup(e, "normal")
         assert "None" not in markup
         assert "loading jobs" in markup
 
-    def test_normal_state_shows_counts(self) -> None:
+    def test_normal_state_shows_counts_and_stage_and_eta(self) -> None:
         e = AttachEvent(
             kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running",
             jobs_total=40, jobs_done=18, failed_jobs=("a", "b"),
+            current_stage="test", eta_seconds=90,
         )
-        markup = _live_markup(e)
+        markup = _live_markup(e, "normal")
         assert "18/40 jobs" in markup
         assert "2 failed" in markup
+        assert "test" in markup
+        assert "left" in markup
+
+    def test_detail_none_is_empty(self) -> None:
+        """--detail none in live mode is the bare spinner with no text at
+        all — the only content is the final state, shown separately via
+        _final_renderable once the result event arrives."""
+        e = AttachEvent(
+            kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running",
+            jobs_total=40, jobs_done=18,
+        )
+        assert _live_markup(e, "none") == ""
+
+    def test_detail_minimal_omits_stage_and_eta(self) -> None:
+        e = AttachEvent(
+            kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running",
+            jobs_total=40, jobs_done=18, current_stage="test", eta_seconds=90,
+        )
+        markup = _live_markup(e, "minimal")
+        assert "18/40 jobs" in markup
+        assert "test" not in markup
+        assert "left" not in markup
+
+    def test_detail_full_names_failed_jobs_instead_of_counting(self) -> None:
+        e = AttachEvent(
+            kind="snapshot", ts="x", pipeline_id=1, ref="main", status="running",
+            jobs_total=40, jobs_done=18, failed_jobs=("build:unit", "lint:ruff"),
+        )
+        markup = _live_markup(e, "full")
+        assert "2 failed" not in markup
+        assert "build:unit" in markup
+        assert "lint:ruff" in markup
 
 
 class TestRenderLive:

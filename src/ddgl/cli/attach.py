@@ -37,7 +37,11 @@ _DETAIL_CHOICES = ("none", "minimal", "normal", "full")
 )
 @click.option(
     "--detail", type=click.Choice(_DETAIL_CHOICES), default="normal", show_default=True,
-    help="Content level of event lines. Only affects plain-line output — no effect on --live or --json.",
+    help=(
+        "How much to show: none=final state only, minimal=summaries only, "
+        "normal=summaries + job transitions to terminal states, full=everything. "
+        "Affects --plain and --live; --json always shows everything."
+    ),
 )
 @click.option(
     "--no-wait", is_flag=True, default=False,
@@ -141,7 +145,7 @@ async def _attach(
                     timeout=timeout, cache=cache,
                 )
                 if use_live:
-                    result = await render_live(events)
+                    result = await render_live(events, detail=detail)
                 else:
                     result = await render_lines(events, as_json=output_json, detail=detail)
     except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError) as e:

@@ -180,7 +180,16 @@ ddgl attach --follow              # switch to a newer pipeline on the ref if one
 | **Lines** | stdout isn't a TTY (default), or `--plain` | Append-only, human-readable lines — one per event, always ending in a `[FINAL]` line with the outcome |
 | **JSONL** | `--json` (forced even in a TTY) | One JSON object per event, same information as Lines mode |
 
-`--detail {none,minimal,normal,full}` controls how much shows up in **Lines mode only** (job-level transitions, extra failure detail) — Live mode's single status line and `--json`'s JSONL always include everything. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
+`--detail {none,minimal,normal,full}` controls how much shows up in **Lines and Live modes**; `--json`'s JSONL always includes everything, regardless of `--detail`:
+
+| Level | Lines mode | Live mode |
+| --- | --- | --- |
+| `none` | only the final `[FINAL]` line | bare spinner, no text, until the final state |
+| `minimal` | only summary lines (snapshot/heartbeat) | ref + job counts + elapsed time only |
+| `normal` (default) | + pipeline transitions, `--follow` rebinds, and job transitions that reach a terminal state | + current stage + ETA |
+| `full` | everything, including in-progress job transitions and failure messages | same as `normal`, but failed jobs are named instead of counted |
+
+At every level above `none`, job/pipeline/switched lines in Lines mode carry the same rollup summary (job counts, failure count, current stage) that dedicated snapshot/heartbeat lines do — so totals stay visible alongside each transition, not only on separate summary lines. `--heartbeat` adds a tally line on poll ticks where nothing changed, useful for keeping a long wait visibly alive.
 
 **Exit codes** follow the GNU `timeout` convention, so shell scripts and CI-babysitting agents can branch on them directly:
 

@@ -43,12 +43,28 @@ def _final_text(event: AttachEvent) -> str:
     return text
 
 
+def _rollup_suffix(event: AttachEvent) -> str:
+    """Rollup summary appended to job/pipeline/switched lines, so --detail's
+    'summaries' (completion, stage, failure count) show up alongside each
+    transition, not only on dedicated snapshot/heartbeat lines. Omitted
+    entirely when jobs_total is unknown (the pre-job-fetch snapshot only —
+    other kinds always carry a rollup, see AttachEvent's docstring)."""
+    if event.jobs_total is None:
+        return ""
+    bits = [f"{event.jobs_done}/{event.jobs_total} jobs"]
+    if event.failed_jobs:
+        bits.append(f"{len(event.failed_jobs)} failed")
+    if event.current_stage:
+        bits.append(event.current_stage)
+    return " · " + " · ".join(bits)
+
+
 def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     """Render a single AttachEvent as one human-readable, agent-greppable line.
 
     Does not decide whether the event should be shown at all — that's a
-    --detail *filtering* concern (see _DETAIL_KINDS / render_lines). This
-    only formats a given event once the caller has decided to show it.
+    --detail *filtering* concern (see _visible_at / render_lines). This only
+    formats a given event once the caller has decided to show it.
     """
     ts = _hhmmss(event.ts)
     if event.kind == "snapshot":
@@ -65,25 +81,52 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
             line += f" ({format_duration(event.duration)})"
         if detail == "full" and event.message:
             line += f" — {event.message}"
-        return line
+        return line + _rollup_suffix(event)
     if event.kind == "pipeline":
-        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
+        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}" + _rollup_suffix(event)
     if event.kind == "heartbeat":
         return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
     if event.kind == "switched":
-        return f"[{ts}]{_tag('WARN')}{event.message}"
+        return f"[{ts}]{_tag('WARN')}{event.message}" + _rollup_suffix(event)
     return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
 
 
-# --detail controls which *already-emitted* event kinds get shown — it never
-# changes what the engine emits (see core/attach.py). "result" always shows:
-# it's the self-sufficient final line every mode guarantees (see design doc).
-_DETAIL_KINDS: dict[str, frozenset[str]] = {
-    "none": frozenset({"pipeline", "switched", "result"}),
-    "minimal": frozenset({"snapshot", "pipeline", "switched", "result"}),
-    "normal": frozenset({"snapshot", "pipeline", "job", "switched", "heartbeat", "result"}),
-    "full": frozenset({"snapshot", "pipeline", "job", "switched", "heartbeat", "result"}),
-}
+_SUMMARY_KINDS = frozenset({"snapshot", "heartbeat"})
+_TERMINAL_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
+
+
+def _visible_at(event: AttachEvent, detail: str) -> bool:
+    """Whether `event` should be printed at the given --detail level.
+
+    --detail controls which *already-emitted* events get shown — it never
+    changes what the engine emits (see core/attach.py).
+
+    none:    only the final result — nothing else, ever.
+    minimal: only summary-shaped lines (snapshot/heartbeat) + result.
+    normal:  summaries + pipeline transitions + switched (both rare/
+             low-noise, shown unconditionally) + job transitions, but only
+             the ones reaching a TERMINAL status — job transitions are
+             where nearly all the noise lives on a large pipeline (hundreds
+             of created→running/running→pending blips), so that's the one
+             kind gated by status at this level.
+    full:    everything, unfiltered (current full behavior).
+
+    "result" always shows at every level: it's the one guaranteed
+    self-sufficient line every output mode promises (see the design doc).
+    """
+    if event.kind == "result":
+        return True
+    if detail == "none":
+        return False
+    if event.kind in _SUMMARY_KINDS:
+        return True
+    if detail == "minimal":
+        return False
+    if detail == "full":
+        return True
+    if event.kind in ("pipeline", "switched"):
+        return True
+    return event.status in _TERMINAL_STATUSES  # "job": terminal-only at normal
 
 
 async def render_lines(
@@ -93,17 +136,17 @@ async def render_lines(
 
     as_json=True switches every line to a serialized AttachEvent (JSONL) —
     used for --json, forced even when stdout is a TTY. Otherwise each event
-    is filtered by --detail and rendered via event_to_text. Prints with
-    markup/highlighting disabled (this output must never have its literal
-    "[TAG]" brackets misinterpreted as Rich style markup) and soft_wrap
-    enabled (a long line — e.g. --json's JSONL, or a long job name — must
-    stay exactly one physical line; Rich word-wraps to terminal width by
-    default, which would silently split one event across multiple lines).
+    is filtered by --detail (see _visible_at) and rendered via event_to_text.
+    Prints with markup/highlighting disabled (this output must never have
+    its literal "[TAG]" brackets misinterpreted as Rich style markup) and
+    soft_wrap enabled (a long line — e.g. --json's JSONL, or a long job
+    name — must stay exactly one physical line; Rich word-wraps to terminal
+    width by default, which would silently split one event across multiple
+    lines).
 
     Returns the final `result` event so the caller can map it to an exit
     code — attach() always ends with one.
     """
-    allowed = _DETAIL_KINDS.get(detail, _DETAIL_KINDS["normal"])
     result: AttachEvent | None = None
     async for event in events:
         if event.kind == "result":
@@ -113,7 +156,7 @@ async def render_lines(
                 msgspec.json.encode(event).decode(), highlight=False, markup=False, soft_wrap=True
             )
             continue
-        if event.kind not in allowed:
+        if not _visible_at(event, detail):
             continue
         console.print(event_to_text(event, detail), highlight=False, markup=False, soft_wrap=True)
     assert result is not None, "attach() event stream ended without a result event"
@@ -125,26 +168,41 @@ async def render_lines(
 # ---------------------------------------------------------------------------
 
 
-def _live_markup(event: AttachEvent) -> str:
-    """Build the redrawing single-line status. Every non-result event
-    carries the same rollup fields (see AttachEvent's docstring), so this
-    doesn't need to branch on `.kind` — except jobs_total, which is None on
-    attach()'s first ("attached, jobs not yet loaded") snapshot."""
+def _live_markup(event: AttachEvent, detail: str) -> str:
+    """Build the redrawing single-line status.
+
+    Live mode has no discrete lines to show/hide, so --detail instead scales
+    how much CONTENT is packed into the one continuously-updating line:
+
+    none:    empty — the spinner alone, no text, until the final state (the
+             most faithful reading of "only the final state" for a view
+             that's otherwise always live).
+    minimal: id + ref + job counts + elapsed — the bare "summary" numbers.
+    normal:  + stage + eta (current full behavior).
+    full:    normal, but failed jobs are spelled out by name instead of
+             just a count (mirrors lines-mode's --detail full).
+    """
+    if detail == "none":
+        return ""
+
     bits = [f"[dim]#{event.pipeline_id}[/dim]"]
     if event.ref:
         bits.append(f"[bold]{event.ref}[/bold]")
-    if event.current_stage:
+    if detail != "minimal" and event.current_stage:
         bits.append(f"[italic]{event.current_stage}[/italic]")
     if event.jobs_total is None:
         bits.append("[dim]loading jobs…[/dim]")
     else:
         counts = f"{event.jobs_done}/{event.jobs_total} jobs"
         if event.failed_jobs:
-            counts += f", {len(event.failed_jobs)} failed"
+            if detail == "full":
+                counts += f", failed: {', '.join(event.failed_jobs)}"
+            else:
+                counts += f", {len(event.failed_jobs)} failed"
         bits.append(f"[dim]{counts}[/dim]")
     if event.pipeline_elapsed is not None:
         bits.append(f"[dim]{format_duration(event.pipeline_elapsed)} elapsed[/dim]")
-    if event.eta_seconds is not None:
+    if detail != "minimal" and event.eta_seconds is not None:
         bits.append(f"[dim italic]~{format_duration(event.eta_seconds)} left[/dim italic]")
     return "  " + " · ".join(bits)
 
@@ -174,12 +232,14 @@ def _final_renderable(event: AttachEvent) -> RenderableType:
     return Group(*renderables)
 
 
-async def render_live(events: AsyncIterator[AttachEvent]) -> AttachEvent:
+async def render_live(events: AsyncIterator[AttachEvent], detail: str = "normal") -> AttachEvent:
     """Consume attach()'s event stream as a redrawing single-line TTY view.
 
     A "switched" event (--follow rebind) is additionally printed as a
-    one-off line above the live region — a state change that important
-    shouldn't be silently swallowed by the next redraw.
+    one-off line above the live region, at every --detail level including
+    "none" — a human watching the live view should never be left wondering
+    why the pipeline id silently changed, even if they've asked for minimal
+    ongoing content.
 
     Returns the final `result` event so the caller can map it to an exit
     code — attach() always ends with one.
@@ -193,6 +253,6 @@ async def render_live(events: AsyncIterator[AttachEvent]) -> AttachEvent:
                 result = event
                 live.update(_final_renderable(event))
                 break
-            live.update(Spinner("dots", text=Text.from_markup(_live_markup(event))))
+            live.update(Spinner("dots", text=Text.from_markup(_live_markup(event, detail))))
     assert result is not None, "attach() event stream ended without a result event"
     return result
