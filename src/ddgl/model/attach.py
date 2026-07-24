@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from typing import Literal
+from enum import StrEnum
 
 import msgspec
 
-AttachEventKind = Literal["snapshot", "job", "pipeline", "poll", "heartbeat", "switched", "result"]
+
+class AttachEventKind(StrEnum):
+    SNAPSHOT = "snapshot"
+    JOB = "job"
+    PIPELINE = "pipeline"
+    POLL = "poll"
+    HEARTBEAT = "heartbeat"
+    SWITCHED = "switched"
+    RESULT = "result"
 
 
 class AttachEvent(msgspec.Struct):

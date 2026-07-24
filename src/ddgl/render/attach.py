@@ -9,7 +9,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from ddgl.model.attach import AttachEvent
+from ddgl.model.attach import AttachEvent, AttachEventKind
 from ddgl.render._console import console
 from ddgl.render._styles import format_duration
 
@@ -63,14 +63,14 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     formats a given event once the caller has decided to show it.
     """
     ts = _hhmmss(event.ts)
-    if event.kind == "snapshot":
+    if event.kind == AttachEventKind.SNAPSHOT:
         ref = f" {event.ref}" if event.ref else ""
         # jobs_total is None on attach()'s first ("attached, jobs not yet
         # loaded") snapshot — see AttachEvent's docstring. Must not render
         # as the literal string "None jobs".
         jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
         return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
-    if event.kind == "job":
+    if event.kind == AttachEventKind.JOB:
         old = event.old_status or "new"
         line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
         if event.duration is not None:
@@ -78,18 +78,20 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
         if detail == "full" and event.message:
             line += f" — {event.message}"
         return line
-    if event.kind == "pipeline":
+    if event.kind == AttachEventKind.PIPELINE:
         return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
-    if event.kind == "poll":
+    if event.kind == AttachEventKind.POLL:
         return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
-    if event.kind == "heartbeat":
+    if event.kind == AttachEventKind.HEARTBEAT:
         return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
-    if event.kind == "switched":
+    if event.kind == AttachEventKind.SWITCHED:
         return f"[{ts}]{_tag('WARN')}{event.message}"
     return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
 
 
-_SUMMARY_KINDS = frozenset({"snapshot", "poll", "heartbeat"})
+_SUMMARY_KINDS = frozenset(
+    {AttachEventKind.SNAPSHOT, AttachEventKind.POLL, AttachEventKind.HEARTBEAT}
+)
 _TERMINAL_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
 
 
@@ -112,7 +114,7 @@ def _visible_at(event: AttachEvent, detail: str) -> bool:
     "result" always shows at every level: it's the one guaranteed
     self-sufficient line every output mode promises (see the design doc).
     """
-    if event.kind == "result":
+    if event.kind == AttachEventKind.RESULT:
         return True
     if detail == "none":
         return False
@@ -122,7 +124,7 @@ def _visible_at(event: AttachEvent, detail: str) -> bool:
         return False
     if detail == "full":
         return True
-    if event.kind in ("pipeline", "switched"):
+    if event.kind in (AttachEventKind.PIPELINE, AttachEventKind.SWITCHED):
         return True
     return event.status in _TERMINAL_STATUSES  # "job": terminal-only at normal
 
@@ -147,7 +149,7 @@ async def render_lines(
     """
     result: AttachEvent | None = None
     async for event in events:
-        if event.kind == "result":
+        if event.kind == AttachEventKind.RESULT:
             result = event
         if as_json:
             console.print(
@@ -245,9 +247,9 @@ async def render_live(events: AsyncIterator[AttachEvent], detail: str = "normal"
     result: AttachEvent | None = None
     with Live(console=console, refresh_per_second=8) as live:
         async for event in events:
-            if event.kind == "switched":
+            if event.kind == AttachEventKind.SWITCHED:
                 live.console.print(f"[yellow]⚠[/yellow]  {event.message}")
-            if event.kind == "result":
+            if event.kind == AttachEventKind.RESULT:
                 result = event
                 live.update(_final_renderable(event))
                 break
