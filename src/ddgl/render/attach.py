@@ -63,30 +63,32 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     formats a given event once the caller has decided to show it.
     """
     ts = _hhmmss(event.ts)
-    if event.kind == AttachEventKind.SNAPSHOT:
-        ref = f" {event.ref}" if event.ref else ""
-        # jobs_total is None on attach()'s first ("attached, jobs not yet
-        # loaded") snapshot — see AttachEvent's docstring. Must not render
-        # as the literal string "None jobs".
-        jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
-        return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
-    if event.kind == AttachEventKind.JOB:
-        old = event.old_status or "new"
-        line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
-        if event.duration is not None:
-            line += f" ({format_duration(event.duration)})"
-        if detail == "full" and event.message:
-            line += f" — {event.message}"
-        return line
-    if event.kind == AttachEventKind.PIPELINE:
-        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
-    if event.kind == AttachEventKind.POLL:
-        return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
-    if event.kind == AttachEventKind.HEARTBEAT:
-        return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
-    if event.kind == AttachEventKind.SWITCHED:
-        return f"[{ts}]{_tag('WARN')}{event.message}"
-    return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
+    match event.kind:
+        case AttachEventKind.SNAPSHOT:
+            ref = f" {event.ref}" if event.ref else ""
+            # jobs_total is None on attach()'s first ("attached, jobs not
+            # yet loaded") snapshot — see AttachEvent's docstring. Must not
+            # render as the literal string "None jobs".
+            jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
+            return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
+        case AttachEventKind.JOB:
+            old = event.old_status or "new"
+            line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
+            if event.duration is not None:
+                line += f" ({format_duration(event.duration)})"
+            if detail == "full" and event.message:
+                line += f" — {event.message}"
+            return line
+        case AttachEventKind.PIPELINE:
+            return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
+        case AttachEventKind.POLL:
+            return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
+        case AttachEventKind.HEARTBEAT:
+            return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
+        case AttachEventKind.SWITCHED:
+            return f"[{ts}]{_tag('WARN')}{event.message}"
+        case _:
+            return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
 
 
 _SUMMARY_KINDS = frozenset(
