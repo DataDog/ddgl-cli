@@ -9,14 +9,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 
-from ddgl.cache.cache_config import CacheNS
-from ddgl.constants import (
-    CACHE_TTL_FINISHED_JOB,
-    MAX_CONSECUTIVE_POLL_FAILURES,
-    PipelineStatus,
-)
-from ddgl.core.jobs import JOB_TERMINAL
-from ddgl.core.pipeline import list_pipelines, resolve_pipeline
+from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
+from ddgl.core.jobs import JOB_TERMINAL, cache_terminal_jobs
+from ddgl.core.pipeline import cache_terminal_pipeline, list_pipelines, resolve_pipeline
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
 
@@ -74,37 +69,6 @@ class NullEstimator:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: list[Job]) -> None:
-    """Write terminal-state jobs to the durable object cache.
-
-    Mirrors core/jobs.py's caching rule. Needed here because attach polls via
-    `client.get_all_jobs(..., fresh=True)` directly — a raw client call that,
-    unlike core/jobs.py's wrappers, never writes to the structured cache.
-    """
-    if cache is None:
-        return
-    for job in jobs:
-        if job.status in JOB_TERMINAL:
-            cache[CacheNS.OBJECTS].set(
-                ("jobs", project_id, job.id), job, ttl=CACHE_TTL_FINISHED_JOB
-            )
-
-
-def _cache_terminal_pipeline(cache: Cache | None, project_id: str, pipeline: Pipeline) -> None:
-    """Write a SUCCESS pipeline to the durable object cache.
-
-    Mirrors core/pipeline.py's rule: only SUCCESS is cached (other terminal
-    statuses can still change, e.g. a manual retry). See _cache_terminal_jobs
-    for why attach needs its own copy of this write.
-    """
-    if cache is None:
-        return
-    if pipeline.status == PipelineStatus.SUCCESS:
-        cache[CacheNS.OBJECTS].set(
-            ("pipelines", project_id, pipeline.id), pipeline, ttl=CACHE_TTL_FINISHED_JOB
-        )
 
 
 def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
@@ -345,7 +309,7 @@ async def _attach_events(
     )
 
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
-    _cache_terminal_jobs(cache, project_id, jobs)
+    cache_terminal_jobs(cache, project_id, jobs)
 
     ctx = _context(pipeline, jobs, estimator)
     logger.info(
@@ -388,8 +352,8 @@ async def _attach_events(
                     newer = None
             if newer is not None:
                 logger.info("attach: following newer pipeline %d (was %d)", newer.id, pipeline.id)
-                _cache_terminal_jobs(cache, project_id, newer_jobs)
-                _cache_terminal_pipeline(cache, project_id, newer)
+                cache_terminal_jobs(cache, project_id, newer_jobs)
+                cache_terminal_pipeline(cache, project_id, newer)
                 yield AttachEvent(
                     kind="switched",
                     ts=_now(),
@@ -433,8 +397,8 @@ async def _attach_events(
             continue
         consecutive_failures = 0
 
-        _cache_terminal_pipeline(cache, project_id, fresh_pipeline)
-        _cache_terminal_jobs(cache, project_id, fresh_jobs)
+        cache_terminal_pipeline(cache, project_id, fresh_pipeline)
+        cache_terminal_jobs(cache, project_id, fresh_jobs)
 
         ctx = _context(fresh_pipeline, fresh_jobs, estimator)
         changed = False

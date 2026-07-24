@@ -20,6 +20,22 @@ from ddgl.model.pipeline import Pipeline
 logger = logging.getLogger("ddgl.core.pipeline")
 
 
+def cache_terminal_pipeline(cache: Cache | None, project_id: str, pipeline: Pipeline) -> None:
+    """Write a SUCCESS pipeline to the durable object cache.
+
+    Only SUCCESS is cached — other terminal statuses can still change
+    (e.g. a manual retry).
+    """
+    if cache is None:
+        return
+    if pipeline.status == PipelineStatus.SUCCESS:
+        cache[CacheNS.OBJECTS].set(
+            ("pipelines", project_id, pipeline.id),
+            pipeline,
+            ttl=CACHE_TTL_FINISHED_JOB,
+        )
+
+
 async def get_pipeline(
     client: GitLabClient,
     pipeline_id: int,
@@ -39,14 +55,7 @@ async def get_pipeline(
 
     logger.debug("fetching pipeline %d from API", pipeline_id)
     pipeline = await client.get_pipeline(pipeline_id)
-
-    if cache is not None and pipeline.status == PipelineStatus.SUCCESS:
-        cache[CacheNS.OBJECTS].set(
-            ("pipelines", project_id, pipeline_id),
-            pipeline,
-            ttl=CACHE_TTL_FINISHED_JOB,
-        )
-
+    cache_terminal_pipeline(cache, project_id, pipeline)
     return pipeline
 
 
@@ -105,14 +114,8 @@ async def list_pipelines(
     page = await client.fetch_pipelines(ref=ref, per_page=count, scope=scope, fresh=fresh)
     pipelines = page.items
 
-    if cache is not None:
-        for p in pipelines:
-            if p.status == PipelineStatus.SUCCESS:
-                cache[CacheNS.OBJECTS].set(
-                    ("pipelines", project_id, p.id),
-                    p,
-                    ttl=CACHE_TTL_FINISHED_JOB,
-                )
+    for p in pipelines:
+        cache_terminal_pipeline(cache, project_id, p)
 
     return pipelines
 
