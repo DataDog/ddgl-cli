@@ -346,6 +346,35 @@ class TestAttachFollow:
         assert events[-1].pipeline_id == 2
         assert events[-1].status == "success"
 
+    async def test_follow_bypasses_pipeline_list_cache(
+        self, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        list_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines")
+        list_route.side_effect = [
+            Response(200, json=[_pipeline_payload(1, "running")]),
+            Response(200, json=[_pipeline_payload(2, "success", ref="main")]),
+        ]
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[_job_payload(10, "running", "a")])
+        )
+        real_get_all_jobs = GitLabClient.get_all_jobs
+
+        async def get_all_jobs(pipeline_id: int, **kwargs: Any) -> Any:
+            if pipeline_id == 2:
+                return [Job(id=20, name="a", stage="test", status=JobStatus.SUCCESS)]
+            return await real_get_all_jobs(cached_client, pipeline_id, **kwargs)
+
+        async def get_pipeline(pipeline_id: int, **kwargs: Any) -> Pipeline:
+            return Pipeline(id=pipeline_id, ref="main", status=PipelineStatus.SUCCESS)
+
+        async with GitLabClient(TEST_CONFIG, cache=FakeCache()) as cached_client:
+            monkeypatch.setattr(cached_client, "get_all_jobs", get_all_jobs)
+            monkeypatch.setattr(cached_client, "get_pipeline", get_pipeline)
+            events = await _collect(cached_client, ref="main", follow=True)
+
+        assert next(e for e in events if e.kind == "switched").pipeline_id == 2
+        assert list_route.call_count == 2
+
 
 class TestAttachHeartbeat:
     async def test_emits_one_poll_summary_after_each_changed_tick(
@@ -429,7 +458,6 @@ class TestAttachTimeoutWhileRunning:
         assert result.kind == "result"
         assert result.reason == "timeout"
         assert result.status == "running"
-
 
 class TestAttachCaching:
     async def test_polls_bypass_cache_and_write_terminal_jobs(

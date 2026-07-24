@@ -356,6 +356,8 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        *,
+        fresh: bool = False,
     ) -> Page[Pipeline]:
         """Fetch a single page of pipelines."""
         logger.info("Fetching pipelines (ref=%s)", ref or "all")
@@ -366,7 +368,10 @@ class GitLabClient:
         if scope is not None:
             params["scope"] = scope
         return await self._get_page(
-            f"{base}/pipelines", Pipeline.from_api, ttl=CACHE_TTL_API_PIPELINE_LIST, **params
+            f"{base}/pipelines",
+            Pipeline.from_api,
+            ttl=0 if fresh else CACHE_TTL_API_PIPELINE_LIST,
+            **params,
         )
 
     async def iter_pipelines(

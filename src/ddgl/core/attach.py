@@ -202,7 +202,9 @@ async def _resolve_or_wait(
     those represent a real failure to start, not something to wait out.
     """
     try:
-        return await resolve_pipeline(client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache)
+        return await resolve_pipeline(
+            client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
+        )
     except NoPipelineFoundError:
         if not wait_for_start:
             raise
@@ -213,7 +215,9 @@ async def _resolve_or_wait(
         sleep_for = interval if deadline is None else min(interval, deadline - time.monotonic())
         await asyncio.sleep(max(sleep_for, 0))
         try:
-            return await resolve_pipeline(client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache)
+            return await resolve_pipeline(
+                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
+            )
         except NoPipelineFoundError:
             continue
 
@@ -222,7 +226,7 @@ async def _find_newer_pipeline(
     client: GitLabClient, ref: str, current_id: int, *, cache: Cache | None
 ) -> Pipeline | None:
     """Return a pipeline for `ref` newer than `current_id`, or None."""
-    candidates = await list_pipelines(client, ref, count=5, cache=cache)
+    candidates = await list_pipelines(client, ref, count=5, cache=cache, fresh=True)
     if not candidates:
         return None
     newest = max(candidates, key=lambda p: p.id)
@@ -261,7 +265,6 @@ async def attach(
     project_id = client._config.project_id or ""
     estimator = estimator or NullEstimator()
     deadline = time.monotonic() + timeout if timeout is not None else None
-
     pipeline = await _resolve_or_wait(
         client, ref=ref, pipeline_id=pipeline_id, depth=depth,
         wait_for_start=wait_for_start, deadline=deadline, interval=interval, cache=cache,
