@@ -22,7 +22,8 @@ from ddgl.constants import (
     MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
     RETRY_ATTEMPTS,
-    RETRY_BACKOFF_SECONDS,
+    RETRY_BACKOFF_INITIAL_SECONDS,
+    RETRY_BACKOFF_MULTIPLIER,
     JobStatus,
     PipelineScope,
 )
@@ -43,6 +44,11 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 logger = logging.getLogger("ddgl.http")
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff delay before the given 0-indexed retry attempt."""
+    return RETRY_BACKOFF_INITIAL_SECONDS * (RETRY_BACKOFF_MULTIPLIER**attempt)
 
 
 def _retry_after_seconds(resp: httpx.Response) -> float | None:
@@ -122,7 +128,7 @@ class GitLabClient:
                 last_exc = exc
                 if is_last_attempt:
                     raise
-                delay = RETRY_BACKOFF_SECONDS[attempt]
+                delay = _backoff_delay(attempt)
                 logger.warning(
                     "GET %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
                     path, exc, delay, attempt + 2, RETRY_ATTEMPTS,
@@ -133,7 +139,7 @@ class GitLabClient:
             if resp.status_code not in RETRYABLE_STATUS_CODES or is_last_attempt:
                 return resp
 
-            delay = _retry_after_seconds(resp) or RETRY_BACKOFF_SECONDS[attempt]
+            delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
             logger.warning(
                 "GET %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
                 path, resp.status_code, delay, attempt + 2, RETRY_ATTEMPTS,

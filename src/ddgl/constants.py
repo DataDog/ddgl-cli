@@ -11,7 +11,8 @@ MAX_PAGES = 50
 MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
 
 RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client GET call
-RETRY_BACKOFF_SECONDS = (0.5, 1.5)  # delay before retry 1, retry 2 (len == RETRY_ATTEMPTS - 1)
+RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1
+RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by this
 
 # attach()'s poll loop: give up after this many CONSECUTIVE poll ticks fail
 # (even after the client's own per-call retries are exhausted), rather than
