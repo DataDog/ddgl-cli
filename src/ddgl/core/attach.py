@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -131,16 +130,17 @@ async def _resolve_or_wait(
     pipeline_id: int | None,
     depth: int,
     wait_for_start: bool,
-    deadline: float | None,
     interval: float,
     cache: Cache | None,
-) -> Pipeline | None:
+) -> Pipeline:
     """Resolve the target pipeline, waiting for one to appear if needed.
 
-    Returns None if `wait_for_start` is True and no pipeline appeared before
-    `deadline`. Propagates NoPipelineFoundError when `wait_for_start` is False,
-    and propagates any other exception (NotFoundError, ConfigError) always —
-    those represent a real failure to start, not something to wait out.
+    Propagates NoPipelineFoundError immediately when `wait_for_start` is
+    False, and propagates any other exception (NotFoundError, ConfigError)
+    always — those represent a real failure to start, not something to wait
+    out. When `wait_for_start` is True, waits indefinitely for a pipeline to
+    appear; `attach()`'s `asyncio.timeout` is what bounds this wait, the
+    same as it bounds every other await in the poll loop below.
     """
     try:
         return await resolve_pipeline(
@@ -151,10 +151,7 @@ async def _resolve_or_wait(
             raise
 
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
-            return None
-        sleep_for = interval if deadline is None else min(interval, deadline - time.monotonic())
-        await asyncio.sleep(max(sleep_for, 0))
+        await asyncio.sleep(interval)
         try:
             return await resolve_pipeline(
                 client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
@@ -188,7 +185,6 @@ async def attach(
     cache: Cache | None = None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout."""
-    deadline = time.monotonic() + timeout if timeout is not None else None
     last_event: AttachEvent | None = None
     try:
         async with asyncio.timeout(timeout):
@@ -201,7 +197,6 @@ async def attach(
                 heartbeat=heartbeat,
                 wait_for_start=wait_for_start,
                 follow=follow,
-                deadline=deadline,
                 cache=cache,
             ):
                 last_event = event
@@ -220,7 +215,6 @@ async def _attach_events(
     heartbeat: bool,
     wait_for_start: bool,
     follow: bool,
-    deadline: float | None,
     cache: Cache | None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
@@ -234,15 +228,17 @@ async def _attach_events(
     per transition followed by one `poll` rollup, a `heartbeat` on quiet ticks
     (if enabled), a `switched` event on follow-rebind -> emit a final `result`
     event and return once the pipeline is terminal or `timeout` elapses.
+
+    There is no manual deadline-tracking anywhere in this function — every
+    await here is bounded by `attach()`'s `asyncio.timeout`, which cancels
+    us (converted to TimeoutError, caught in `attach()`) if `timeout`
+    elapses. That's the sole timeout mechanism the engine relies on.
     """
     project_id = client._config.project_id or ""
     pipeline = await _resolve_or_wait(
         client, ref=ref, pipeline_id=pipeline_id, depth=depth,
-        wait_for_start=wait_for_start, deadline=deadline, interval=interval, cache=cache,
+        wait_for_start=wait_for_start, interval=interval, cache=cache,
     )
-    if pipeline is None:
-        yield AttachEvent(kind="result", ts=_now(), reason="timeout")
-        return
 
     # Emit an early snapshot immediately — before the job list fetch below,
     # which can take a long time on a pipeline with hundreds of jobs (even
@@ -279,12 +275,7 @@ async def _attach_events(
     consecutive_failures = 0
 
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
-            yield _result_event(pipeline, jobs, reason="timeout")
-            return
-
-        sleep_for = interval if deadline is None else min(interval, deadline - time.monotonic())
-        await asyncio.sleep(max(sleep_for, 0))
+        await asyncio.sleep(interval)
 
         if follow:
             # Opportunistic: a failure here just means "no follow this tick"
