@@ -15,6 +15,20 @@ class AttachEventKind(StrEnum):
     RESULT = "result"
 
 
+class DetailLevel(StrEnum):
+    """How much of attach()'s event stream a renderer shows.
+
+    none=final state only, minimal=summaries only, normal=summaries + job
+    transitions to terminal states, full=everything. See render/attach.py's
+    _visible_at and _live_markup for how each level is applied.
+    """
+
+    NONE = "none"
+    MINIMAL = "minimal"
+    NORMAL = "normal"
+    FULL = "full"
+
+
 class AttachEvent(msgspec.Struct):
     """A single event emitted by the `ddgl attach` engine.
 

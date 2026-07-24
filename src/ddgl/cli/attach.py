@@ -19,11 +19,11 @@ from ddgl.exceptions import (
     NoPipelineFoundError,
     NotFoundError,
 )
-from ddgl.model.attach import AttachEvent
+from ddgl.model.attach import AttachEvent, DetailLevel
 from ddgl.render._console import console
 from ddgl.render.attach import render_lines, render_live
 
-_DETAIL_CHOICES = ("none", "minimal", "normal", "full")
+_DETAIL_CHOICES = tuple(level.value for level in DetailLevel)
 
 
 @click.command()
