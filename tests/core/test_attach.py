@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -13,7 +12,7 @@ from httpx import Response
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.core.attach import DurationEstimator, NullEstimator, _current_stage, attach
+from ddgl.core.attach import _current_stage, attach
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
 from ddgl.model.job import Job
@@ -23,22 +22,6 @@ from ._stubs import TEST_CONFIG, FakeCache
 
 _PROJECT_ID = TEST_CONFIG.project_id
 _ENCODED_PROJECT = _PROJECT_ID.replace("/", "%2F")
-
-# ---------------------------------------------------------------------------
-# NullEstimator
-# ---------------------------------------------------------------------------
-
-
-class TestNullEstimator:
-    def test_returns_none(self) -> None:
-        estimator = NullEstimator()
-        pipeline = Pipeline(id=1, ref="main", status=PipelineStatus.RUNNING)
-        jobs = [Job(id=1, name="build", stage="build", status=JobStatus.RUNNING)]
-        assert estimator.estimate_remaining(pipeline, jobs) is None
-
-    def test_satisfies_protocol(self) -> None:
-        assert isinstance(NullEstimator(), DurationEstimator)
-
 
 # ---------------------------------------------------------------------------
 # _current_stage — "oldest stage still holding incomplete jobs"
@@ -89,17 +72,6 @@ class TestCurrentStage:
             _job(20, "test", JobStatus.SUCCESS),
         ]
         assert _current_stage(jobs) == "build"
-
-
-class _FakeEstimator:
-    """Test-only estimator: always predicts a fixed remaining duration.
-
-    Local to this test module — not a production stub — matching the
-    codebase's convention of not sharing fakes across production imports.
-    """
-
-    def estimate_remaining(self, pipeline: Pipeline, jobs: list[Job]) -> timedelta | None:
-        return timedelta(seconds=42)
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +186,10 @@ class TestAttachHappyPath:
         assert result.failed_jobs == ()
         assert result.ref == "main"
 
-    async def test_eta_seconds_none_by_default(
+    async def test_eta_seconds_always_none(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
-        """No estimator passed -> NullEstimator -> eta_seconds stays None."""
+        """v1 ships no ETA estimation — eta_seconds always stays None."""
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
             return_value=Response(200, json=[_pipeline_payload(1, "success")])
         )
@@ -226,21 +198,6 @@ class TestAttachHappyPath:
         )
         events = await _collect(client, ref="main")
         assert all(e.eta_seconds is None for e in events)
-
-    async def test_eta_seconds_populated_from_custom_estimator(
-        self, client: GitLabClient, mock_api: respx.MockRouter
-    ) -> None:
-        """A real estimator's value flows through every event via _context()."""
-        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
-            return_value=Response(200, json=[_pipeline_payload(1, "success")])
-        )
-        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
-            return_value=Response(200, json=[_job_payload(10, "success", "a")])
-        )
-        events = await _collect(client, ref="main", estimator=_FakeEstimator())
-        assert events[0].eta_seconds is None  # early snapshot: jobs not loaded, no context yet
-        assert events[1].eta_seconds == 42.0  # full snapshot
-        assert events[-1].eta_seconds == 42.0  # result
 
 
 class TestAttachFailure:

@@ -23,9 +23,8 @@ class AttachEvent(msgspec.Struct):
     always has the answer. `current_stage` is a heuristic: the OLDEST stage
     that still has an incomplete job (the bottleneck), approximated by each
     stage's minimum job ID since GitLab returns jobs newest-ID-first, not in
-    stage order — not an authoritative GitLab concept. `eta_seconds` is None
-    unless an estimator was passed to attach() (v1 ships none — see
-    core/attach.py's DurationEstimator seam).
+    stage order — not an authoritative GitLab concept. `eta_seconds` is
+    always None — v1 ships no ETA estimation.
 
     Exceptions to "every event has the rollup": attach() emits TWO
     `snapshot` events. The first fires immediately after resolving the

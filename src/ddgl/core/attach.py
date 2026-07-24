@@ -4,8 +4,8 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -22,40 +22,6 @@ if TYPE_CHECKING:
     from ddgl.model.pipeline import Pipeline
 
 logger = logging.getLogger("ddgl.core.attach")
-
-# ---------------------------------------------------------------------------
-# ETA seam
-# ---------------------------------------------------------------------------
-#
-# `attach`'s live view has a slot for "time remaining", but there is no ETA
-# field in the GitLab API. v1 ships no estimation logic at all — just this
-# protocol and a no-op implementation — so the slot renders empty. A future
-# estimator (preferred: backed by Datadog CI Visibility historical durations,
-# rather than querying GitLab pipeline history) can be wired in without any
-# change to the attach engine or renderers.
-
-
-@runtime_checkable
-class DurationEstimator(Protocol):
-    """Estimates time remaining for a running pipeline.
-
-    Implementations may use any signal (historical durations, per-job
-    critical path, etc.). Return None when no estimate is available.
-    """
-
-    def estimate_remaining(
-        self, pipeline: Pipeline, jobs: list[Job]
-    ) -> timedelta | None: ...
-
-
-class NullEstimator:
-    """No-op estimator. Always returns None (v1: no ETA implementation)."""
-
-    def estimate_remaining(
-        self, pipeline: Pipeline, jobs: list[Job]
-    ) -> timedelta | None:
-        return None
-
 
 # ---------------------------------------------------------------------------
 # attach() engine
@@ -105,15 +71,13 @@ def _current_stage(jobs: list[Job]) -> str | None:
     return min(candidates, key=lambda s: min_id_by_stage[s])
 
 
-def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) -> dict[str, object]:
+def _context(pipeline: Pipeline, jobs: list[Job]) -> dict[str, object]:
     """Rollup fields attached to every event (see AttachEvent's docstring).
 
-    Calls `estimator` here — not in the renderer — because this is where
-    real Pipeline/Job domain objects exist. Renderers only ever see the
-    resulting `eta_seconds` field on the event, never the estimator itself.
+    `eta_seconds` is always None — v1 ships no ETA estimation (see
+    AttachEvent.eta_seconds' docstring).
     """
     total, done, failed = _rollup(jobs)
-    remaining = estimator.estimate_remaining(pipeline, jobs)
     elapsed = pipeline.elapsed
     return {
         "pipeline_id": pipeline.id,
@@ -123,13 +87,11 @@ def _context(pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator) 
         "jobs_total": total,
         "jobs_done": done,
         "failed_jobs": failed,
-        "eta_seconds": remaining.total_seconds() if remaining is not None else None,
+        "eta_seconds": None,
     }
 
 
-def _result_event(
-    pipeline: Pipeline, jobs: list[Job], estimator: DurationEstimator, *, reason: str
-) -> AttachEvent:
+def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> AttachEvent:
     elapsed = pipeline.elapsed
     return AttachEvent(
         kind="result",
@@ -137,7 +99,7 @@ def _result_event(
         status=str(pipeline.status),
         duration=elapsed.total_seconds() if elapsed is not None else None,
         reason=reason,
-        **_context(pipeline, jobs, estimator),  # includes pipeline_id
+        **_context(pipeline, jobs),  # includes pipeline_id
     )
 
 
@@ -224,7 +186,6 @@ async def attach(
     follow: bool = False,
     timeout: float | None = None,
     cache: Cache | None = None,
-    estimator: DurationEstimator | None = None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout."""
     deadline = time.monotonic() + timeout if timeout is not None else None
@@ -242,7 +203,6 @@ async def attach(
                 follow=follow,
                 deadline=deadline,
                 cache=cache,
-                estimator=estimator,
             ):
                 last_event = event
                 yield event
@@ -262,7 +222,6 @@ async def _attach_events(
     follow: bool,
     deadline: float | None,
     cache: Cache | None,
-    estimator: DurationEstimator | None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
 
@@ -275,12 +234,8 @@ async def _attach_events(
     per transition followed by one `poll` rollup, a `heartbeat` on quiet ticks
     (if enabled), a `switched` event on follow-rebind -> emit a final `result`
     event and return once the pipeline is terminal or `timeout` elapses.
-
-    `estimator` defaults to NullEstimator (v1 ships no ETA implementation);
-    see DurationEstimator's docstring for the seam this leaves for later.
     """
     project_id = client._config.project_id or ""
-    estimator = estimator or NullEstimator()
     pipeline = await _resolve_or_wait(
         client, ref=ref, pipeline_id=pipeline_id, depth=depth,
         wait_for_start=wait_for_start, deadline=deadline, interval=interval, cache=cache,
@@ -311,21 +266,21 @@ async def _attach_events(
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     cache_terminal_jobs(cache, project_id, jobs)
 
-    ctx = _context(pipeline, jobs, estimator)
+    ctx = _context(pipeline, jobs)
     logger.info(
         "attach: loaded %d jobs for pipeline %d (%s)", ctx["jobs_total"], pipeline.id, pipeline.status
     )
     yield AttachEvent(kind="snapshot", ts=_now(), status=str(pipeline.status), **ctx)  # ctx includes pipeline_id
 
     if pipeline.is_finished:
-        yield _result_event(pipeline, jobs, estimator, reason="terminal")
+        yield _result_event(pipeline, jobs, reason="terminal")
         return
 
     consecutive_failures = 0
 
     while True:
         if deadline is not None and time.monotonic() >= deadline:
-            yield _result_event(pipeline, jobs, estimator, reason="timeout")
+            yield _result_event(pipeline, jobs, reason="timeout")
             return
 
         sleep_for = interval if deadline is None else min(interval, deadline - time.monotonic())
@@ -359,15 +314,15 @@ async def _attach_events(
                     ts=_now(),
                     message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
                             f"switching from #{pipeline.id}",
-                    **_context(newer, newer_jobs, estimator),  # includes pipeline_id (= newer.id)
+                    **_context(newer, newer_jobs),  # includes pipeline_id (= newer.id)
                 )
                 pipeline, jobs = newer, newer_jobs
                 if pipeline.is_finished:
                     # The pipeline we just switched to may already be done
                     # (e.g. a fast re-push). Don't wait for another tick.
-                    yield _result_event(pipeline, jobs, estimator, reason="terminal")
+                    yield _result_event(pipeline, jobs, reason="terminal")
                     return
-                yield AttachEvent(kind="poll", ts=_now(), **_context(pipeline, jobs, estimator))
+                yield AttachEvent(kind="poll", ts=_now(), **_context(pipeline, jobs))
                 continue
 
         # The main poll fetch: pipeline status + full job list for THIS
@@ -400,7 +355,7 @@ async def _attach_events(
         cache_terminal_pipeline(cache, project_id, fresh_pipeline)
         cache_terminal_jobs(cache, project_id, fresh_jobs)
 
-        ctx = _context(fresh_pipeline, fresh_jobs, estimator)
+        ctx = _context(fresh_pipeline, fresh_jobs)
         changed = False
 
         if fresh_pipeline.status != pipeline.status:
@@ -440,5 +395,5 @@ async def _attach_events(
 
         if pipeline.is_finished:
             logger.info("attach: pipeline %d reached terminal status %s", pipeline.id, pipeline.status)
-            yield _result_event(pipeline, jobs, estimator, reason="terminal")
+            yield _result_event(pipeline, jobs, reason="terminal")
             return
