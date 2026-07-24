@@ -36,29 +36,23 @@ class AttachEvent(msgspec.Struct):
     on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
 
     `pipeline_id`, `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`,
-    `jobs_done`, `failed_jobs`, and `eta_seconds` are the current *rollup* —
-    populated on every event that has a resolved pipeline, not just
-    snapshot/poll/heartbeat. This is deliberate: a renderer (e.g. the live
-    single-line view) should never need to track cross-event state, or hold
-    a Pipeline/Job domain object, just to answer "how many jobs are done
-    right now" or "how long has this been running" — the latest event
-    always has the answer. `current_stage` is a heuristic: the OLDEST stage
-    that still has an incomplete job (the bottleneck), approximated by each
-    stage's minimum job ID since GitLab returns jobs newest-ID-first, not in
-    stage order — not an authoritative GitLab concept. `eta_seconds` is
-    always None — v1 ships no ETA estimation.
+    `jobs_done`, `failed_jobs`, and `eta_seconds` are a *rollup* of the
+    latest known pipeline/job state, so a renderer (e.g. the live
+    single-line view) never needs to track cross-event state just to answer
+    "how many jobs are done" or "how long has this been running". Most
+    events carry the full rollup — two exceptions: attach()'s very first
+    `snapshot` (emitted before the job list is fetched, which can be slow
+    on a pipeline with hundreds of jobs) has `jobs_total`/`jobs_done`/
+    `failed_jobs`/`current_stage` still at their None/() defaults — treat
+    `jobs_total is None` as "still loading", not zero jobs. The
+    wait-for-start-timeout `result` event (no pipeline was ever resolved)
+    has no rollup at all — `pipeline_id` is also None there.
 
-    Exceptions to "every event has the rollup": attach() emits TWO
-    `snapshot` events. The first fires immediately after resolving the
-    pipeline, before the job list is fetched (which can be slow on a
-    pipeline with hundreds of jobs) — its `jobs_total`/`jobs_done`/
-    `failed_jobs`/`current_stage` are all still at their None/() defaults,
-    since GitLab has no job-count endpoint (job counts are only knowable by
-    listing jobs). The second snapshot, once jobs are loaded, has the full
-    rollup like every subsequent event. Renderers must treat
-    `jobs_total is None` as "still loading", not as zero jobs. Separately,
-    the wait-for-start-timeout `result` event (no pipeline was ever
-    resolved) has no rollup at all — pipeline_id is also None there.
+    `current_stage` is a heuristic: the OLDEST stage that still has an
+    incomplete job (the bottleneck), approximated by each stage's minimum
+    job ID since GitLab returns jobs newest-ID-first, not in stage order —
+    not an authoritative GitLab concept. `eta_seconds` is always None — v1
+    ships no ETA estimation.
 
     Kind-specific fields, otherwise unset:
     - job:       job_id, job_name, job_stage (that job's own stage — distinct
