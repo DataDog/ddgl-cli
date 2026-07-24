@@ -8,6 +8,7 @@ import pytest
 
 from ddgl.model.attach import (
     AttachEvent,
+    DetailLevel,
     HeartbeatEvent,
     JobEvent,
     PipelineEvent,
@@ -66,13 +67,13 @@ class TestEventToText:
         e = JobEvent(ts="2026-07-21T12:00:00+00:00",
             job_id=1, job_stage="test", job_name="unit", old_status="running", status="failed", message="script_failure",
         )
-        assert "script_failure" not in event_to_text(e, detail="normal")
+        assert "script_failure" not in event_to_text(e, detail=DetailLevel.NORMAL)
 
     def test_job_message_shown_at_full_detail(self) -> None:
         e = JobEvent(ts="2026-07-21T12:00:00+00:00",
             job_id=1, job_stage="test", job_name="unit", old_status="running", status="failed", message="script_failure",
         )
-        assert "script_failure" in event_to_text(e, detail="full")
+        assert "script_failure" in event_to_text(e, detail=DetailLevel.FULL)
 
     def test_pipeline(self) -> None:
         e = PipelineEvent(ts="2026-07-21T12:31:57+00:00", old_status="running", status="failed")
@@ -164,7 +165,7 @@ class TestRenderLines:
         assert decoded == expected
 
     async def test_detail_none_shows_only_result(self, capsys: pytest.CaptureFixture[str]) -> None:
-        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail="none")
+        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail=DetailLevel.NONE)
         out = capsys.readouterr().out
         assert "[INFO]" not in out
         assert "[JOB]" not in out
@@ -175,7 +176,7 @@ class TestRenderLines:
     async def test_detail_minimal_shows_summaries_but_not_job_or_pipeline(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail="minimal")
+        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail=DetailLevel.MINIMAL)
         out = capsys.readouterr().out
         assert "[INFO]" in out
         assert "[BEAT]" in out
@@ -193,7 +194,7 @@ class TestRenderLines:
         terminal = JobEvent(ts="2026-07-21T12:00:01+00:00",
             job_id=1, job_stage="test", job_name="build", old_status="running", status="success",
         )
-        await render_lines(_events(in_progress, terminal, _RESULT), detail="normal")
+        await render_lines(_events(in_progress, terminal, _RESULT), detail=DetailLevel.NORMAL)
         out = capsys.readouterr().out
         job_lines = [line for line in out.splitlines() if "[JOB]" in line]
         assert len(job_lines) == 1
@@ -206,7 +207,7 @@ class TestRenderLines:
         compared to job transitions, so unlike "job" they aren't gated by
         terminal status at the normal level."""
         switched = SwitchedEvent(ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found")
-        await render_lines(_events(_PIPELINE, switched, _RESULT), detail="normal")
+        await render_lines(_events(_PIPELINE, switched, _RESULT), detail=DetailLevel.NORMAL)
         out = capsys.readouterr().out
         assert "[PIPE]" in out
         assert "[WARN]" in out
@@ -241,7 +242,7 @@ class TestRenderLines:
             job_id=1, job_stage="test", job_name="build", old_status="running", status="success",
         )
         poll = PollEvent(ts="2026-07-21T12:00:00+00:00", jobs_total=10, jobs_done=4)
-        await render_lines(_events(job, poll, _RESULT), detail="minimal")
+        await render_lines(_events(job, poll, _RESULT), detail=DetailLevel.MINIMAL)
         out = capsys.readouterr().out
         assert "[JOB]" not in out
         assert "[POLL]" in out
@@ -249,7 +250,7 @@ class TestRenderLines:
     async def test_result_line_always_present_regardless_of_detail(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        for detail in ("none", "minimal", "normal", "full"):
+        for detail in DetailLevel:
             await render_lines(_events(_SNAPSHOT, _RESULT), detail=detail)
             out = capsys.readouterr().out
             assert "[FINAL]" in out, f"missing [FINAL] at detail={detail}"
@@ -274,7 +275,7 @@ class TestLiveMarkup:
         captured non-interactively, so the 'loading jobs…' mid-run state
         (attach()'s early snapshot) can only be verified at this level."""
         e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running")
-        markup = _live_markup(e, "normal")
+        markup = _live_markup(e, DetailLevel.NORMAL)
         assert "None" not in markup
         assert "loading jobs" in markup
 
@@ -283,7 +284,7 @@ class TestLiveMarkup:
             jobs_total=40, jobs_done=18, failed_jobs=("a", "b"),
             current_stage="test", eta_seconds=90,
         )
-        markup = _live_markup(e, "normal")
+        markup = _live_markup(e, DetailLevel.NORMAL)
         assert "18/40 jobs" in markup
         assert "2 failed" in markup
         assert "test" in markup
@@ -296,13 +297,13 @@ class TestLiveMarkup:
         e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
             jobs_total=40, jobs_done=18,
         )
-        assert _live_markup(e, "none") == ""
+        assert _live_markup(e, DetailLevel.NONE) == ""
 
     def test_detail_minimal_omits_stage_and_eta(self) -> None:
         e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
             jobs_total=40, jobs_done=18, current_stage="test", eta_seconds=90,
         )
-        markup = _live_markup(e, "minimal")
+        markup = _live_markup(e, DetailLevel.MINIMAL)
         assert "18/40 jobs" in markup
         assert "test" not in markup
         assert "left" not in markup
@@ -311,7 +312,7 @@ class TestLiveMarkup:
         e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
             jobs_total=40, jobs_done=18, failed_jobs=("build:unit", "lint:ruff"),
         )
-        markup = _live_markup(e, "full")
+        markup = _live_markup(e, DetailLevel.FULL)
         assert "2 failed" not in markup
         assert "build:unit" in markup
         assert "lint:ruff" in markup

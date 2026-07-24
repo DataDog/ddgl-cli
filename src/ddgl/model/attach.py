@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 import msgspec
 
 
 class DetailLevel(StrEnum):
-    """How much of attach()'s event stream a renderer shows.
+    """How much of attach()'s event stream a renderer shows, ordered from
+    least to most verbose (NONE < MINIMAL < NORMAL < FULL — comparable
+    with </<=/>/>=).
 
     none=final state only, minimal=summaries only, normal=summaries + job
     transitions to terminal states, full=everything. See render/attach.py's
@@ -17,6 +20,36 @@ class DetailLevel(StrEnum):
     MINIMAL = "minimal"
     NORMAL = "normal"
     FULL = "full"
+
+    def _rank(self) -> int:
+        return _DETAIL_RANK[self]
+
+    # StrEnum already inherits str's (lexicographic) rich comparisons, so
+    # all four must be defined explicitly here — functools.total_ordering
+    # would see them already present on the class and skip synthesizing
+    # from just __lt__, silently leaving the wrong (lexicographic) ones.
+    def __lt__(self, other: object) -> bool:
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._rank() < other._rank()
+
+    def __le__(self, other: object) -> bool:
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._rank() <= other._rank()
+
+    def __gt__(self, other: object) -> bool:
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._rank() > other._rank()
+
+    def __ge__(self, other: object) -> bool:
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._rank() >= other._rank()
+
+
+_DETAIL_RANK = {level: i for i, level in enumerate(DetailLevel)}
 
 
 class AttachEvent(msgspec.Struct, kw_only=True, tag_field="kind"):
@@ -47,9 +80,22 @@ class AttachEvent(msgspec.Struct, kw_only=True, tag_field="kind"):
     failed_jobs: tuple[str, ...] = ()
     eta_seconds: float | None = None
 
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.FULL
+
+    @property
+    def min_detail_level(self) -> DetailLevel:
+        """The lowest --detail level at which a renderer should show this
+        event (see render/attach.py's _visible_at)."""
+        return self._min_detail
+
+
+_TERMINAL_JOB_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
+
 
 class SnapshotEvent(AttachEvent, kw_only=True, tag="snapshot"):
     """attach()'s initial and post-job-load snapshots."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.MINIMAL
 
     status: str
     """The pipeline's status at attach time."""
@@ -81,9 +127,18 @@ class JobEvent(AttachEvent, kw_only=True, tag="job"):
     message: str | None = None
     """The job's failure_reason, when failed."""
 
+    @property
+    def min_detail_level(self) -> DetailLevel:
+        # Job transitions are where nearly all the noise lives on a large
+        # pipeline (hundreds of created→running/running→pending blips), so
+        # only ones reaching a terminal status show below --detail full.
+        return DetailLevel.NORMAL if self.status in _TERMINAL_JOB_STATUSES else DetailLevel.FULL
+
 
 class PipelineEvent(AttachEvent, kw_only=True, tag="pipeline"):
     """The pipeline itself transitioned to a new status."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.NORMAL
 
     status: str
     """The new status."""
@@ -95,13 +150,19 @@ class PipelineEvent(AttachEvent, kw_only=True, tag="pipeline"):
 class PollEvent(AttachEvent, kw_only=True, tag="poll"):
     """The post-poll rollup summary emitted once after a changed tick."""
 
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.MINIMAL
+
 
 class HeartbeatEvent(AttachEvent, kw_only=True, tag="heartbeat"):
     """A tally line emitted on a quiet poll tick (--heartbeat only)."""
 
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.MINIMAL
+
 
 class SwitchedEvent(AttachEvent, kw_only=True, tag="switched"):
     """A --follow rebind to a newer pipeline."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.NORMAL
 
     message: str
     """Human-readable description of the switch."""
@@ -109,6 +170,8 @@ class SwitchedEvent(AttachEvent, kw_only=True, tag="switched"):
 
 class ResultEvent(AttachEvent, kw_only=True, tag="result"):
     """The final event of an attach() run."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.NONE
 
     status: str | None = None
     """The final status. None if attach() timed out before ever resolving

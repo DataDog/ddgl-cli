@@ -11,6 +11,7 @@ from rich.text import Text
 
 from ddgl.model.attach import (
     AttachEvent,
+    DetailLevel,
     HeartbeatEvent,
     JobEvent,
     PipelineEvent,
@@ -64,7 +65,7 @@ def _poll_summary(event: AttachEvent) -> str:
     return " · ".join(bits)
 
 
-def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
+def event_to_text(event: AttachEvent, detail: DetailLevel = DetailLevel.NORMAL) -> str:
     """Render a single AttachEvent as one human-readable, agent-greppable line.
 
     Does not decide whether the event should be shown at all — that's a
@@ -84,7 +85,7 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
         line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
         if event.duration is not None:
             line += f" ({format_duration(event.duration)})"
-        if detail == "full" and event.message:
+        if detail == DetailLevel.FULL and event.message:
             line += f" — {event.message}"
         return line
     if isinstance(event, PipelineEvent):
@@ -100,45 +101,20 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     raise TypeError(f"unexpected AttachEvent subclass: {type(event).__name__}")
 
 
-_TERMINAL_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
-
-
-def _visible_at(event: AttachEvent, detail: str) -> bool:
+def _visible_at(event: AttachEvent, detail: DetailLevel) -> bool:
     """Whether `event` should be printed at the given --detail level.
 
     --detail controls which *already-emitted* events get shown — it never
-    changes what the engine emits (see core/attach.py).
-
-    none:    only the final result — nothing else, ever.
-    minimal: only summary-shaped lines (snapshot/heartbeat) + result.
-    normal:  summaries + pipeline transitions + switched (both rare/
-             low-noise, shown unconditionally) + job transitions, but only
-             the ones reaching a TERMINAL status — job transitions are
-             where nearly all the noise lives on a large pipeline (hundreds
-             of created→running/running→pending blips), so that's the one
-             kind gated by status at this level.
-    full:    everything, unfiltered (current full behavior).
-
-    "result" always shows at every level: it's the one guaranteed
-    self-sufficient line every output mode promises (see the design doc).
+    changes what the engine emits (see core/attach.py). Each event kind
+    knows its own minimum detail level (see AttachEvent.min_detail_level);
+    JobEvent's is the one that's data-dependent rather than fixed — see
+    its min_detail_level property for why.
     """
-    if isinstance(event, ResultEvent):
-        return True
-    if detail == "none":
-        return False
-    if isinstance(event, (SnapshotEvent, PollEvent, HeartbeatEvent)):
-        return True
-    if detail == "minimal":
-        return False
-    if detail == "full":
-        return True
-    if isinstance(event, (PipelineEvent, SwitchedEvent)):
-        return True
-    return event.status in _TERMINAL_STATUSES  # JobEvent: terminal-only at normal
+    return event.min_detail_level <= detail
 
 
 async def render_lines(
-    events: AsyncIterator[AttachEvent], *, as_json: bool = False, detail: str = "normal"
+    events: AsyncIterator[AttachEvent], *, as_json: bool = False, detail: DetailLevel = DetailLevel.NORMAL
 ) -> AttachEvent:
     """Consume attach()'s event stream, printing one line per event.
 
@@ -176,7 +152,7 @@ async def render_lines(
 # ---------------------------------------------------------------------------
 
 
-def _live_markup(event: AttachEvent, detail: str) -> str:
+def _live_markup(event: AttachEvent, detail: DetailLevel) -> str:
     """Build the redrawing single-line status.
 
     Live mode has no discrete lines to show/hide, so --detail instead scales
@@ -190,27 +166,27 @@ def _live_markup(event: AttachEvent, detail: str) -> str:
     full:    normal, but failed jobs are spelled out by name instead of
              just a count (mirrors lines-mode's --detail full).
     """
-    if detail == "none":
+    if detail == DetailLevel.NONE:
         return ""
 
     bits = [f"[dim]#{event.pipeline_id}[/dim]"]
     if event.ref:
         bits.append(f"[bold]{event.ref}[/bold]")
-    if detail != "minimal" and event.current_stage:
+    if detail > DetailLevel.MINIMAL and event.current_stage:
         bits.append(f"[italic]{event.current_stage}[/italic]")
     if event.jobs_total is None:
         bits.append("[dim]loading jobs…[/dim]")
     else:
         counts = f"{event.jobs_done}/{event.jobs_total} jobs"
         if event.failed_jobs:
-            if detail == "full":
+            if detail == DetailLevel.FULL:
                 counts += f", failed: {', '.join(event.failed_jobs)}"
             else:
                 counts += f", {len(event.failed_jobs)} failed"
         bits.append(f"[dim]{counts}[/dim]")
     if event.pipeline_elapsed is not None:
         bits.append(f"[dim]{format_duration(event.pipeline_elapsed)} elapsed[/dim]")
-    if detail != "minimal" and event.eta_seconds is not None:
+    if detail > DetailLevel.MINIMAL and event.eta_seconds is not None:
         bits.append(f"[dim italic]~{format_duration(event.eta_seconds)} left[/dim italic]")
     return "  " + " · ".join(bits)
 
@@ -240,7 +216,7 @@ def _final_renderable(event: ResultEvent) -> RenderableType:
     return Group(*renderables)
 
 
-async def render_live(events: AsyncIterator[AttachEvent], detail: str = "normal") -> AttachEvent:
+async def render_live(events: AsyncIterator[AttachEvent], detail: DetailLevel = DetailLevel.NORMAL) -> AttachEvent:
     """Consume attach()'s event stream as a redrawing single-line TTY view.
 
     A "switched" event (--follow rebind) is additionally printed as a

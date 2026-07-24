@@ -135,6 +135,7 @@ async def _attach(
         return 2
 
     use_live = _use_live(output_json=output_json, plain=plain, force_live=force_live)
+    detail_level = DetailLevel(detail)
 
     try:
         with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
@@ -146,9 +147,9 @@ async def _attach(
                     timeout=timeout, cache=cache,
                 )
                 if use_live:
-                    result = await render_live(events, detail=detail)
+                    result = await render_live(events, detail=detail_level)
                 else:
-                    result = await render_lines(events, as_json=output_json, detail=detail)
+                    result = await render_lines(events, as_json=output_json, detail=detail_level)
     except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError, httpx.TransportError) as e:
         click.echo(f"Error: {e}", err=True)
         return 2
