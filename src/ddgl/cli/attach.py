@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+import httpx
 import rich_click as click
 
 from ddgl.cache import Cache
@@ -148,7 +149,7 @@ async def _attach(
                     result = await render_live(events, detail=detail)
                 else:
                     result = await render_lines(events, as_json=output_json, detail=detail)
-    except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError, httpx.TransportError) as e:
         click.echo(f"Error: {e}", err=True)
         return 2
 

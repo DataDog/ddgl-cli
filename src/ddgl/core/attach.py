@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+import httpx
+
 from ddgl.cache.cache_config import CacheNS
 from ddgl.constants import (
     CACHE_TTL_FINISHED_JOB,
@@ -183,6 +185,27 @@ def _result_event(
     )
 
 
+def _timeout_event(last_event: AttachEvent | None) -> AttachEvent:
+    """Return a timeout result using the most recent known pipeline state."""
+    if last_event is None:
+        return AttachEvent(kind="result", ts=_now(), reason="timeout")
+    return AttachEvent(
+        kind="result",
+        ts=_now(),
+        pipeline_id=last_event.pipeline_id,
+        ref=last_event.ref,
+        current_stage=last_event.current_stage,
+        pipeline_elapsed=last_event.pipeline_elapsed,
+        status=last_event.status,
+        duration=last_event.pipeline_elapsed,
+        jobs_total=last_event.jobs_total,
+        jobs_done=last_event.jobs_done,
+        failed_jobs=last_event.failed_jobs,
+        eta_seconds=last_event.eta_seconds,
+        reason="timeout",
+    )
+
+
 async def _resolve_or_wait(
     client: GitLabClient,
     *,
@@ -247,6 +270,44 @@ async def attach(
     cache: Cache | None = None,
     estimator: DurationEstimator | None = None,
 ) -> AsyncIterator[AttachEvent]:
+    """Block on a CI pipeline, yielding AttachEvents until terminal/timeout."""
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    last_event: AttachEvent | None = None
+    try:
+        async with asyncio.timeout(timeout):
+            async for event in _attach_events(
+                client,
+                ref=ref,
+                pipeline_id=pipeline_id,
+                depth=depth,
+                interval=interval,
+                heartbeat=heartbeat,
+                wait_for_start=wait_for_start,
+                follow=follow,
+                deadline=deadline,
+                cache=cache,
+                estimator=estimator,
+            ):
+                last_event = event
+                yield event
+    except TimeoutError:
+        yield _timeout_event(last_event)
+
+
+async def _attach_events(
+    client: GitLabClient,
+    *,
+    ref: str | None,
+    pipeline_id: int | None,
+    depth: int,
+    interval: float,
+    heartbeat: bool,
+    wait_for_start: bool,
+    follow: bool,
+    deadline: float | None,
+    cache: Cache | None,
+    estimator: DurationEstimator | None,
+) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
 
     Yields events only — never prints, never chooses an exit code. See
@@ -264,7 +325,6 @@ async def attach(
     """
     project_id = client._config.project_id or ""
     estimator = estimator or NullEstimator()
-    deadline = time.monotonic() + timeout if timeout is not None else None
     pipeline = await _resolve_or_wait(
         client, ref=ref, pipeline_id=pipeline_id, depth=depth,
         wait_for_start=wait_for_start, deadline=deadline, interval=interval, cache=cache,
@@ -322,13 +382,13 @@ async def attach(
             # its own independent attempt at the current pipeline regardless.
             try:
                 newer = await _find_newer_pipeline(client, pipeline.ref, pipeline.id, cache=cache)
-            except GitLabAPIError as exc:
+            except (GitLabAPIError, httpx.TransportError) as exc:
                 logger.warning("attach: follow-check failed (%s), will retry next tick", exc)
                 newer = None
             if newer is not None:
                 try:
                     newer_jobs = await client.get_all_jobs(newer.id, fresh=True)
-                except GitLabAPIError as exc:
+                except (GitLabAPIError, httpx.TransportError) as exc:
                     logger.warning(
                         "attach: found newer pipeline %d but failed to fetch its jobs (%s); "
                         "staying on #%d, will retry next tick", newer.id, exc, pipeline.id,
@@ -366,7 +426,7 @@ async def attach(
         try:
             fresh_pipeline = await client.get_pipeline(pipeline.id, fresh=True)
             fresh_jobs = await client.get_all_jobs(pipeline.id, fresh=True)
-        except GitLabAPIError as exc:
+        except (GitLabAPIError, httpx.TransportError) as exc:
             consecutive_failures += 1
             if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES:
                 logger.warning(

@@ -1,6 +1,7 @@
 """Tests for src/ddgl/core/attach.py."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
@@ -459,6 +460,23 @@ class TestAttachTimeoutWhileRunning:
         assert result.reason == "timeout"
         assert result.status == "running"
 
+    async def test_cancels_initial_job_fetch_at_deadline(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_resolve(mock_api, pipeline_id=1)
+
+        async def slow_get_all_jobs(*args: Any, **kwargs: Any) -> Any:
+            await asyncio.sleep(0.1)
+            return []
+
+        monkeypatch.setattr(client, "get_all_jobs", slow_get_all_jobs)
+        started = asyncio.get_running_loop().time()
+        events = await _collect(client, ref="main", timeout=0.01)
+
+        assert asyncio.get_running_loop().time() - started < 0.05
+        assert [event.kind for event in events] == ["snapshot", "result"]
+        assert events[-1].reason == "timeout"
+
 class TestAttachCaching:
     async def test_polls_bypass_cache_and_write_terminal_jobs(
         self, client: GitLabClient, mock_api: respx.MockRouter
@@ -527,6 +545,30 @@ class TestAttachPollResilience:
         # The failed tick produced no events at all — it's silently skipped,
         # not surfaced as a warning/error event (design decision: log-only).
         assert all(e.kind != "result" or e is events[-1] for e in events)
+
+    async def test_transport_tick_failure_is_skipped_not_fatal(
+        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+
+        _mock_resolve(mock_api, pipeline_id=1)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            return_value=Response(200, json=[_job_payload(10, "success", "a")])
+        )
+        calls = {"n": 0}
+
+        async def flaky_get_pipeline(pipeline_id: int, **kwargs: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("connection reset")
+            return Pipeline(id=pipeline_id, ref="main", status=PipelineStatus.SUCCESS)
+
+        monkeypatch.setattr(client, "get_pipeline", flaky_get_pipeline)
+
+        events = await _collect(client, ref="main")
+
+        assert calls["n"] == 2
+        assert events[-1].status == "success"
 
     async def test_gives_up_after_max_consecutive_failures(
         self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

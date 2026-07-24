@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import httpx
 import pytest
 import respx
 from click.testing import CliRunner
@@ -11,6 +12,7 @@ from httpx import Response
 from ddgl.cache import Cache
 from ddgl.cli import main
 from ddgl.cli.attach import _attach, _exit_code, _use_live
+from ddgl.client import GitLabClient
 from ddgl.config import Config
 from ddgl.model.attach import AttachEvent
 
@@ -119,4 +121,20 @@ class TestAttachApiError:
             detail="normal", wait_for_start=True, follow=False, timeout=None,
             output_json=False, plain=True, force_live=False, no_cache=True,
         )
+        assert exit_code == 2
+
+    async def test_transport_error_maps_to_exit_2(
+        self, _mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def disconnected(*args: object, **kwargs: object) -> httpx.Response:
+            raise httpx.ConnectError("connection reset")
+
+        monkeypatch.setattr(GitLabClient, "_get_response", disconnected)
+
+        exit_code = await _attach(
+            ref="main", pipeline_id=None, depth=10, interval=0.01, heartbeat=False,
+            detail="normal", wait_for_start=True, follow=False, timeout=None,
+            output_json=False, plain=True, force_live=False, no_cache=True,
+        )
+
         assert exit_code == 2
