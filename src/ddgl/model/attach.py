@@ -5,16 +5,6 @@ from enum import StrEnum
 import msgspec
 
 
-class AttachEventKind(StrEnum):
-    SNAPSHOT = "snapshot"
-    JOB = "job"
-    PIPELINE = "pipeline"
-    POLL = "poll"
-    HEARTBEAT = "heartbeat"
-    SWITCHED = "switched"
-    RESULT = "result"
-
-
 class DetailLevel(StrEnum):
     """How much of attach()'s event stream a renderer shows.
 
@@ -29,72 +19,105 @@ class DetailLevel(StrEnum):
     FULL = "full"
 
 
-class AttachEvent(msgspec.Struct):
-    """A single event emitted by the `ddgl attach` engine.
+class AttachEvent(msgspec.Struct, kw_only=True, tag_field="kind"):
+    """Base class for events emitted by the `ddgl attach` engine.
 
-    One `kind`-tagged struct rather than a class hierarchy: renderers switch
-    on `.kind` and the whole thing serializes cleanly for `--json` (JSONL).
+    Construct the specific subclass (`JobEvent(...)`, `SnapshotEvent(...)`,
+    etc.) instead of this abstract base.
+
+    `--json` (JSONL) output still gets a `"kind"` string key per line,
+    injected by msgspec's tagged-union support (`tag_field`/`tag` below).
 
     `pipeline_id`, `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`,
-    `jobs_done`, `failed_jobs`, and `eta_seconds` are a *rollup* of the
-    latest known pipeline/job state, so a renderer (e.g. the live
-    single-line view) never needs to track cross-event state just to answer
-    "how many jobs are done" or "how long has this been running". Most
-    events carry the full rollup — two exceptions: attach()'s very first
-    `snapshot` (emitted before the job list is fetched, which can be slow
-    on a pipeline with hundreds of jobs) has `jobs_total`/`jobs_done`/
-    `failed_jobs`/`current_stage` still at their None/() defaults — treat
-    `jobs_total is None` as "still loading", not zero jobs. The
-    wait-for-start-timeout `result` event (no pipeline was ever resolved)
-    has no rollup at all — `pipeline_id` is also None there.
-
-    `current_stage` is a heuristic: the OLDEST stage that still has an
-    incomplete job (the bottleneck), approximated by each stage's minimum
-    job ID since GitLab returns jobs newest-ID-first, not in stage order —
-    not an authoritative GitLab concept. `eta_seconds` is always None — v1
-    ships no ETA estimation.
+    `jobs_done`, `failed_jobs`, and `eta_seconds` live here rather than
+    being redeclared per subclass because the live single-line view reads
+    them off every non-final event uniformly (see render/attach.py's
+    `_live_markup`). They're a *rollup* of the latest known pipeline/job
+    state; `jobs_total is None` means "not loaded yet", not zero jobs.
+    `eta_seconds` is always None for now, implementation TBD.
     """
 
-    kind: AttachEventKind
     ts: str
     pipeline_id: int | None = None
     ref: str | None = None
     current_stage: str | None = None
     pipeline_elapsed: float | None = None
-
-    status: str | None = None
-    """The pipeline's status (e.g. "running"/"success"). Set on pipeline
-    events (the new status), job events (that job's own status), and
-    result events (the final status)."""
-
-    old_status: str | None = None
-    """Status before this transition. Set on pipeline and job events."""
-
-    job_id: int | None = None
-    """The job's GitLab ID. Set on job events only."""
-
-    job_name: str | None = None
-    """The job's name. Set on job events only."""
-
-    job_stage: str | None = None
-    """That job's own stage — distinct from the contextual `current_stage`
-    rollup field above. Set on job events only."""
-
-    duration: float | None = None
-    """That job's own duration on job events; the final pipeline elapsed
-    seconds on result events (same value as `pipeline_elapsed` at that
-    point, kept as its own field since `duration` means something
-    different there)."""
-
-    message: str | None = None
-    """Human-readable description of a --follow rebind on switched events;
-    the job's failure_reason (when failed) on job events."""
-
     jobs_total: int | None = None
     jobs_done: int | None = None
     failed_jobs: tuple[str, ...] = ()
     eta_seconds: float | None = None
 
-    reason: str | None = None
-    """Why a result event happened: "terminal" or "timeout". Set on result
-    events only."""
+
+class SnapshotEvent(AttachEvent, kw_only=True, tag="snapshot"):
+    """attach()'s initial and post-job-load snapshots."""
+
+    status: str
+    """The pipeline's status at attach time."""
+
+
+class JobEvent(AttachEvent, kw_only=True, tag="job"):
+    """A single job's status transition."""
+
+    job_id: int
+    """The job's GitLab ID."""
+
+    job_name: str
+    """The job's name."""
+
+    job_stage: str
+    """That job's own stage — distinct from the contextual `current_stage`
+    rollup field on the base class."""
+
+    status: str
+    """That job's own status."""
+
+    old_status: str | None = None
+    """Status before this transition. None when the job is newly
+    discovered this tick (no previously known status)."""
+
+    duration: float | None = None
+    """That job's own duration, when known."""
+
+    message: str | None = None
+    """The job's failure_reason, when failed."""
+
+
+class PipelineEvent(AttachEvent, kw_only=True, tag="pipeline"):
+    """The pipeline itself transitioned to a new status."""
+
+    status: str
+    """The new status."""
+
+    old_status: str
+    """Status before this transition."""
+
+
+class PollEvent(AttachEvent, kw_only=True, tag="poll"):
+    """The post-poll rollup summary emitted once after a changed tick."""
+
+
+class HeartbeatEvent(AttachEvent, kw_only=True, tag="heartbeat"):
+    """A tally line emitted on a quiet poll tick (--heartbeat only)."""
+
+
+class SwitchedEvent(AttachEvent, kw_only=True, tag="switched"):
+    """A --follow rebind to a newer pipeline."""
+
+    message: str
+    """Human-readable description of the switch."""
+
+
+class ResultEvent(AttachEvent, kw_only=True, tag="result"):
+    """The final event of an attach() run."""
+
+    status: str | None = None
+    """The final status. None if attach() timed out before ever resolving
+    a pipeline."""
+
+    duration: float | None = None
+    """Final pipeline elapsed seconds — same value as `pipeline_elapsed`
+    at that point, kept as its own field since `duration` means something
+    different on JobEvent."""
+
+    reason: str
+    """Why this result happened: "terminal" or "timeout"."""

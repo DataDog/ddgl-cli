@@ -9,7 +9,16 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from ddgl.model.attach import AttachEvent, AttachEventKind
+from ddgl.model.attach import (
+    AttachEvent,
+    HeartbeatEvent,
+    JobEvent,
+    PipelineEvent,
+    PollEvent,
+    ResultEvent,
+    SnapshotEvent,
+    SwitchedEvent,
+)
 from ddgl.render._console import console
 from ddgl.render._styles import format_duration
 
@@ -31,7 +40,7 @@ def _hhmmss(ts: str) -> str:
         return ts
 
 
-def _final_text(event: AttachEvent) -> str:
+def _final_text(event: ResultEvent) -> str:
     if event.reason == "timeout":
         if event.pipeline_id is None:
             return "Timed out waiting for a pipeline to appear."
@@ -63,37 +72,34 @@ def event_to_text(event: AttachEvent, detail: str = "normal") -> str:
     formats a given event once the caller has decided to show it.
     """
     ts = _hhmmss(event.ts)
-    match event.kind:
-        case AttachEventKind.SNAPSHOT:
-            ref = f" {event.ref}" if event.ref else ""
-            # jobs_total is None on attach()'s first ("attached, jobs not
-            # yet loaded") snapshot — see AttachEvent's docstring. Must not
-            # render as the literal string "None jobs".
-            jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
-            return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
-        case AttachEventKind.JOB:
-            old = event.old_status or "new"
-            line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
-            if event.duration is not None:
-                line += f" ({format_duration(event.duration)})"
-            if detail == "full" and event.message:
-                line += f" — {event.message}"
-            return line
-        case AttachEventKind.PIPELINE:
-            return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
-        case AttachEventKind.POLL:
-            return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
-        case AttachEventKind.HEARTBEAT:
-            return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
-        case AttachEventKind.SWITCHED:
-            return f"[{ts}]{_tag('WARN')}{event.message}"
-        case _:
-            return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
+    if isinstance(event, SnapshotEvent):
+        ref = f" {event.ref}" if event.ref else ""
+        # jobs_total is None on attach()'s first ("attached, jobs not yet
+        # loaded") snapshot — see AttachEvent's docstring. Must not render
+        # as the literal string "None jobs".
+        jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
+        return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
+    if isinstance(event, JobEvent):
+        old = event.old_status or "new"
+        line = f"[{ts}]{_tag('JOB')}{event.job_name} {old}→{event.status}"
+        if event.duration is not None:
+            line += f" ({format_duration(event.duration)})"
+        if detail == "full" and event.message:
+            line += f" — {event.message}"
+        return line
+    if isinstance(event, PipelineEvent):
+        return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
+    if isinstance(event, PollEvent):
+        return f"[{ts}]{_tag('POLL')}{_poll_summary(event)}"
+    if isinstance(event, HeartbeatEvent):
+        return f"[{ts}]{_tag('BEAT')}{event.jobs_done}/{event.jobs_total} jobs, {len(event.failed_jobs)} failed"
+    if isinstance(event, SwitchedEvent):
+        return f"[{ts}]{_tag('WARN')}{event.message}"
+    if isinstance(event, ResultEvent):
+        return f"[{ts}]{_tag('FINAL')}{_final_text(event)}"
+    raise TypeError(f"unexpected AttachEvent subclass: {type(event).__name__}")
 
 
-_SUMMARY_KINDS = frozenset(
-    {AttachEventKind.SNAPSHOT, AttachEventKind.POLL, AttachEventKind.HEARTBEAT}
-)
 _TERMINAL_STATUSES = frozenset({"success", "failed", "canceled", "skipped"})
 
 
@@ -116,19 +122,19 @@ def _visible_at(event: AttachEvent, detail: str) -> bool:
     "result" always shows at every level: it's the one guaranteed
     self-sufficient line every output mode promises (see the design doc).
     """
-    if event.kind == AttachEventKind.RESULT:
+    if isinstance(event, ResultEvent):
         return True
     if detail == "none":
         return False
-    if event.kind in _SUMMARY_KINDS:
+    if isinstance(event, (SnapshotEvent, PollEvent, HeartbeatEvent)):
         return True
     if detail == "minimal":
         return False
     if detail == "full":
         return True
-    if event.kind in (AttachEventKind.PIPELINE, AttachEventKind.SWITCHED):
+    if isinstance(event, (PipelineEvent, SwitchedEvent)):
         return True
-    return event.status in _TERMINAL_STATUSES  # "job": terminal-only at normal
+    return event.status in _TERMINAL_STATUSES  # JobEvent: terminal-only at normal
 
 
 async def render_lines(
@@ -151,7 +157,7 @@ async def render_lines(
     """
     result: AttachEvent | None = None
     async for event in events:
-        if event.kind == AttachEventKind.RESULT:
+        if isinstance(event, ResultEvent):
             result = event
         if as_json:
             console.print(
@@ -209,7 +215,7 @@ def _live_markup(event: AttachEvent, detail: str) -> str:
     return "  " + " · ".join(bits)
 
 
-def _final_renderable(event: AttachEvent) -> RenderableType:
+def _final_renderable(event: ResultEvent) -> RenderableType:
     if event.reason == "timeout":
         if event.pipeline_id is None:
             return Text.from_markup("[yellow]⏱[/yellow]  timed out waiting for a pipeline to appear")
@@ -249,9 +255,9 @@ async def render_live(events: AsyncIterator[AttachEvent], detail: str = "normal"
     result: AttachEvent | None = None
     with Live(console=console, refresh_per_second=8) as live:
         async for event in events:
-            if event.kind == AttachEventKind.SWITCHED:
+            if isinstance(event, SwitchedEvent):
                 live.console.print(f"[yellow]⚠[/yellow]  {event.message}")
-            if event.kind == AttachEventKind.RESULT:
+            if isinstance(event, ResultEvent):
                 result = event
                 live.update(_final_renderable(event))
                 break

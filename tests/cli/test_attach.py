@@ -14,7 +14,7 @@ from ddgl.cli import main
 from ddgl.cli.attach import _attach, _exit_code, _use_live
 from ddgl.client import GitLabClient
 from ddgl.config import Config
-from ddgl.model.attach import AttachEvent
+from ddgl.model.attach import ResultEvent
 
 _TEST_CONFIG = Config(
     gitlab_url="https://gitlab.example.com",
@@ -51,21 +51,21 @@ class TestUseLive:
 
 class TestExitCode:
     def test_success(self) -> None:
-        result = AttachEvent(kind="result", ts="x", status="success", reason="terminal")
+        result = ResultEvent(ts="x", status="success", reason="terminal")
         assert _exit_code(result) == 0
 
     def test_failed(self) -> None:
-        result = AttachEvent(kind="result", ts="x", status="failed", reason="terminal")
+        result = ResultEvent(ts="x", status="failed", reason="terminal")
         assert _exit_code(result) == 1
 
     def test_canceled(self) -> None:
-        result = AttachEvent(kind="result", ts="x", status="canceled", reason="terminal")
+        result = ResultEvent(ts="x", status="canceled", reason="terminal")
         assert _exit_code(result) == 1
 
     def test_timeout_takes_priority_over_status(self) -> None:
         # A timeout result carries whatever status the pipeline had when we
         # gave up (often "running") — reason, not status, decides the code.
-        result = AttachEvent(kind="result", ts="x", status="running", reason="timeout")
+        result = ResultEvent(ts="x", status="running", reason="timeout")
         assert _exit_code(result) == 124
 
 

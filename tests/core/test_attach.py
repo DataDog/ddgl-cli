@@ -14,7 +14,15 @@ from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
 from ddgl.core.attach import _current_stage, attach
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
-from ddgl.model.attach import AttachEvent
+from ddgl.model.attach import (
+    AttachEvent,
+    HeartbeatEvent,
+    JobEvent,
+    PollEvent,
+    ResultEvent,
+    SnapshotEvent,
+    SwitchedEvent,
+)
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 
@@ -111,6 +119,12 @@ def _job_payload(job_id: int, status: str = "created", name: str = "job", stage:
     return payload
 
 
+def _kind(event: AttachEvent) -> str:
+    """Lowercase kind name for an event, e.g. JobEvent -> "job" — for
+    asserting on the exact sequence of event kinds emitted."""
+    return type(event).__name__.removesuffix("Event").lower()
+
+
 def _mock_resolve(mock_api: respx.MockRouter, *, pipeline_id: int, ref: str = "main") -> None:
     """Mock the initial list-pipelines call used by resolve_pipeline."""
     mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
@@ -143,7 +157,7 @@ class TestAttachHappyPath:
         ]
 
         events = await _collect(client, ref="main")
-        kinds = [e.kind for e in events]
+        kinds = [_kind(e) for e in events]
         # attach() emits TWO snapshots: an early one right after resolving
         # the pipeline (before the — potentially slow — job fetch), then a
         # full one once jobs are loaded. Every changed tick ends with one
@@ -176,7 +190,7 @@ class TestAttachHappyPath:
         assert snapshot.current_stage == "test"  # first not-done job's stage
         assert snapshot.pipeline_elapsed is not None and snapshot.pipeline_elapsed > 0
 
-        job_events = [e for e in events if e.kind == "job"]
+        job_events = [e for e in events if isinstance(e, JobEvent)]
         assert (job_events[0].job_name, job_events[0].old_status, job_events[0].status) == ("a", "created", "running")
         assert job_events[0].job_stage == "test"  # that job's own stage
 
@@ -216,12 +230,12 @@ class TestAttachFailure:
 
         events = await _collect(client, ref="main")
         result = events[-1]
-        assert result.kind == "result"
+        assert isinstance(result, ResultEvent)
         assert result.status == "failed"
         assert result.reason == "terminal"
         assert result.failed_jobs == ("unit",)
 
-        job_event = next(e for e in events if e.kind == "job")
+        job_event = next(e for e in events if isinstance(e, JobEvent))
         assert job_event.message == "script_failure"
 
 
@@ -236,7 +250,7 @@ class TestAttachAlreadyTerminal:
             return_value=Response(200, json=[_job_payload(10, "success", "a")])
         )
         events = await _collect(client, ref="main")
-        assert [e.kind for e in events] == ["snapshot", "snapshot", "result"]
+        assert [_kind(e) for e in events] == ["snapshot", "snapshot", "result"]
         assert events[-1].reason == "terminal"
 
 
@@ -254,7 +268,7 @@ class TestAttachWaitForStart:
             return_value=Response(200, json=[])
         )
         events = await _collect(client, ref="main", wait_for_start=True)
-        assert events[0].kind == "snapshot"
+        assert isinstance(events[0], SnapshotEvent)
         assert events[0].pipeline_id == 1
 
     async def test_no_wait_raises(
@@ -274,7 +288,7 @@ class TestAttachWaitForStart:
         )
         events = await _collect(client, ref="main", wait_for_start=True, timeout=0.03)
         assert len(events) == 1
-        assert events[0].kind == "result"
+        assert isinstance(events[0], ResultEvent)
         assert events[0].reason == "timeout"
         assert events[0].pipeline_id is None
 
@@ -299,7 +313,7 @@ class TestAttachFollow:
         # terminal from the list payload above, so it must not re-fetch it.
 
         events = await _collect(client, ref="main", follow=True)
-        switched = next(e for e in events if e.kind == "switched")
+        switched = next(e for e in events if isinstance(e, SwitchedEvent))
         assert switched.pipeline_id == 2
         assert events[-1].pipeline_id == 2
         assert events[-1].status == "success"
@@ -330,7 +344,7 @@ class TestAttachFollow:
             monkeypatch.setattr(cached_client, "get_pipeline", get_pipeline)
             events = await _collect(cached_client, ref="main", follow=True)
 
-        assert next(e for e in events if e.kind == "switched").pipeline_id == 2
+        assert next(e for e in events if isinstance(e, SwitchedEvent)).pipeline_id == 2
         assert list_route.call_count == 2
 
 
@@ -352,7 +366,7 @@ class TestAttachHeartbeat:
         ]
 
         events = await _collect(client, ref="main")
-        polls = [e for e in events if e.kind == "poll"]
+        polls = [e for e in events if isinstance(e, PollEvent)]
         assert len(polls) == 2
         assert (polls[0].jobs_total, polls[0].jobs_done) == (2, 0)
         assert (polls[1].jobs_total, polls[1].jobs_done) == (2, 2)
@@ -373,9 +387,9 @@ class TestAttachHeartbeat:
             Response(200, json=_pipeline_payload(1, "success")),
         ]
         events = await _collect(client, ref="main", heartbeat=True)
-        assert "heartbeat" in [e.kind for e in events]
-        assert [e.kind for e in events].count("poll") == 1
-        beat = next(e for e in events if e.kind == "heartbeat")
+        assert "heartbeat" in [_kind(e) for e in events]
+        assert [_kind(e) for e in events].count("poll") == 1
+        beat = next(e for e in events if isinstance(e, HeartbeatEvent))
         assert (beat.jobs_total, beat.jobs_done) == (1, 0)
         assert beat.ref == "main"
         assert beat.pipeline_id == 1  # regression: heartbeat used to fall through to None
@@ -396,8 +410,8 @@ class TestAttachHeartbeat:
             Response(200, json=_pipeline_payload(1, "success")),
         ]
         events = await _collect(client, ref="main", heartbeat=False)
-        assert "heartbeat" not in [e.kind for e in events]
-        assert [e.kind for e in events].count("poll") == 1
+        assert "heartbeat" not in [_kind(e) for e in events]
+        assert [_kind(e) for e in events].count("poll") == 1
 
 
 class TestAttachTimeoutWhileRunning:
@@ -413,7 +427,7 @@ class TestAttachTimeoutWhileRunning:
         )
         events = await _collect(client, ref="main", timeout=0.03)
         result = events[-1]
-        assert result.kind == "result"
+        assert isinstance(result, ResultEvent)
         assert result.reason == "timeout"
         assert result.status == "running"
 
@@ -431,7 +445,7 @@ class TestAttachTimeoutWhileRunning:
         events = await _collect(client, ref="main", timeout=0.01)
 
         assert asyncio.get_running_loop().time() - started < 0.05
-        assert [event.kind for event in events] == ["snapshot", "result"]
+        assert [_kind(event) for event in events] == ["snapshot", "result"]
         assert events[-1].reason == "timeout"
 
 class TestAttachCaching:
@@ -497,11 +511,11 @@ class TestAttachPollResilience:
 
         events = await _collect(client, ref="main")
         assert calls["n"] == 2  # tick1 failed, tick2 is what actually succeeded
-        assert events[-1].kind == "result"
+        assert isinstance(events[-1], ResultEvent)
         assert events[-1].status == "success"
         # The failed tick produced no events at all — it's silently skipped,
         # not surfaced as a warning/error event (design decision: log-only).
-        assert all(e.kind != "result" or e is events[-1] for e in events)
+        assert all(_kind(e) != "result" or e is events[-1] for e in events)
 
     async def test_transport_tick_failure_is_skipped_not_fatal(
         self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -572,7 +586,7 @@ class TestAttachPollResilience:
         # Despite the follow-check failing every single tick, the main poll
         # still runs in the same tick and reaches a normal result — a
         # follow failure is silent and never fatal to the attach itself.
-        assert events[-1].kind == "result"
+        assert isinstance(events[-1], ResultEvent)
         assert events[-1].status == "success"
 
     async def test_follow_job_fetch_failure_stays_on_old_pipeline(
@@ -607,6 +621,6 @@ class TestAttachPollResilience:
         # The follow attempt always dies at the job-fetch step for #2, so we
         # never actually switch — no 'switched' event, and attach completes
         # normally on the original pipeline (#1) instead.
-        assert "switched" not in [e.kind for e in events]
+        assert "switched" not in [_kind(e) for e in events]
         assert events[-1].pipeline_id == 1
         assert events[-1].status == "success"

@@ -12,7 +12,16 @@ from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
 from ddgl.core.jobs import JOB_TERMINAL, cache_terminal_jobs
 from ddgl.core.pipeline import cache_terminal_pipeline, list_pipelines, resolve_pipeline
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
-from ddgl.model.attach import AttachEvent, AttachEventKind
+from ddgl.model.attach import (
+    AttachEvent,
+    HeartbeatEvent,
+    JobEvent,
+    PipelineEvent,
+    PollEvent,
+    ResultEvent,
+    SnapshotEvent,
+    SwitchedEvent,
+)
 
 if TYPE_CHECKING:
     from ddgl.cache.cache import Cache
@@ -92,8 +101,7 @@ def _context(pipeline: Pipeline, jobs: list[Job]) -> dict[str, object]:
 
 def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> AttachEvent:
     elapsed = pipeline.elapsed
-    return AttachEvent(
-        kind=AttachEventKind.RESULT,
+    return ResultEvent(
         ts=_now(),
         status=str(pipeline.status),
         duration=elapsed.total_seconds() if elapsed is not None else None,
@@ -103,17 +111,18 @@ def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> Attach
 
 
 def _timeout_event(last_event: AttachEvent | None) -> AttachEvent:
-    """Return a timeout result using the most recent known pipeline state."""
+    """Return a timeout result using the most recent known pipeline state.
+    """
     if last_event is None:
-        return AttachEvent(kind=AttachEventKind.RESULT, ts=_now(), reason="timeout")
-    return AttachEvent(
-        kind=AttachEventKind.RESULT,
+        return ResultEvent(ts=_now(), reason="timeout")
+    return ResultEvent(
         ts=_now(),
         pipeline_id=last_event.pipeline_id,
         ref=last_event.ref,
         current_stage=last_event.current_stage,
         pipeline_elapsed=last_event.pipeline_elapsed,
-        status=last_event.status,
+        # Some event types don't have the status, add a default
+        status=getattr(last_event, "status", None),
         duration=last_event.pipeline_elapsed,
         jobs_total=last_event.jobs_total,
         jobs_done=last_event.jobs_done,
@@ -250,8 +259,7 @@ async def _attach_events(
     # until the second snapshot below.
     logger.info("attach: attached to pipeline %d (%s)", pipeline.id, pipeline.status)
     elapsed = pipeline.elapsed
-    yield AttachEvent(
-        kind=AttachEventKind.SNAPSHOT,
+    yield SnapshotEvent(
         ts=_now(),
         pipeline_id=pipeline.id,
         ref=pipeline.ref,
@@ -266,7 +274,7 @@ async def _attach_events(
     logger.info(
         "attach: loaded %d jobs for pipeline %d (%s)", ctx["jobs_total"], pipeline.id, pipeline.status
     )
-    yield AttachEvent(kind=AttachEventKind.SNAPSHOT, ts=_now(), status=str(pipeline.status), **ctx)  # ctx includes pipeline_id
+    yield SnapshotEvent(ts=_now(), status=str(pipeline.status), **ctx)  # ctx includes pipeline_id
 
     if pipeline.is_finished:
         yield _result_event(pipeline, jobs, reason="terminal")
@@ -300,8 +308,7 @@ async def _attach_events(
                 logger.info("attach: following newer pipeline %d (was %d)", newer.id, pipeline.id)
                 cache_terminal_jobs(cache, project_id, newer_jobs)
                 cache_terminal_pipeline(cache, project_id, newer)
-                yield AttachEvent(
-                    kind=AttachEventKind.SWITCHED,
+                yield SwitchedEvent(
                     ts=_now(),
                     message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
                             f"switching from #{pipeline.id}",
@@ -313,7 +320,7 @@ async def _attach_events(
                     # (e.g. a fast re-push). Don't wait for another tick.
                     yield _result_event(pipeline, jobs, reason="terminal")
                     return
-                yield AttachEvent(kind=AttachEventKind.POLL, ts=_now(), **_context(pipeline, jobs))
+                yield PollEvent(ts=_now(), **_context(pipeline, jobs))
                 continue
 
         # The main poll fetch: pipeline status + full job list for THIS
@@ -350,8 +357,7 @@ async def _attach_events(
         changed = False
 
         if fresh_pipeline.status != pipeline.status:
-            yield AttachEvent(
-                kind=AttachEventKind.PIPELINE,
+            yield PipelineEvent(
                 ts=_now(),
                 old_status=str(pipeline.status),
                 status=str(fresh_pipeline.status),
@@ -363,8 +369,7 @@ async def _attach_events(
         for job in fresh_jobs:
             prev = old_status_by_id.get(job.id)
             if prev != job.status:
-                yield AttachEvent(
-                    kind=AttachEventKind.JOB,
+                yield JobEvent(
                     ts=_now(),
                     job_id=job.id,
                     job_name=job.name,
@@ -378,9 +383,9 @@ async def _attach_events(
                 changed = True
 
         if changed:
-            yield AttachEvent(kind=AttachEventKind.POLL, ts=_now(), **ctx)
+            yield PollEvent(ts=_now(), **ctx)
         elif heartbeat:
-            yield AttachEvent(kind=AttachEventKind.HEARTBEAT, ts=_now(), **ctx)
+            yield HeartbeatEvent(ts=_now(), **ctx)
 
         pipeline, jobs = fresh_pipeline, fresh_jobs
 
