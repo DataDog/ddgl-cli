@@ -428,10 +428,9 @@ class GitLabClient:
     ) -> Pipeline:
         """Get details of a single pipeline.
 
-        If *fresh* is True, bypasses the low-level API response cache (both
-        read and write) for this call. Used by `ddgl attach` when polling a
-        running pipeline, where serving stale cached status would make the
-        poll interval meaningless.
+        If *fresh* is True, bypasses the low-level API response cache
+        (read and write) — used by `ddgl attach` when polling a running
+        pipeline.
 
         Raises:
             NotFoundError: pipeline does not exist.
