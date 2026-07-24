@@ -1,3 +1,6 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under the Apache-2.0 License.
+# This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
+
 """Same-job history widget for the job detail screen."""
 from __future__ import annotations
 
