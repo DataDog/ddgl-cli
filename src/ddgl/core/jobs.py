@@ -17,7 +17,7 @@ from ddgl.model.job import Job
 
 logger = logging.getLogger("ddgl.core.jobs")
 
-_JOB_TERMINAL = frozenset(
+JOB_TERMINAL = frozenset(
     {JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.SKIPPED}
 )
 
@@ -53,7 +53,7 @@ async def get_jobs(
             await asyncio.gather(*[client.get_job(jid) for jid in misses])
         )
         for j in fresh:
-            if cache is not None and j.status in _JOB_TERMINAL:
+            if cache is not None and j.status in JOB_TERMINAL:
                 cache[CacheNS.OBJECTS].set(
                     ("jobs", project_id, j.id),
                     j,
@@ -89,7 +89,7 @@ async def list_jobs(
     project_id = client._config.project_id or ""
     async for page in client.iter_jobs(pipeline_id, scope=scope):
         for job in page.items:
-            if cache is not None and job.status in _JOB_TERMINAL:
+            if cache is not None and job.status in JOB_TERMINAL:
                 cache[CacheNS.OBJECTS].set(
                     ("jobs", project_id, job.id),
                     job,

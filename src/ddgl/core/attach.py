@@ -13,9 +13,9 @@ from ddgl.cache.cache_config import CacheNS
 from ddgl.constants import (
     CACHE_TTL_FINISHED_JOB,
     MAX_CONSECUTIVE_POLL_FAILURES,
-    JobStatus,
     PipelineStatus,
 )
+from ddgl.core.jobs import JOB_TERMINAL
 from ddgl.core.pipeline import list_pipelines, resolve_pipeline
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import AttachEvent
@@ -72,14 +72,6 @@ class NullEstimator:
 # (e.g. a harness killed the call at its own timeout) just runs this same
 # sequence again — that's the whole resumability story.
 
-# Jobs "done" for progress-counting purposes: any terminal status. Mirrors
-# core/jobs.py's private terminal set; kept local since it's a small,
-# self-contained detail of attach's progress rollups.
-_JOB_DONE = frozenset(
-    {JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.SKIPPED}
-)
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -94,7 +86,7 @@ def _cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: list[Job]) 
     if cache is None:
         return
     for job in jobs:
-        if job.status in _JOB_DONE:
+        if job.status in JOB_TERMINAL:
             cache[CacheNS.OBJECTS].set(
                 ("jobs", project_id, job.id), job, ttl=CACHE_TTL_FINISHED_JOB
             )
@@ -118,7 +110,7 @@ def _cache_terminal_pipeline(cache: Cache | None, project_id: str, pipeline: Pip
 def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
     """Return (jobs_total, jobs_done, failed_job_names) for a job list."""
     total = len(jobs)
-    done = sum(1 for j in jobs if j.status in _JOB_DONE)
+    done = sum(1 for j in jobs if j.status in JOB_TERMINAL)
     failed = tuple(j.name for j in jobs if j.has_failed)
     return total, done, failed
 
@@ -142,7 +134,7 @@ def _current_stage(jobs: list[Job]) -> str | None:
     incomplete_stages: set[str] = set()
     for job in jobs:
         min_id_by_stage[job.stage] = min(min_id_by_stage.get(job.stage, job.id), job.id)
-        if job.status not in _JOB_DONE:
+        if job.status not in JOB_TERMINAL:
             incomplete_stages.add(job.stage)
 
     candidates = incomplete_stages or min_id_by_stage.keys()
