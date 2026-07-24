@@ -53,19 +53,6 @@ class AttachEvent(msgspec.Struct):
     job ID since GitLab returns jobs newest-ID-first, not in stage order —
     not an authoritative GitLab concept. `eta_seconds` is always None — v1
     ships no ETA estimation.
-
-    Kind-specific fields, otherwise unset:
-    - job:       job_id, job_name, job_stage (that job's own stage — distinct
-                 from the contextual `current_stage` above), old_status,
-                 status, duration (that job's own duration), message (the
-                 job's failure_reason, when failed)
-    - pipeline:  old_status, status
-    - poll:      the post-poll rollup summary
-    - switched:  message (human-readable description of the switch)
-    - result:    status, duration (final pipeline elapsed seconds — same
-                 value as `pipeline_elapsed` at that point, kept as its own
-                 field since `duration` already has this meaning here),
-                 reason ("terminal" or "timeout")
     """
 
     kind: AttachEventKind
@@ -74,15 +61,40 @@ class AttachEvent(msgspec.Struct):
     ref: str | None = None
     current_stage: str | None = None
     pipeline_elapsed: float | None = None
+
     status: str | None = None
+    """The pipeline's status (e.g. "running"/"success"). Set on pipeline
+    events (the new status), job events (that job's own status), and
+    result events (the final status)."""
+
     old_status: str | None = None
+    """Status before this transition. Set on pipeline and job events."""
+
     job_id: int | None = None
+    """The job's GitLab ID. Set on job events only."""
+
     job_name: str | None = None
+    """The job's name. Set on job events only."""
+
     job_stage: str | None = None
+    """That job's own stage — distinct from the contextual `current_stage`
+    rollup field above. Set on job events only."""
+
     duration: float | None = None
+    """That job's own duration on job events; the final pipeline elapsed
+    seconds on result events (same value as `pipeline_elapsed` at that
+    point, kept as its own field since `duration` means something
+    different there)."""
+
     message: str | None = None
+    """Human-readable description of a --follow rebind on switched events;
+    the job's failure_reason (when failed) on job events."""
+
     jobs_total: int | None = None
     jobs_done: int | None = None
     failed_jobs: tuple[str, ...] = ()
     eta_seconds: float | None = None
+
     reason: str | None = None
+    """Why a result event happened: "terminal" or "timeout". Set on result
+    events only."""
