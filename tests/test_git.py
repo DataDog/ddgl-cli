@@ -9,11 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from ddgl.exceptions import ShellError
 from ddgl.git import (
     detect_project_path,
     get_current_branch,
     get_recent_shas,
     get_remote_url,
+    looks_like_sha,
     parse_project_path,
 )
 
@@ -93,6 +95,37 @@ class TestGetRecentShas:
         )
         head_sha = result.stdout.decode().strip()
         assert shas[0] == head_sha
+
+    async def test_start_walks_from_given_revision_not_head(self, repo: Path) -> None:
+        shas = await get_recent_shas(depth=3, start="HEAD~1")
+        assert len(shas) == 2  # HEAD~1 and its one ancestor
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD~1"], cwd=repo, check=True, capture_output=True,
+        )
+        assert shas[0] == result.stdout.decode().strip()
+
+    async def test_unresolvable_start_raises_shell_error(self, repo: Path) -> None:
+        with pytest.raises(ShellError):
+            await get_recent_shas(depth=3, start="origin/does-not-exist")
+
+
+class TestLooksLikeSha:
+    @pytest.mark.parametrize(
+        "ref, expected",
+        [
+            ("abc1234", True),          # 7 hex chars, minimum abbreviation
+            ("a" * 40, True),           # full-length SHA
+            ("ABC1234", True),          # case-insensitive
+            ("main", False),            # branch name
+            ("main^", False),           # revision expression
+            ("feature/foo", False),     # branch with slash
+            ("abc123", False),          # too short (6 hex chars)
+            ("a" * 41, False),          # too long
+            ("deadbee", True),          # hex-looking but is a real word — still matches (documented limitation)
+        ],
+    )
+    def test_heuristic(self, ref: str, expected: bool) -> None:
+        assert looks_like_sha(ref) is expected
 
 
 class TestDetectProjectPath:

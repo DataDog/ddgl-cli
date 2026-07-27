@@ -13,11 +13,38 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB, PipelineScope, PipelineStatus
-from ddgl.exceptions import NoPipelineFoundError
-from ddgl.git import get_current_branch, get_recent_shas
+from ddgl.exceptions import NoPipelineFoundError, ShellError
+from ddgl.git import get_current_branch, get_recent_shas, looks_like_sha
 from ddgl.model.pipeline import Pipeline
 
 logger = logging.getLogger("ddgl.core.pipeline")
+
+# Cap the commit-history fallback depth when --ref is explicit (not
+# auto-detected from the current branch) — see resolve_pipeline. Walking
+# many commits back from a ref the user specifically asked about risks
+# silently returning an unrelated pipeline.
+_EXPLICIT_REF_FALLBACK_DEPTH = 1
+
+
+def _fallback_revision(ref: str) -> str:
+    """The git revision to start the commit-history fallback walk from.
+
+    GitLab only ever builds pushed commits, so a plain branch/tag-like ref
+    (including a revision expression like "main^") is resolved against the
+    *remote* state via "origin/<ref>", not whatever's checked out locally.
+    A ref that already looks like a (possibly abbreviated) commit SHA, or
+    is already "origin/"-prefixed, is used as-is.
+    """
+    if looks_like_sha(ref) or ref.startswith("origin/"):
+        return ref
+    revision = f"origin/{ref}"
+    logger.warning(
+        "No pipeline found for ref %r directly; searching commit history from "
+        "%r instead (assumes your local clone's remote-tracking ref is up to "
+        "date — run `git fetch` if this seems stale).",
+        ref, revision,
+    )
+    return revision
 
 
 async def get_pipeline(
@@ -125,15 +152,22 @@ async def find_latest_pipeline(
 ) -> Pipeline:
     """Find the latest pipeline for a ref by walking commit history.
 
-    1. Try ref as a branch name.
-    2. If no result: walk get_recent_shas(depth) one by one.
+    1. Try ref as a literal GitLab ref (branch/tag) name.
+    2. If no result: walk up to `depth` commits from _fallback_revision(ref)
+       (ref itself if it looks like a SHA, otherwise "origin/<ref>").
     3. Raise NoPipelineFoundError if nothing found.
     """
     pipelines = await list_pipelines(client, ref, count=5, cache=cache)
     if pipelines:
         return max(pipelines, key=lambda p: p.id)
 
-    shas = await get_recent_shas(depth)
+    revision = _fallback_revision(ref)
+    try:
+        shas = await get_recent_shas(depth, start=revision)
+    except ShellError as exc:
+        logger.warning("Could not resolve %r to walk commit history (%s)", revision, exc)
+        shas = []
+
     for sha in shas:
         pipelines = await list_pipelines(client, sha, count=5, cache=cache)
         if pipelines:
@@ -153,11 +187,19 @@ async def resolve_pipeline(
     """CLI convenience: auto-detect ref → find_latest_pipeline() → Pipeline.
 
     If pipeline_id is given, calls get_pipeline() directly (no ref resolution).
+
+    An explicit `ref` caps the commit-history fallback depth to
+    _EXPLICIT_REF_FALLBACK_DEPTH — unlike the auto-detected current branch
+    (which may legitimately be a few unpushed commits ahead of the last
+    built one), a ref the user specifically asked about shouldn't silently
+    walk far back and return an unrelated pipeline.
     """
     if pipeline_id is not None:
         return await get_pipeline(client, pipeline_id, cache=cache)
 
     if ref is None:
         ref = await get_current_branch()
+    else:
+        depth = min(depth, _EXPLICIT_REF_FALLBACK_DEPTH)
 
     return await find_latest_pipeline(client, ref, depth=depth, cache=cache)

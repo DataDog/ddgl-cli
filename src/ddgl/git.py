@@ -16,14 +16,28 @@ async def get_current_branch() -> str:
     return stdout
 
 
-async def get_recent_shas(depth: int = 10) -> list[str]:
-    """Return the last `depth` commit SHAs starting from HEAD (HEAD first).
+async def get_recent_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+    """Return the last `depth` commit SHAs starting from `start` (`start` first).
 
-    Uses: git log --format=%H -n {depth}
-    Raises ShellError if not in a git repo.
+    Uses: git log --format=%H -n {depth} {start}
+    Raises ShellError if not in a git repo, or if `start` doesn't resolve
+    (e.g. an `origin/<branch>` that hasn't been fetched locally).
     """
-    stdout, _ = await run_async("git", "log", "--format=%H", f"-n{depth}")
+    stdout, _ = await run_async("git", "log", "--format=%H", f"-n{depth}", start)
     return [sha for sha in stdout.splitlines() if sha]
+
+
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+
+
+def looks_like_sha(ref: str) -> bool:
+    """Heuristic: does `ref` look like a (possibly abbreviated) commit SHA?
+
+    Matches 7-40 hex characters — git's usual abbreviation length up to a
+    full SHA. Not foolproof (a branch literally named e.g. "deadbeef"
+    would misfire), but a reasonable heuristic in practice.
+    """
+    return bool(_SHA_RE.fullmatch(ref))
 
 
 async def get_remote_url(remote: str = "origin") -> str:
