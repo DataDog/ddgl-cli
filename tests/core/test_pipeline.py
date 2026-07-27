@@ -4,7 +4,10 @@
 """Tests for src/ddgl/core/pipeline.py."""
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -400,6 +403,64 @@ class TestFindLatestPipeline:
         monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _raising_shas)
         with pytest.raises(NoPipelineFoundError):
             await find_latest_pipeline(client, "some-branch")
+
+
+class TestFindLatestPipelineNeverQueriesOriginPrefixedRef:
+    """End-to-end regression, using a real git repo (not a mocked
+    get_recent_shas): "origin/<ref>" is a purely local git concept for
+    remote-tracking branches — GitLab itself has no such ref, it only
+    knows the plain branch/tag name (or, for the fallback loop, a real
+    commit SHA). The fallback must never send an "origin/"-prefixed
+    string to the GitLab API, only use it to seed the local git walk.
+    """
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A real git repo with a real, pushed-to origin remote."""
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
+        origin = tmp_path / "origin.git"
+        origin.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main"], cwd=origin,
+                       check=True, capture_output=True)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, check=True,
+                       env=env, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=work,
+                       check=True, capture_output=True)
+        for i in range(2):
+            (work / f"f{i}.txt").write_text(str(i))
+            subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"c{i}"], cwd=work, check=True,
+                           env=env, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work,
+                       check=True, capture_output=True)
+        monkeypatch.chdir(work)
+        return work
+
+    async def test_only_plain_ref_and_real_shas_reach_gitlab(
+        self, repo: Path, client: GitLabClient, mock_api: respx.MockRouter,
+    ) -> None:
+        seen_refs: list[str] = []
+
+        def _capture(request: Any, *_: Any) -> Response:
+            seen_refs.append(request.url.params.get("ref", ""))
+            return Response(200, json=[])
+
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(side_effect=_capture)
+
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, "main^", depth=2)
+
+        assert seen_refs, "the walk should have queried at least one ref"
+        assert not any("origin/" in ref for ref in seen_refs)
+        # First query is the literal text (step 1); the rest are real
+        # commit SHAs from walking origin/main^ locally (step 2) — never
+        # the "origin/main^" revision string itself.
+        assert seen_refs[0] == "main^"
+        assert all(len(r) == 40 for r in seen_refs[1:])
 
 
 # ---------------------------------------------------------------------------
