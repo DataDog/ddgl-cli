@@ -4,7 +4,10 @@
 """Tests for src/ddgl/core/pipeline.py."""
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,7 +23,7 @@ from ddgl.core.pipeline import (
     list_pipelines,
     resolve_pipeline,
 )
-from ddgl.exceptions import NoPipelineFoundError
+from ddgl.exceptions import NoPipelineFoundError, ShellError
 from ddgl.model.pipeline import Pipeline
 
 from ._stubs import TEST_CONFIG, FakeCache
@@ -266,7 +269,7 @@ class TestFindLatestPipeline:
             return_value=Response(200, json=[])
         )
 
-        async def _fake_shas(depth: int = 10) -> list[str]:
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
             return ["sha1", "sha2"]
 
         monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
@@ -291,12 +294,173 @@ class TestFindLatestPipeline:
             side_effect=_pipelines_by_ref
         )
 
-        async def _fake_shas(depth: int = 10) -> list[str]:
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
             return ["sha1", "deadbeef", "sha3"]
 
         monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
         result = await find_latest_pipeline(client, "main")
         assert result.id == 77
+
+    async def test_walks_from_origin_prefixed_ref_not_head(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression: the fallback used to walk local HEAD regardless of
+        `ref` — e.g. `--ref main^` (not a real GitLab ref, and not HEAD
+        either) would silently scan HEAD's history instead of main^'s."""
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+        seen_starts = []
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            seen_starts.append(start)
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, "main^")
+        assert seen_starts == ["origin/main^"]
+
+    async def test_walks_from_sha_as_is_no_origin_prefix(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+        seen_starts = []
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            seen_starts.append(start)
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        sha = "abc1234"
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, sha)
+        assert seen_starts == [sha]
+
+    async def test_does_not_double_prefix_already_origin_ref(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+        seen_starts = []
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            seen_starts.append(start)
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, "origin/main")
+        assert seen_starts == ["origin/main"]
+
+    async def test_logs_warning_when_prefixing_with_origin(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        with caplog.at_level("WARNING", logger="ddgl.core.pipeline"):
+            with pytest.raises(NoPipelineFoundError):
+                await find_latest_pipeline(client, "main^")
+        assert any("origin/main^" in msg for msg in caplog.messages)
+
+    async def test_unresolvable_revision_treated_as_no_candidates(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A local clone that hasn't fetched `origin/<ref>` shouldn't crash
+        the whole command — just falls through to NoPipelineFoundError."""
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+
+        async def _raising_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            raise ShellError(["git", "log"], 128, "fatal: bad revision")
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _raising_shas)
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, "some-branch")
+
+
+class TestFindLatestPipelineNeverQueriesOriginPrefixedRef:
+    """End-to-end regression, using a real git repo (not a mocked
+    get_recent_shas): "origin/<ref>" is a purely local git concept for
+    remote-tracking branches — GitLab itself has no such ref, it only
+    knows the plain branch/tag name (or, for the fallback loop, a real
+    commit SHA). The fallback must never send an "origin/"-prefixed
+    string to the GitLab API, only use it to seed the local git walk.
+    """
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A real git repo with a real, pushed-to origin remote."""
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
+        origin = tmp_path / "origin.git"
+        origin.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main"], cwd=origin,
+                       check=True, capture_output=True)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, check=True,
+                       env=env, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=work,
+                       check=True, capture_output=True)
+        for i in range(2):
+            (work / f"f{i}.txt").write_text(str(i))
+            subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"c{i}"], cwd=work, check=True,
+                           env=env, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work,
+                       check=True, capture_output=True)
+        monkeypatch.chdir(work)
+        return work
+
+    async def test_only_plain_ref_and_real_shas_reach_gitlab(
+        self, repo: Path, client: GitLabClient, mock_api: respx.MockRouter,
+    ) -> None:
+        seen_refs: list[str] = []
+
+        def _capture(request: Any, *_: Any) -> Response:
+            seen_refs.append(request.url.params.get("ref", ""))
+            return Response(200, json=[])
+
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(side_effect=_capture)
+
+        with pytest.raises(NoPipelineFoundError):
+            await find_latest_pipeline(client, "main^", depth=2)
+
+        assert seen_refs, "the walk should have queried at least one ref"
+        assert not any("origin/" in ref for ref in seen_refs)
+        # First query is the literal text (step 1); the rest are real
+        # commit SHAs from walking origin/main^ locally (step 2) — never
+        # the "origin/main^" revision string itself.
+        assert seen_refs[0] == "main^"
+        assert all(len(r) == 40 for r in seen_refs[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -339,3 +503,47 @@ class TestResolvePipeline:
         )
         await resolve_pipeline(client, ref="other")
         assert route.calls.last.request.url.params.get("ref") == "other"
+
+    async def test_auto_detected_ref_keeps_full_depth(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def _fake_branch() -> str:
+            return "my-branch"
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_current_branch", _fake_branch)
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+        seen_depths = []
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            seen_depths.append(depth)
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        with pytest.raises(NoPipelineFoundError):
+            await resolve_pipeline(client, depth=10)
+        assert seen_depths == [10]
+
+    async def test_explicit_ref_caps_fallback_depth(
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_api.get("/projects/grp%2Fproj/pipelines").mock(
+            return_value=Response(200, json=[])
+        )
+        seen_depths = []
+
+        async def _fake_shas(depth: int = 10, start: str = "HEAD") -> list[str]:
+            seen_depths.append(depth)
+            return []
+
+        monkeypatch.setattr("ddgl.core.pipeline.get_recent_shas", _fake_shas)
+        with pytest.raises(NoPipelineFoundError):
+            await resolve_pipeline(client, ref="main^", depth=10)
+        assert seen_depths == [1]
