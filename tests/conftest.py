@@ -21,6 +21,19 @@ TEST_CONFIG = Config(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero out the client's retry backoff for every test.
+
+    Without this, any test that mocks a retryable status (408/429/5xx)
+    would incur real multi-second sleeps via GitLabClient._get_response's
+    retry logic — slow and unnecessary for a unit test suite. A test that
+    specifically wants to verify retry TIMING can override this locally
+    with its own monkeypatch.setattr call.
+    """
+    monkeypatch.setattr("ddgl.client.RETRY_BACKOFF_INITIAL_SECONDS", 0.0)
+
+
 @pytest.fixture()
 def config() -> Config:
     return TEST_CONFIG

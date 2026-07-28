@@ -17,9 +17,20 @@ from ddgl.model.job import Job
 
 logger = logging.getLogger("ddgl.core.jobs")
 
-_JOB_TERMINAL = frozenset(
+JOB_TERMINAL = frozenset(
     {JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.SKIPPED}
 )
+
+
+def cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: Iterable[Job]) -> None:
+    """Write terminal-state jobs to the durable object cache."""
+    if cache is None:
+        return
+    for job in jobs:
+        if job.status in JOB_TERMINAL:
+            cache[CacheNS.OBJECTS].set(
+                ("jobs", project_id, job.id), job, ttl=CACHE_TTL_FINISHED_JOB
+            )
 
 
 async def get_jobs(
@@ -52,13 +63,8 @@ async def get_jobs(
         fresh: list[Job] = list(
             await asyncio.gather(*[client.get_job(jid) for jid in misses])
         )
+        cache_terminal_jobs(cache, project_id, fresh)
         for j in fresh:
-            if cache is not None and j.status in _JOB_TERMINAL:
-                cache[CacheNS.OBJECTS].set(
-                    ("jobs", project_id, j.id),
-                    j,
-                    ttl=CACHE_TTL_FINISHED_JOB,
-                )
             cached_map[j.id] = j
 
     return [cached_map[jid] for jid in ids if jid in cached_map]
@@ -88,13 +94,8 @@ async def list_jobs(
     """
     project_id = client._config.project_id or ""
     async for page in client.iter_jobs(pipeline_id, scope=scope):
+        cache_terminal_jobs(cache, project_id, page.items)
         for job in page.items:
-            if cache is not None and job.status in _JOB_TERMINAL:
-                cache[CacheNS.OBJECTS].set(
-                    ("jobs", project_id, job.id),
-                    job,
-                    ttl=CACHE_TTL_FINISHED_JOB,
-                )
             yield job
 
 

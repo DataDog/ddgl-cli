@@ -9,6 +9,7 @@ import os
 import rich_click as click
 from rich.logging import RichHandler
 
+from ddgl.cli.attach import attach_cmd
 from ddgl.cli.format import format_cmd
 from ddgl.cli.jobs import jobs
 from ddgl.cli.logs import logs
@@ -67,3 +68,4 @@ main.add_command(jobs)
 main.add_command(logs)
 main.add_command(viz)
 main.add_command(format_cmd, name="format")
+main.add_command(attach_cmd, name="attach")

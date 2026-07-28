@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -18,11 +19,16 @@ from ddgl.constants import (
     CACHE_TTL_API_JOB_LIST,
     CACHE_TTL_API_PIPELINE,
     CACHE_TTL_API_PIPELINE_LIST,
+    MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
+    RETRY_ATTEMPTS,
+    RETRY_BACKOFF_INITIAL_SECONDS,
+    RETRY_BACKOFF_MULTIPLIER,
     JobStatus,
     PipelineScope,
 )
 from ddgl.exceptions import (
+    RETRYABLE_STATUS_CODES,
     ConfigError,
     GitLabAPIError,
     NotFoundError,
@@ -38,6 +44,27 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 logger = logging.getLogger("ddgl.http")
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff delay before the given 0-indexed retry attempt."""
+    return RETRY_BACKOFF_INITIAL_SECONDS * (RETRY_BACKOFF_MULTIPLIER**attempt)
+
+
+def _retry_after_seconds(resp: httpx.Response) -> float | None:
+    """Parse a 429 response's `Retry-After` header, if present and numeric.
+
+    GitLab may also send an HTTP-date form (e.g. "Wed, 21 Oct 2026 07:28:00
+    GMT"); that's rare in practice for this API and not handled here — falls
+    back to the caller's own backoff delay instead of failing.
+    """
+    value = resp.headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 class GitLabClient:
@@ -76,6 +103,53 @@ class GitLabClient:
     def _cache_key(path: str, params: dict) -> str:
         raw = f"{path}?{'&'.join(f'{k}={v}' for k, v in sorted(params.items()))}"
         return hashlib.sha256(raw.encode()).hexdigest()
+
+    async def _get_response(self, path: str, **params: Any) -> httpx.Response:
+        """GET with automatic retry on transient (retryable) failures.
+
+        Retries a connection-level failure (timeout, DNS, reset — GitLab
+        never even responded) or a retryable HTTP status (408/429/5xx, see
+        RETRYABLE_STATUS_CODES) up to RETRY_ATTEMPTS times, honoring a 429's
+        `Retry-After` header when present.
+
+        Does NOT raise on a non-2xx response itself — callers still call
+        `_raise_for_status()` on the returned response, so the exact
+        exception mapping (ConfigError/NotFoundError/GitLabAPIError) stays
+        defined in exactly one place. This only decides whether to retry
+        before handing back whatever response (or connection error) it
+        ultimately has.
+        """
+        last_exc: httpx.TransportError | None = None
+        for attempt in range(RETRY_ATTEMPTS):
+            is_last_attempt = attempt == RETRY_ATTEMPTS - 1
+            try:
+                resp = await self._http.get(path, params=params)
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if is_last_attempt:
+                    raise
+                delay = _backoff_delay(attempt)
+                logger.warning(
+                    "GET %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
+                    path, exc, delay, attempt + 2, RETRY_ATTEMPTS,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code not in RETRYABLE_STATUS_CODES or is_last_attempt:
+                return resp
+
+            delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
+            logger.warning(
+                "GET %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
+                path, resp.status_code, delay, attempt + 2, RETRY_ATTEMPTS,
+            )
+            await asyncio.sleep(delay)
+
+        # Unreachable: the loop above always returns or raises on its last
+        # iteration. Satisfies type checkers without a real code path.
+        assert last_exc is not None
+        raise last_exc
 
     def _raise_for_status(self, resp: httpx.Response) -> None:
         """Translate HTTP errors into typed exceptions.
@@ -122,7 +196,7 @@ class GitLabClient:
                 logger.debug("API cache HIT %s", path)
                 return json.loads(hit)
         logger.debug("GET %s", path)
-        resp = await self._http.get(path, params=params)
+        resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
         self._raise_for_status(resp)
         data = resp.json()
@@ -141,7 +215,7 @@ class GitLabClient:
             GitLabAPIError: any other HTTP error status.
         """
         logger.debug("GET %s", path)
-        resp = await self._http.get(path)
+        resp = await self._get_response(path)
         logger.debug("GET %s -> %d", path, resp.status_code)
         self._raise_for_status(resp)
         return resp.text
@@ -172,7 +246,7 @@ class GitLabClient:
                 items = [item_factory(d) for d in json.loads(hit)]
                 return Page(items=items, page=1, next_page=None, total_pages=1, total=len(items))
         logger.debug("GET %s", path)
-        resp = await self._http.get(path, params=params)
+        resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
         self._raise_for_status(resp)
         page = Page.from_response(resp, item_factory)
@@ -216,9 +290,67 @@ class GitLabClient:
         ttl: float = 0,
         **params: Any,
     ) -> list[T]:
-        """Exhaust pagination and return all items as a flat list."""
-        items: list[T] = []
-        async for page in self._paginate(path, item_factory, ttl=ttl, **params):
+        """Exhaust pagination and return all items as a flat list.
+
+        Fetches page 1 first (to learn the total page count from GitLab's
+        `x-total-pages` header), then fetches the remaining pages
+        concurrently — bounded by `MAX_CONCURRENT_PAGE_FETCHES` — instead of
+        one at a time. Collapses N sequential round-trips into ~2 for large
+        result sets (e.g. a pipeline with hundreds of jobs).
+
+        Raises:
+            PaginationLimitError: total pages exceeds MAX_PAGES.
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status, from any page. If a
+                later page fails after earlier ones succeeded, still-pending
+                page fetches are canceled rather than left to complete
+                unobserved.
+        """
+        first = await self._get_page(path, item_factory, ttl=ttl, page=1, **params)
+        items: list[T] = list(first.items)
+
+        if not first.has_next:
+            return items
+
+        total_pages = first.total_pages
+        if total_pages is None:
+            # No page count available. Not reachable via the normal HTTP
+            # response path (GitLab always reports x-total-pages), but the
+            # per-page cache-hit branch of _get_page synthesizes has_next as
+            # False for a lone cached page — so total_pages is only ever
+            # None here if has_next was somehow still True. Fall back to a
+            # sequential fetch (can't reuse _paginate: it always starts its
+            # own internal page counter at 1, so passing page=first.next_page
+            # into it would collide with its own page= kwarg).
+            page_num = first.next_page
+            pages_fetched = 1  # page 1 already counted
+            while page_num is not None:
+                if pages_fetched >= MAX_PAGES:
+                    raise PaginationLimitError(MAX_PAGES, None)
+                page = await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+                items.extend(page.items)
+                pages_fetched += 1
+                page_num = page.next_page
+            return items
+
+        if total_pages > MAX_PAGES:
+            raise PaginationLimitError(MAX_PAGES, total_pages)
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_PAGE_FETCHES)
+
+        async def _fetch(page_num: int) -> Page[T]:
+            async with semaphore:
+                return await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+
+        tasks = [asyncio.create_task(_fetch(n)) for n in range(2, total_pages + 1)]
+        try:
+            pages = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            raise
+
+        for page in pages:
             items.extend(page.items)
         return items
 
@@ -230,6 +362,8 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        *,
+        fresh: bool = False,
     ) -> Page[Pipeline]:
         """Fetch a single page of pipelines."""
         logger.info("Fetching pipelines (ref=%s)", ref or "all")
@@ -240,7 +374,10 @@ class GitLabClient:
         if scope is not None:
             params["scope"] = scope
         return await self._get_page(
-            f"{base}/pipelines", Pipeline.from_api, ttl=CACHE_TTL_API_PIPELINE_LIST, **params
+            f"{base}/pipelines",
+            Pipeline.from_api,
+            ttl=0 if fresh else CACHE_TTL_API_PIPELINE_LIST,
+            **params,
         )
 
     async def iter_pipelines(
@@ -292,8 +429,14 @@ class GitLabClient:
         self,
         pipeline_id: int,
         project_id: str | None = None,
+        *,
+        fresh: bool = False,
     ) -> Pipeline:
         """Get details of a single pipeline.
+
+        If *fresh* is True, bypasses the low-level API response cache
+        (read and write) — used by `ddgl attach` when polling a running
+        pipeline.
 
         Raises:
             NotFoundError: pipeline does not exist.
@@ -301,8 +444,9 @@ class GitLabClient:
         """
         logger.info("Getting pipeline %d", pipeline_id)
         base = self._project_path(project_id)
+        ttl = 0 if fresh else CACHE_TTL_API_PIPELINE
         try:
-            data = await self._get(f"{base}/pipelines/{pipeline_id}", ttl=CACHE_TTL_API_PIPELINE)
+            data = await self._get(f"{base}/pipelines/{pipeline_id}", ttl=ttl)
         except NotFoundError:
             raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
@@ -356,17 +500,25 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        *,
+        fresh: bool = False,
     ) -> list[Job]:
-        """Get all jobs for a pipeline (exhausts pagination)."""
+        """Get all jobs for a pipeline (exhausts pagination).
+
+        If *fresh* is True, bypasses the low-level API response cache for
+        each page fetched. Used by `ddgl attach` when polling running job
+        status (see `get_pipeline`).
+        """
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if scope is not None:
             params["scope"] = scope
+        ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            ttl=CACHE_TTL_API_JOB_LIST,
+            ttl=ttl,
             **params,
         )
 

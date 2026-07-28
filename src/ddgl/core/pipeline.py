@@ -47,6 +47,22 @@ def _fallback_revision(ref: str) -> str:
     return revision
 
 
+def cache_terminal_pipeline(cache: Cache | None, project_id: str, pipeline: Pipeline) -> None:
+    """Write a SUCCESS pipeline to the durable object cache.
+
+    Only SUCCESS is cached — other terminal statuses can still change
+    (e.g. a manual retry).
+    """
+    if cache is None:
+        return
+    if pipeline.status == PipelineStatus.SUCCESS:
+        cache[CacheNS.OBJECTS].set(
+            ("pipelines", project_id, pipeline.id),
+            pipeline,
+            ttl=CACHE_TTL_FINISHED_JOB,
+        )
+
+
 async def get_pipeline(
     client: GitLabClient,
     pipeline_id: int,
@@ -66,14 +82,7 @@ async def get_pipeline(
 
     logger.debug("fetching pipeline %d from API", pipeline_id)
     pipeline = await client.get_pipeline(pipeline_id)
-
-    if cache is not None and pipeline.status == PipelineStatus.SUCCESS:
-        cache[CacheNS.OBJECTS].set(
-            ("pipelines", project_id, pipeline_id),
-            pipeline,
-            ttl=CACHE_TTL_FINISHED_JOB,
-        )
-
+    cache_terminal_pipeline(cache, project_id, pipeline)
     return pipeline
 
 
@@ -122,23 +131,18 @@ async def list_pipelines(
     scope: PipelineScope | None = None,
     count: int = 20,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> list[Pipeline]:
     """Fetch up to `count` pipelines for a ref. One API call.
 
     No list-level caching. SUCCESS pipelines among the results are cached individually.
     """
     project_id = client._config.project_id or ""
-    page = await client.fetch_pipelines(ref=ref, per_page=count, scope=scope)
+    page = await client.fetch_pipelines(ref=ref, per_page=count, scope=scope, fresh=fresh)
     pipelines = page.items
 
-    if cache is not None:
-        for p in pipelines:
-            if p.status == PipelineStatus.SUCCESS:
-                cache[CacheNS.OBJECTS].set(
-                    ("pipelines", project_id, p.id),
-                    p,
-                    ttl=CACHE_TTL_FINISHED_JOB,
-                )
+    for p in pipelines:
+        cache_terminal_pipeline(cache, project_id, p)
 
     return pipelines
 
@@ -149,6 +153,7 @@ async def find_latest_pipeline(
     *,
     depth: int = 10,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> Pipeline:
     """Find the latest pipeline for a ref by walking commit history.
 
@@ -157,7 +162,7 @@ async def find_latest_pipeline(
        (ref itself if it looks like a SHA, otherwise "origin/<ref>").
     3. Raise NoPipelineFoundError if nothing found.
     """
-    pipelines = await list_pipelines(client, ref, count=5, cache=cache)
+    pipelines = await list_pipelines(client, ref, count=5, cache=cache, fresh=fresh)
     if pipelines:
         return max(pipelines, key=lambda p: p.id)
 
@@ -169,7 +174,7 @@ async def find_latest_pipeline(
         shas = []
 
     for sha in shas:
-        pipelines = await list_pipelines(client, sha, count=5, cache=cache)
+        pipelines = await list_pipelines(client, sha, count=5, cache=cache, fresh=fresh)
         if pipelines:
             return max(pipelines, key=lambda p: p.id)
 
@@ -183,6 +188,7 @@ async def resolve_pipeline(
     pipeline_id: int | None = None,
     depth: int = 10,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> Pipeline:
     """CLI convenience: auto-detect ref → find_latest_pipeline() → Pipeline.
 
@@ -202,4 +208,4 @@ async def resolve_pipeline(
     else:
         depth = min(depth, _EXPLICIT_REF_FALLBACK_DEPTH)
 
-    return await find_latest_pipeline(client, ref, depth=depth, cache=cache)
+    return await find_latest_pipeline(client, ref, depth=depth, cache=cache, fresh=fresh)

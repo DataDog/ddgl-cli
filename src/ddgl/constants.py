@@ -8,6 +8,16 @@ from enum import StrEnum
 DEFAULT_GITLAB_URL = "https://gitlab.ddbuild.io"
 
 MAX_PAGES = 50
+MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
+
+RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client GET call
+RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1
+RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by this
+
+# attach()'s poll loop: give up after this many CONSECUTIVE poll ticks fail
+# (even after the client's own per-call retries are exhausted), rather than
+# warning and skipping forever with no --timeout set.
+MAX_CONSECUTIVE_POLL_FAILURES = 5
 
 CACHE_TTL_DDTOOL_TOKEN = 3600.0            # 1 h   — ddtool-issued GitLab tokens
 CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change

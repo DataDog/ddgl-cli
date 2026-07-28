@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ import respx
 from ddgl.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.config import Config
-from ddgl.exceptions import ConfigError, PaginationLimitError
+from ddgl.exceptions import ConfigError, GitLabAPIError, PaginationLimitError
 from ddgl.model.job import Job
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
@@ -235,6 +236,72 @@ class TestGetAllJobs:
         assert len(jobs) == 2
         assert jobs[1].failure_reason == "script_failure"
 
+    async def test_many_pages_fetched_and_assembled_in_order(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        """Pages 2..N are fetched concurrently, but results must still
+        assemble in page order regardless of completion order — this is
+        what makes get_all_jobs safe to use for a large pipeline."""
+        n_pages = 6
+
+        def _respond(request: Any, **kwargs: Any) -> httpx.Response:
+            page = int(request.url.params["page"])
+            return _paginated_response(
+                [{"id": page, "name": f"job-{page}", "stage": "test",
+                  "status": "success", "ref": "main"}],
+                page=page,
+                next_page=page + 1 if page < n_pages else None,
+                total_pages=n_pages,
+            )
+
+        mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(side_effect=_respond)
+
+        jobs = await client.get_all_jobs(100)
+
+        assert len(jobs) == n_pages
+        assert [j.id for j in jobs] == list(range(1, n_pages + 1))
+
+    async def test_pages_beyond_max_pages_raises_without_fetching_them(
+        self, client: GitLabClient, mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ddgl.client.MAX_PAGES", 2)
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(
+            MOCK_JOBS_PAGE1, page=1, next_page=2, total_pages=5,
+        ))
+
+        with pytest.raises(PaginationLimitError, match="2/5"):
+            await client.get_all_jobs(100)
+
+        # Fails fast on page 1's header alone — never fires the batch.
+        assert route.call_count == 1
+
+    async def test_error_on_any_page_propagates(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        def _respond(request: Any, **kwargs: Any) -> httpx.Response:
+            page = int(request.url.params["page"])
+            if page == 3:
+                return httpx.Response(500, json={"message": "boom"})
+            return _paginated_response(
+                [{"id": page, "name": f"job-{page}", "stage": "test",
+                  "status": "success", "ref": "main"}],
+                page=page,
+                next_page=page + 1 if page < 4 else None,
+                total_pages=4,
+            )
+
+        mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(side_effect=_respond)
+
+        with pytest.raises(GitLabAPIError):
+            await client.get_all_jobs(100)
+
 
 class TestGetJob:
     async def test_returns_job(
@@ -262,6 +329,73 @@ class TestGetPipeline:
         assert isinstance(result, Pipeline)
         assert result.sha == "abc123"
         assert result.duration == 299
+
+
+class TestRetryOnTransientError:
+    """Tests for GitLabClient._get_response's retry-on-transient-failure
+    logic, exercised via get_pipeline() as a representative caller."""
+
+    async def test_succeeds_after_one_retryable_failure(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.Response(503, json={"message": "unavailable"}),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        result = await client.get_pipeline(100)
+        assert result.id == 100
+        assert route.call_count == 2
+
+    async def test_succeeds_after_connection_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.ConnectError("connection reset"),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        result = await client.get_pipeline(100)
+        assert result.id == 100
+        assert route.call_count == 2
+
+    async def test_non_retryable_status_fails_immediately(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100").mock(
+            return_value=httpx.Response(400, json={"message": "bad request"})
+        )
+        with pytest.raises(GitLabAPIError):
+            await client.get_pipeline(100)
+        assert route.call_count == 1  # no retry attempted for a non-retryable status
+
+    async def test_exhausts_retries_and_raises_from_final_response(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100").mock(
+            return_value=httpx.Response(500, json={"message": "still broken"})
+        )
+        with pytest.raises(GitLabAPIError):
+            await client.get_pipeline(100)
+        assert route.call_count == 3  # RETRY_ATTEMPTS: exhausted, then raised
+
+    async def test_respects_retry_after_header(
+        self, client: GitLabClient, mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sleeps: list[float] = []
+
+        async def _fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
+        route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
+        route.side_effect = [
+            httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "7"}),
+            httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
+        ]
+        await client.get_pipeline(100)
+        assert sleeps == [7.0]  # honored the header, not the default backoff
 
 
 class TestGetJobLog:
@@ -398,6 +532,36 @@ class TestClientCaching:
 
         assert result.id == 100
         assert route.call_count == 1
+
+    async def test_get_pipeline_fresh_bypasses_cache(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """fresh=True re-hits the API even when a prior call cached the response."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100",
+        ).mock(return_value=httpx.Response(200, json=MOCK_PIPELINE_DETAIL))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_pipeline(100)
+                await client.get_pipeline(100, fresh=True)
+
+        assert route.call_count == 2
+
+    async def test_get_all_jobs_fresh_bypasses_cache(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """fresh=True re-hits the API even when a prior call cached the response."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_all_jobs(100)
+                await client.get_all_jobs(100, fresh=True)
+
+        assert route.call_count == 2
 
     async def test_get_text_is_not_cached(
         self, tmp_path: Path, mock_api: respx.MockRouter

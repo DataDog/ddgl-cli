@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+# Shared with client.py's retry-on-transient-error logic, so the "what counts
+# as retryable" definition lives in exactly one place.
+RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
 
 class ConfigError(Exception):
     """Raised when required configuration is missing."""
@@ -82,4 +86,4 @@ class GitLabAPIError(Exception):
     @property
     def is_retryable(self) -> bool:
         """Whether this error is likely transient and worth retrying."""
-        return self.status_code in {408, 429, 500, 502, 503, 504}
+        return self.status_code in RETRYABLE_STATUS_CODES
