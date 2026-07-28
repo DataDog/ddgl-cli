@@ -51,28 +51,35 @@ class Config(msgspec.Struct, frozen=True):
         return f"{self.gitlab_url.rstrip('/')}/api/v4"
 
 
-def _resolve_token() -> str:
-    """Resolve a GitLab token: env var first, then ddtool."""
+def _resolve_token(file_config: ConfigFile) -> str:
+    """Resolve a GitLab token: env var, then token_file, then token_command."""
     token = os.environ.get("GITLAB_TOKEN", "")
     if token:
         logger.info("Token resolved via GITLAB_TOKEN env var")
         return token
 
-    try:
-        stdout, _ = run(
-            "ddtool", "auth", "gitlab", "token",
-            check=True,
-            timeout=10.0,
-        )
-        if stdout:
-            logger.info("Token resolved via ddtool")
-            return stdout
-    except (FileNotFoundError, ShellError, subprocess.TimeoutExpired):
-        pass
+    if file_config.token_file:
+        path = Path(file_config.token_file)
+        try:
+            token = path.read_text().strip()
+        except OSError as e:
+            raise ConfigError(f"Failed to read token_file {path}: {e}") from e
+        if token:
+            logger.info("Token resolved via token_file")
+            return token
+
+    if file_config.token_command:
+        try:
+            stdout, _ = run(*file_config.token_command, check=True, timeout=10.0)
+            if stdout:
+                logger.info("Token resolved via token_command")
+                return stdout
+        except (FileNotFoundError, ShellError, subprocess.TimeoutExpired):
+            pass
 
     raise ConfigError(
-        "No GitLab token found. Set the GITLAB_TOKEN environment variable "
-        "or ensure `ddtool auth gitlab token` is available."
+        "No GitLab token found. Set the GITLAB_TOKEN environment variable, "
+        "or configure `token_file` or `token_command` in the config file."
     )
 
 
@@ -82,7 +89,8 @@ async def load_config() -> Config:
 
     Token resolution (first match wins):
         1. GITLAB_TOKEN env var
-        2. `ddtool auth gitlab token` command
+        2. `token_file` in the config file
+        3. `token_command` in the config file
 
     Project ID resolution (first match wins):
         1. GITLAB_PROJECT_ID env var
@@ -107,7 +115,7 @@ async def load_config() -> Config:
 
     config = Config(
         gitlab_url=os.environ.get("GITLAB_URL") or file_config.gitlab_url,
-        private_token=_resolve_token(),
+        private_token=_resolve_token(file_config),
         project_id=project_id,
     )
     logger.debug(

@@ -84,35 +84,46 @@ class TestLoadConfig:
             cfg = await load_config()
         assert cfg.gitlab_url == "https://gitlab.com"
 
-    async def test_ddtool_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
-        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
-
-        with patch("ddgl.config.loader.run", return_value=("ddtool-token", "")):
-            cfg = await load_config()
-
-        assert cfg.private_token == "ddtool-token"
-
-    async def test_ddtool_failure_raises(
-        self, monkeypatch: pytest.MonkeyPatch,
+    async def test_token_command_fallback(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
         monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        config_file_path.write_text(
+            'token_command = ["my-auth-tool", "print-token"]\n'
+        )
+
+        with patch("ddgl.config.loader.run", return_value=("cmd-token", "")):
+            cfg = await load_config()
+
+        assert cfg.private_token == "cmd-token"
+
+    async def test_token_command_failure_raises(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        config_file_path.write_text(
+            'token_command = ["my-auth-tool", "print-token"]\n'
+        )
 
         with (
             patch(
                 "ddgl.config.loader.run",
-                side_effect=ShellError(["ddtool"], 1, "fail"),
+                side_effect=ShellError(["my-auth-tool"], 1, "fail"),
             ),
             pytest.raises(ConfigError, match="No GitLab token found"),
         ):
             await load_config()
 
-    async def test_ddtool_not_found_raises(
-        self, monkeypatch: pytest.MonkeyPatch,
+    async def test_token_command_not_found_raises(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
         monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        config_file_path.write_text(
+            'token_command = ["my-auth-tool", "print-token"]\n'
+        )
 
         with (
             patch(
@@ -122,6 +133,82 @@ class TestLoadConfig:
             pytest.raises(ConfigError, match="No GitLab token found"),
         ):
             await load_config()
+
+    async def test_no_token_source_raises(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+
+        with pytest.raises(ConfigError, match="No GitLab token found"):
+            await load_config()
+
+    async def test_token_file_fallback(
+        self,
+        config_file_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        token_path = tmp_path / "token.txt"
+        token_path.write_text("file-token\n")
+        config_file_path.write_text(f'token_file = "{token_path}"\n')
+
+        cfg = await load_config()
+
+        assert cfg.private_token == "file-token"
+
+    async def test_token_file_missing_raises(
+        self,
+        config_file_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        missing_path = tmp_path / "nonexistent-token.txt"
+        config_file_path.write_text(f'token_file = "{missing_path}"\n')
+
+        with pytest.raises(ConfigError, match="Failed to read token_file"):
+            await load_config()
+
+    async def test_token_file_takes_precedence_over_token_command(
+        self,
+        config_file_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        token_path = tmp_path / "token.txt"
+        token_path.write_text("file-token\n")
+        config_file_path.write_text(
+            f'token_file = "{token_path}"\n'
+            'token_command = ["my-auth-tool"]\n'
+        )
+
+        with patch("ddgl.config.loader.run") as mock_run:
+            cfg = await load_config()
+
+        assert cfg.private_token == "file-token"
+        mock_run.assert_not_called()
+
+    async def test_env_token_takes_precedence_over_token_file(
+        self,
+        config_file_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "env-token")
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        token_path = tmp_path / "token.txt"
+        token_path.write_text("file-token\n")
+        config_file_path.write_text(f'token_file = "{token_path}"\n')
+
+        cfg = await load_config()
+
+        assert cfg.private_token == "env-token"
 
     async def test_project_id_from_env_takes_precedence(
         self, monkeypatch: pytest.MonkeyPatch,
