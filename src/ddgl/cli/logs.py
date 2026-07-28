@@ -138,9 +138,8 @@ async def _fetch_logs(
     no_cache: bool = False,
 ) -> list[tuple[str, str]]:
     """Fetch logs and return [(job_name, log_text), ...]."""
-    config = await load_config()
-
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+        config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:
             if job_id is not None:
                 with nullcontext() if quiet else console.status("Fetching log…"):

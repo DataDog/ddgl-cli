@@ -28,19 +28,14 @@ def viz(ctx: click.Context, ref: str | None, pipeline_id: int | None, depth: int
 
 async def _viz(ref: str | None, pipeline_id: int | None, depth: int, *, no_cache: bool = False) -> None:
     try:
-        config = await load_config()
-    except ConfigError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-    try:
         with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+            config = await load_config(cache=cache)
             async with GitLabClient(config, cache=cache) as client:
                 pipeline = await resolve_pipeline(
                     client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache
                 )
                 app = PipelineViewer(pipeline, client, cache)
                 await app.run_async()
-    except (NoPipelineFoundError, NotFoundError) as e:
+    except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

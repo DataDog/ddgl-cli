@@ -25,7 +25,7 @@ class Cache:
         with Cache.open(Path("~/.cache/ddgl").expanduser()) as cache:
             # JSON (projects, tokens)
             entry  = cache[CacheNS.PROJECTS]["git_root"]
-            cache[CacheNS.TOKENS].set(gitlab_url, token, ttl=CACHE_TTL_DDTOOL_TOKEN)
+            cache[CacheNS.TOKENS].set(gitlab_url, token, ttl=CACHE_TTL_TOKEN)
 
             # KV SQLite (API responses)
             hit = cache[CacheNS.API_RESPONSES][req_hash]

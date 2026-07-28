@@ -11,6 +11,8 @@ from pathlib import Path
 import msgspec
 from platformdirs import user_config_path
 
+from ddgl.cache import Cache, CacheNS
+from ddgl.constants import CACHE_TTL_TOKEN
 from ddgl.exceptions import ConfigError, ShellError
 from ddgl.git import detect_project_path
 from ddgl.model.config import ConfigFile
@@ -51,12 +53,24 @@ class Config(msgspec.Struct, frozen=True):
         return f"{self.gitlab_url.rstrip('/')}/api/v4"
 
 
-def _resolve_token(file_config: ConfigFile) -> str:
-    """Resolve a GitLab token: env var, then token_file, then token_command."""
+def _resolve_token(
+    file_config: ConfigFile, gitlab_url: str, cache: Cache | None,
+) -> str:
+    """Resolve a GitLab token: env var, then token_file, then token_command.
+
+    `token_file`/`token_command` results are cached (keyed by `gitlab_url`)
+    when a cache is supplied. Env-var tokens are never cached.
+    """
     token = os.environ.get("GITLAB_TOKEN", "")
     if token:
         logger.info("Token resolved via GITLAB_TOKEN env var")
         return token
+
+    if cache is not None:
+        cached = cache[CacheNS.TOKENS][gitlab_url]
+        if cached is not None:
+            logger.info("Token resolved via cache")
+            return cached
 
     if file_config.token_file:
         path = Path(file_config.token_file)
@@ -66,6 +80,8 @@ def _resolve_token(file_config: ConfigFile) -> str:
             raise ConfigError(f"Failed to read token_file {path}: {e}") from e
         if token:
             logger.info("Token resolved via token_file")
+            if cache is not None:
+                cache[CacheNS.TOKENS].set(gitlab_url, token, ttl=CACHE_TTL_TOKEN)
             return token
 
     if file_config.token_command:
@@ -73,6 +89,8 @@ def _resolve_token(file_config: ConfigFile) -> str:
             stdout, _ = run(*file_config.token_command, check=True, timeout=10.0)
             if stdout:
                 logger.info("Token resolved via token_command")
+                if cache is not None:
+                    cache[CacheNS.TOKENS].set(gitlab_url, stdout, ttl=CACHE_TTL_TOKEN)
                 return stdout
         except (FileNotFoundError, ShellError, subprocess.TimeoutExpired):
             pass
@@ -91,7 +109,7 @@ def _resolve_github_fallback(file_config: ConfigFile) -> bool:
     return file_config.github_fallback
 
 
-async def load_config() -> Config:
+async def load_config(cache: Cache | None = None) -> Config:
     """Load configuration from environment variables, an optional TOML config
     file, and git remote auto-detection.
 
@@ -99,6 +117,10 @@ async def load_config() -> Config:
         1. GITLAB_TOKEN env var
         2. `token_file` in the config file
         3. `token_command` in the config file
+
+    `token_file`/`token_command` results are cached (keyed by `gitlab_url`)
+    when a `cache` is supplied — pass one to avoid re-running an expensive
+    `token_command` on every invocation.
 
     Project ID resolution (first match wins):
         1. GITLAB_PROJECT_ID env var
@@ -120,6 +142,7 @@ async def load_config() -> Config:
     standard config directory (see platformdirs) joined with "config.toml".
     """
     file_config = load_config_file()
+    gitlab_url = os.environ.get("GITLAB_URL") or file_config.gitlab_url
 
     project_id = os.environ.get("GITLAB_PROJECT_ID")
     if project_id is None:
@@ -131,8 +154,8 @@ async def load_config() -> Config:
             logger.debug("Project ID detected from git remote: %s", project_id)
 
     config = Config(
-        gitlab_url=os.environ.get("GITLAB_URL") or file_config.gitlab_url,
-        private_token=_resolve_token(file_config),
+        gitlab_url=gitlab_url,
+        private_token=_resolve_token(file_config, gitlab_url, cache),
         project_id=project_id,
     )
     logger.debug(

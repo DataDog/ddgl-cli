@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ddgl.cache import Cache, CacheNS
 from ddgl.config import Config, load_config
 from ddgl.config.loader import load_config_file
 from ddgl.exceptions import ConfigError, ShellError
@@ -360,3 +361,63 @@ class TestConfigFileIntegration:
 
         with pytest.raises(ConfigError, match="Failed to parse config file"):
             await load_config()
+
+
+class TestTokenCaching:
+    """_resolve_token() caching via the CacheNS.TOKENS namespace."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache_singleton(self) -> None:
+        Cache._instance = None
+        yield
+        Cache._instance = None
+
+    async def test_token_command_result_is_cached(
+        self,
+        config_file_path: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        config_file_path.write_text('token_command = ["my-auth-tool"]\n')
+
+        with (
+            Cache.open(tmp_path / "cache") as cache,
+            patch(
+                "ddgl.config.loader.run", return_value=("cmd-token", ""),
+            ) as run_mock,
+        ):
+            cfg1 = await load_config(cache=cache)
+            cfg2 = await load_config(cache=cache)
+
+        assert cfg1.private_token == "cmd-token"
+        assert cfg2.private_token == "cmd-token"
+        run_mock.assert_called_once()  # second load hit the cache
+
+    async def test_env_token_is_not_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "env-token")
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+
+        with Cache.open(tmp_path / "cache") as cache:
+            cfg = await load_config(cache=cache)
+            assert cache[CacheNS.TOKENS][cfg.gitlab_url] is None
+
+    async def test_no_cache_behaves_like_before(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
+        config_file_path.write_text('token_command = ["my-auth-tool"]\n')
+
+        with patch(
+            "ddgl.config.loader.run", return_value=("cmd-token", ""),
+        ) as run_mock:
+            cfg1 = await load_config()
+            cfg2 = await load_config()
+
+        assert cfg1.private_token == "cmd-token"
+        assert cfg2.private_token == "cmd-token"
+        assert run_mock.call_count == 2  # no cache => re-run every time

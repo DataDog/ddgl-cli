@@ -67,13 +67,12 @@ def pipelines_list(
 async def _list(
     ref: str | None, count: int, scope: PipelineScope | None, *, quiet: bool = False, no_cache: bool = False
 ) -> tuple[list, str]:
-    config = await load_config()
-
     if ref is None:
         from ddgl.git import get_current_branch
         ref = await get_current_branch()
 
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+        config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:
             spinner = nullcontext() if quiet else console.status("Fetching pipelines…")
             with spinner:
@@ -105,8 +104,8 @@ def pipelines_get(
 
 
 async def _get(ref: str | None, pipeline_id: int | None, depth: int, *, quiet: bool = False, no_cache: bool = False):
-    config = await load_config()
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+        config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:
             spinner = nullcontext() if quiet else console.status("Resolving pipeline…")
             with spinner:
