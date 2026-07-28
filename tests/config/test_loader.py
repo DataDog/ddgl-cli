@@ -3,12 +3,28 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ddgl.config import Config, load_config
+from ddgl.config.loader import load_config_file
 from ddgl.exceptions import ConfigError, ShellError
+from ddgl.model.config import ConfigFile
+
+
+@pytest.fixture(autouse=True)
+def config_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point DDGL_CONFIG_FILE at a fresh, non-existent path for every test.
+
+    Keeps tests hermetic: without this, load_config() would fall back to the
+    real platformdirs config path and could pick up a config file that
+    happens to exist on the machine running the tests.
+    """
+    path = tmp_path / "config.toml"
+    monkeypatch.setenv("DDGL_CONFIG_FILE", str(path))
+    return path
 
 
 class TestConfig:
@@ -23,6 +39,25 @@ class TestConfig:
     def test_project_id_defaults_to_none(self) -> None:
         cfg = Config(gitlab_url="https://gitlab.example.com", private_token="tok")
         assert cfg.project_id is None
+
+
+class TestLoadConfigFile:
+    def test_missing_file_returns_defaults(self) -> None:
+        assert load_config_file() == ConfigFile()
+
+    def test_valid_file_is_parsed(self, config_file_path: Path) -> None:
+        config_file_path.write_text('gitlab_url = "https://gitlab.example.com"\n')
+        assert load_config_file().gitlab_url == "https://gitlab.example.com"
+
+    def test_malformed_toml_raises(self, config_file_path: Path) -> None:
+        config_file_path.write_text("this is not valid toml [[[")
+        with pytest.raises(ConfigError, match="Failed to parse config file"):
+            load_config_file()
+
+    def test_unknown_key_raises(self, config_file_path: Path) -> None:
+        config_file_path.write_text('bogus_key = "x"\n')
+        with pytest.raises(ConfigError, match="Failed to parse config file"):
+            load_config_file()
 
 
 class TestLoadConfig:
@@ -41,7 +76,9 @@ class TestLoadConfig:
         monkeypatch.delenv("GITLAB_URL", raising=False)
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
 
-        with patch("ddgl.config.loader.detect_project_path", AsyncMock(return_value=None)):
+        with patch(
+            "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
+        ):
             cfg = await load_config()
         assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
 
@@ -116,7 +153,63 @@ class TestLoadConfig:
         monkeypatch.setenv("GITLAB_TOKEN", "tok")
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
 
-        with patch("ddgl.config.loader.detect_project_path", AsyncMock(return_value=None)):
+        with patch(
+            "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
+        ):
             cfg = await load_config()
 
         assert cfg.project_id is None
+
+
+class TestConfigFileIntegration:
+    """load_config() consulting the TOML config file for gitlab_url."""
+
+    async def test_gitlab_url_from_config_file(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+        config_file_path.write_text('gitlab_url = "https://gitlab.example.com"\n')
+
+        with patch(
+            "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
+        ):
+            cfg = await load_config()
+
+        assert cfg.gitlab_url == "https://gitlab.example.com"
+
+    async def test_env_var_takes_precedence_over_config_file(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.setenv("GITLAB_URL", "https://from-env.example.com")
+        config_file_path.write_text('gitlab_url = "https://from-file.example.com"\n')
+
+        with patch(
+            "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
+        ):
+            cfg = await load_config()
+
+        assert cfg.gitlab_url == "https://from-env.example.com"
+
+    async def test_missing_config_file_behaves_like_before(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+
+        with patch(
+            "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
+        ):
+            cfg = await load_config()
+
+        assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
+
+    async def test_malformed_config_file_raises(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        config_file_path.write_text("this is not valid toml [[[")
+
+        with pytest.raises(ConfigError, match="Failed to parse config file"):
+            await load_config()

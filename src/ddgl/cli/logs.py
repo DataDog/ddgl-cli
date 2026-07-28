@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import re
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 

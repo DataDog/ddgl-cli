@@ -4,7 +4,6 @@
 """Tests for ddgl/tui/screens/job_detail.py — pure-function tests only."""
 from __future__ import annotations
 
-import msgspec
 from rich.text import Text
 
 from ddgl.constants import JobStatus

@@ -6,15 +6,37 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from pathlib import Path
 
 import msgspec
+from platformdirs import user_config_path
 
-from ddgl.constants import DEFAULT_GITLAB_URL
 from ddgl.exceptions import ConfigError, ShellError
 from ddgl.git import detect_project_path
+from ddgl.model.config import ConfigFile
 from ddgl.shell import run
 
 logger = logging.getLogger("ddgl")
+
+_CONFIG_FILE_ENV = "DDGL_CONFIG_FILE"
+
+
+def _config_file_path() -> Path:
+    override = os.environ.get(_CONFIG_FILE_ENV)
+    if override:
+        return Path(override)
+    return user_config_path("ddgl") / "config.toml"
+
+
+def load_config_file() -> ConfigFile:
+    """Load the optional TOML config file. Returns ``ConfigFile()`` if absent."""
+    path = _config_file_path()
+    if not path.is_file():
+        return ConfigFile()
+    try:
+        return ConfigFile.from_toml(path.read_bytes())
+    except msgspec.DecodeError as e:
+        raise ConfigError(f"Failed to parse config file {path}: {e}") from e
 
 
 class Config(msgspec.Struct, frozen=True):
@@ -55,7 +77,8 @@ def _resolve_token() -> str:
 
 
 async def load_config() -> Config:
-    """Load configuration from environment variables with git remote auto-detection.
+    """Load configuration from environment variables, an optional TOML config
+    file, and git remote auto-detection.
 
     Token resolution (first match wins):
         1. GITLAB_TOKEN env var
@@ -66,9 +89,16 @@ async def load_config() -> Config:
         2. GitLab remote URL in current repo
         3. GitHub remote URL in current repo (codesync: same org/repo path on GitLab)
 
-    Optional:
-        GITLAB_URL  — GitLab instance URL (default: gitlab.ddbuild.io)
+    GitLab URL resolution (first match wins):
+        1. GITLAB_URL env var
+        2. `gitlab_url` in the config file
+        3. DEFAULT_GITLAB_URL
+
+    Config file location: DDGL_CONFIG_FILE env var, else the platform's
+    standard config directory (see platformdirs) joined with "config.toml".
     """
+    file_config = load_config_file()
+
     project_id = os.environ.get("GITLAB_PROJECT_ID")
     if project_id is None:
         project_id = await detect_project_path()
@@ -76,7 +106,7 @@ async def load_config() -> Config:
             logger.debug("Project ID detected from git remote: %s", project_id)
 
     config = Config(
-        gitlab_url=os.environ.get("GITLAB_URL", DEFAULT_GITLAB_URL),
+        gitlab_url=os.environ.get("GITLAB_URL") or file_config.gitlab_url,
         private_token=_resolve_token(),
         project_id=project_id,
     )
