@@ -250,6 +250,64 @@ class TestLoadConfig:
         assert cfg.project_id is None
 
 
+class TestGithubFallback:
+    """github_fallback resolution and plumbing into detect_project_path()."""
+
+    async def test_disabled_by_default(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
+        monkeypatch.delenv("DDGL_GITHUB_FALLBACK", raising=False)
+
+        detect = AsyncMock(return_value=None)
+        with patch("ddgl.config.loader.detect_project_path", detect):
+            await load_config()
+
+        detect.assert_called_once_with(allow_github_fallback=False)
+
+    async def test_enabled_via_env_var(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
+        monkeypatch.setenv("DDGL_GITHUB_FALLBACK", "true")
+
+        detect = AsyncMock(return_value=None)
+        with patch("ddgl.config.loader.detect_project_path", detect):
+            await load_config()
+
+        detect.assert_called_once_with(allow_github_fallback=True)
+
+    async def test_enabled_via_config_file(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
+        monkeypatch.delenv("DDGL_GITHUB_FALLBACK", raising=False)
+        config_file_path.write_text("github_fallback = true\n")
+
+        detect = AsyncMock(return_value=None)
+        with patch("ddgl.config.loader.detect_project_path", detect):
+            await load_config()
+
+        detect.assert_called_once_with(allow_github_fallback=True)
+
+    async def test_env_var_takes_precedence_over_config_file(
+        self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GITLAB_TOKEN", "tok")
+        monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
+        monkeypatch.setenv("DDGL_GITHUB_FALLBACK", "false")
+        config_file_path.write_text("github_fallback = true\n")
+
+        detect = AsyncMock(return_value=None)
+        with patch("ddgl.config.loader.detect_project_path", detect):
+            await load_config()
+
+        detect.assert_called_once_with(allow_github_fallback=False)
+
+
 class TestConfigFileIntegration:
     """load_config() consulting the TOML config file for gitlab_url."""
 

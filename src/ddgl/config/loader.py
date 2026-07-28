@@ -83,6 +83,14 @@ def _resolve_token(file_config: ConfigFile) -> str:
     )
 
 
+def _resolve_github_fallback(file_config: ConfigFile) -> bool:
+    """Resolve the github_fallback flag: env var, then config file, then off."""
+    env_value = os.environ.get("DDGL_GITHUB_FALLBACK")
+    if env_value is not None:
+        return env_value.strip().lower() in ("1", "true", "yes", "on")
+    return file_config.github_fallback
+
+
 async def load_config() -> Config:
     """Load configuration from environment variables, an optional TOML config
     file, and git remote auto-detection.
@@ -95,7 +103,13 @@ async def load_config() -> Config:
     Project ID resolution (first match wins):
         1. GITLAB_PROJECT_ID env var
         2. GitLab remote URL in current repo
-        3. GitHub remote URL in current repo (codesync: same org/repo path on GitLab)
+        3. GitHub remote URL in current repo, only if `github_fallback` is
+           enabled (opt-in; assumes the same org/repo path on GitLab)
+
+    `github_fallback` resolution (first match wins):
+        1. DDGL_GITHUB_FALLBACK env var (truthy)
+        2. `github_fallback` in the config file
+        3. False
 
     GitLab URL resolution (first match wins):
         1. GITLAB_URL env var
@@ -109,7 +123,10 @@ async def load_config() -> Config:
 
     project_id = os.environ.get("GITLAB_PROJECT_ID")
     if project_id is None:
-        project_id = await detect_project_path()
+        allow_github_fallback = _resolve_github_fallback(file_config)
+        project_id = await detect_project_path(
+            allow_github_fallback=allow_github_fallback,
+        )
         if project_id is not None:
             logger.debug("Project ID detected from git remote: %s", project_id)
 

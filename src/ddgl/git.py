@@ -76,16 +76,15 @@ def _is_github_url(url: str) -> bool:
     return "github" in url.lower()
 
 
-async def detect_project_path() -> str | None:
+async def detect_project_path(allow_github_fallback: bool = False) -> str | None:
     """Auto-detect the GitLab project path from the current repo's git remotes.
-
-    Works for repos where GitHub is the source and GitLab is the CI mirror
-    (Datadog's codesync setup): the org/repo path is identical on both hosts,
-    so a GitHub remote is sufficient to locate the GitLab project.
 
     Resolution order across all remotes:
       1. First remote with a GitLab URL — parsed directly.
-      2. First remote with a GitHub URL — same org/repo path used on GitLab.
+      2. If `allow_github_fallback` is True, the first remote with a GitHub
+         URL — on the (opt-in) assumption that the org/repo path is
+         identical on both hosts, e.g. GitHub-as-source with GitLab as a CI
+         mirror. This convention is not assumed by default.
 
     Returns None if no git repo or no suitable remote is found.
     """
@@ -107,7 +106,7 @@ async def detect_project_path() -> str | None:
 
         if _is_gitlab_url(url):
             return parse_project_path(url)
-        if _is_github_url(url) and github_path is None:
+        if allow_github_fallback and _is_github_url(url) and github_path is None:
             github_path = parse_project_path(url)
 
     return github_path

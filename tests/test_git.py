@@ -136,24 +136,31 @@ class TestDetectProjectPath:
         path = await detect_project_path()
         assert path == "my-group/my-project"
 
-    async def test_detects_github_remote_codesync(
+    async def test_github_remote_ignored_by_default(
         self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_github_repo)
         path = await detect_project_path()
+        assert path is None
+
+    async def test_detects_github_remote_when_fallback_enabled(
+        self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_github_repo)
+        path = await detect_project_path(allow_github_fallback=True)
         assert path == "DataDog/my-repo"
 
-    async def test_prefers_gitlab_over_github(
+    async def test_prefers_gitlab_over_github_fallback(
         self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_github_repo)
         subprocess.run(
             ["git", "remote", "add", "gitlab",
-             "git@gitlab.ddbuild.io:DataDog/my-repo.git"],
+             "git@gitlab.example.com:DataDog/my-repo.git"],
             cwd=tmp_github_repo, check=True, capture_output=True,
         )
-        path = await detect_project_path()
-        # gitlab remote wins over github remote
+        path = await detect_project_path(allow_github_fallback=True)
+        # gitlab remote wins over the github fallback
         assert path == "DataDog/my-repo"
 
     async def test_returns_none_outside_git_repo(
