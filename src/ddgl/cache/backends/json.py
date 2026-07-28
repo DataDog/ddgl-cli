@@ -58,6 +58,8 @@ class JsonBackend:
     def close(self) -> None:
         with suppress(Exception):
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.touch(mode=0o600, exist_ok=True)
+            self._path.chmod(0o600)
             self._path.write_text(json.dumps(self._data, indent=2))
             logger.debug("JsonBackend flushed: %s", self._path)
         atexit.unregister(self.close)

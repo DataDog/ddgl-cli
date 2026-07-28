@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 from ddgl.cache.backends.json import JsonBackend
@@ -39,6 +40,13 @@ class TestJsonBackend:
         b.set(("k",), "persisted", ttl=3600.0)
         b.close()
         assert path.exists()
+
+    def test_close_sets_owner_only_permissions(self, tmp_path: Path) -> None:
+        path = tmp_path / "cache.json"
+        b = JsonBackend(path)
+        b.set(("k",), "secret", ttl=3600.0)
+        b.close()
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     def test_reopen_reads_persisted_data(self, tmp_path: Path) -> None:
         path = tmp_path / "cache.json"
