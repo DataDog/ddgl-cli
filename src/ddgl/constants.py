@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-DEFAULT_GITLAB_URL = "https://gitlab.ddbuild.io"
+DEFAULT_GITLAB_URL = "https://gitlab.com"
 
 MAX_PAGES = 50
 MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all

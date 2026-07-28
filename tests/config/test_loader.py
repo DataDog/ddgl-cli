@@ -71,7 +71,9 @@ class TestLoadConfig:
         assert cfg.gitlab_url == "https://my-gitlab.internal"
         assert cfg.project_id == "123"
 
-    async def test_default_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_default_url_is_public_gitlab(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.setenv("GITLAB_TOKEN", "tok")
         monkeypatch.delenv("GITLAB_URL", raising=False)
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
@@ -80,7 +82,7 @@ class TestLoadConfig:
             "ddgl.config.loader.detect_project_path", AsyncMock(return_value=None),
         ):
             cfg = await load_config()
-        assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
+        assert cfg.gitlab_url == "https://gitlab.com"
 
     async def test_ddtool_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
@@ -203,7 +205,7 @@ class TestConfigFileIntegration:
         ):
             cfg = await load_config()
 
-        assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
+        assert cfg.gitlab_url == "https://gitlab.com"
 
     async def test_malformed_config_file_raises(
         self, config_file_path: Path, monkeypatch: pytest.MonkeyPatch,
