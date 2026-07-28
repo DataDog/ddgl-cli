@@ -41,7 +41,7 @@ class TestLoadConfig:
         monkeypatch.delenv("GITLAB_URL", raising=False)
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
 
-        with patch("ddgl.config.detect_project_path", AsyncMock(return_value=None)):
+        with patch("ddgl.config.loader.detect_project_path", AsyncMock(return_value=None)):
             cfg = await load_config()
         assert cfg.gitlab_url == "https://gitlab.ddbuild.io"
 
@@ -49,7 +49,7 @@ class TestLoadConfig:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
         monkeypatch.setenv("GITLAB_PROJECT_ID", "p/r")
 
-        with patch("ddgl.config.run", return_value=("ddtool-token", "")):
+        with patch("ddgl.config.loader.run", return_value=("ddtool-token", "")):
             cfg = await load_config()
 
         assert cfg.private_token == "ddtool-token"
@@ -62,7 +62,7 @@ class TestLoadConfig:
 
         with (
             patch(
-                "ddgl.config.run",
+                "ddgl.config.loader.run",
                 side_effect=ShellError(["ddtool"], 1, "fail"),
             ),
             pytest.raises(ConfigError, match="No GitLab token found"),
@@ -77,7 +77,7 @@ class TestLoadConfig:
 
         with (
             patch(
-                "ddgl.config.run",
+                "ddgl.config.loader.run",
                 side_effect=FileNotFoundError,
             ),
             pytest.raises(ConfigError, match="No GitLab token found"),
@@ -91,7 +91,7 @@ class TestLoadConfig:
         monkeypatch.setenv("GITLAB_PROJECT_ID", "explicit/project")
 
         detect = AsyncMock(return_value="git/detected")
-        with patch("ddgl.config.detect_project_path", detect):
+        with patch("ddgl.config.loader.detect_project_path", detect):
             cfg = await load_config()
 
         assert cfg.project_id == "explicit/project"
@@ -104,7 +104,7 @@ class TestLoadConfig:
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
 
         detect = AsyncMock(return_value="DataDog/my-repo")
-        with patch("ddgl.config.detect_project_path", detect):
+        with patch("ddgl.config.loader.detect_project_path", detect):
             cfg = await load_config()
 
         assert cfg.project_id == "DataDog/my-repo"
@@ -116,7 +116,7 @@ class TestLoadConfig:
         monkeypatch.setenv("GITLAB_TOKEN", "tok")
         monkeypatch.delenv("GITLAB_PROJECT_ID", raising=False)
 
-        with patch("ddgl.config.detect_project_path", AsyncMock(return_value=None)):
+        with patch("ddgl.config.loader.detect_project_path", AsyncMock(return_value=None)):
             cfg = await load_config()
 
         assert cfg.project_id is None

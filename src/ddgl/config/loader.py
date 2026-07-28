@@ -6,7 +6,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from dataclasses import dataclass
+
+import msgspec
 
 from ddgl.constants import DEFAULT_GITLAB_URL
 from ddgl.exceptions import ConfigError, ShellError
@@ -16,8 +17,7 @@ from ddgl.shell import run
 logger = logging.getLogger("ddgl")
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(msgspec.Struct, frozen=True):
     """GitLab connection configuration."""
 
     gitlab_url: str
