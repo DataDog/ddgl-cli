@@ -20,10 +20,10 @@ Requires Python ≥ 3.12.
 
 ```bash
 # Recommended — uv
-uv tool install git+https://github.com/ddoghq-sandbox/ddgl
+uv tool install git+https://github.com/DataDog/ddgl-cli
 
 # Or pip
-pip install git+https://github.com/ddoghq-sandbox/ddgl
+pip install git+https://github.com/DataDog/ddgl-cli
 ```
 
 ## Authentication & Configuration
