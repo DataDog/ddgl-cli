@@ -60,6 +60,14 @@ class TestLoadConfigFile:
         with pytest.raises(ConfigError, match="Failed to parse config file"):
             load_config_file()
 
+    def test_read_error_raises_config_error(self, config_file_path: Path) -> None:
+        config_file_path.touch()
+        with (
+            patch.object(Path, "read_bytes", side_effect=PermissionError("denied")),
+            pytest.raises(ConfigError, match="Failed to read config file"),
+        ):
+            load_config_file()
+
 
 class TestLoadConfig:
     async def test_loads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:

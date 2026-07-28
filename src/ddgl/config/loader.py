@@ -36,7 +36,11 @@ def load_config_file() -> ConfigFile:
     if not path.is_file():
         return ConfigFile()
     try:
-        return ConfigFile.from_toml(path.read_bytes())
+        raw = path.read_bytes()
+    except OSError as e:
+        raise ConfigError(f"Failed to read config file {path}: {e}") from e
+    try:
+        return ConfigFile.from_toml(raw)
     except msgspec.DecodeError as e:
         raise ConfigError(f"Failed to parse config file {path}: {e}") from e
 
