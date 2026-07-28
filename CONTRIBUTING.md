@@ -4,8 +4,8 @@ First of all, thanks for contributing! This document provides some basic guideli
 
 ## Submitting Issues
 
-- If you have a feature request, open a [GitHub issue](../../issues/new).
-- If you found a bug, open a [GitHub issue](../../issues/new) with reproduction steps and environment details.
+- If you have a feature request, open a [GitHub issue](https://github.com/DataDog/ddgl-cli/issues/new).
+- If you found a bug, open a [GitHub issue](https://github.com/DataDog/ddgl-cli/issues/new) with reproduction steps and environment details.
 
 ## Pull Requests
 
@@ -13,10 +13,6 @@ First of all, thanks for contributing! This document provides some basic guideli
 2. Make your changes with clear commit messages.
 3. Ensure existing tests pass and add tests for new functionality.
 4. Submit a pull request describing your changes.
-
-## Code of Conduct
-
-This project follows the [Datadog Code of Conduct](https://github.com/DataDog/.github/blob/master/CODE_OF_CONDUCT.md).
 
 ## License
 
