@@ -131,17 +131,12 @@ async def _attach(
     force_live: bool,
     no_cache: bool,
 ) -> int:
-    try:
-        config = await load_config()
-    except ConfigError as e:
-        click.echo(f"Error: {e}", err=True)
-        return 2
-
     use_live = _use_live(output_json=output_json, plain=plain, force_live=force_live)
     detail_level = DetailLevel(detail)
 
     try:
         with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+            config = await load_config(cache=cache)
             async with GitLabClient(config, cache=cache) as client:
                 events = attach(
                     client,

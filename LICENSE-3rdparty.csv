@@ -2,6 +2,7 @@ Component,Origin,License,Copyright
 click,https://github.com/pallets/click,BSD-3-Clause,Copyright 2014 Pallets
 httpx,https://github.com/encode/httpx,BSD-3-Clause,Copyright (c) 2019 Encode OSS Ltd.
 msgspec,https://github.com/jcrist/msgspec,BSD-3-Clause,Copyright (c) 2021 Jim Crist-Harif
+platformdirs,https://github.com/tox-dev/platformdirs,MIT,Copyright (c) 2010-202x The platformdirs developers
 rich,https://github.com/Textualize/rich,MIT,Copyright (c) 2020 Will McGugan
 rich-click,https://github.com/ewels/rich-click,MIT,Copyright (c) 2022 Phil Ewels
 textual,https://github.com/Textualize/textual,MIT,Copyright (c) 2021 Will McGugan

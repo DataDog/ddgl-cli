@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-DEFAULT_GITLAB_URL = "https://gitlab.ddbuild.io"
+DEFAULT_GITLAB_URL = "https://gitlab.com"
 
 MAX_PAGES = 50
 MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
@@ -19,7 +19,7 @@ RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by
 # warning and skipping forever with no --timeout set.
 MAX_CONSECUTIVE_POLL_FAILURES = 5
 
-CACHE_TTL_DDTOOL_TOKEN = 3600.0            # 1 h   — ddtool-issued GitLab tokens
+CACHE_TTL_TOKEN = 3600.0                  # 1 h   — resolved GitLab tokens
 CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change
 CACHE_TTL_FINISHED_JOB = 604800.0         # 1 w   — finished jobs don't change
 CACHE_TTL_API_PIPELINE_LIST = 10.0        # 10 s  — pipeline list browse

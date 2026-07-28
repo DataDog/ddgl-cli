@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ from ddgl.cli import main
 from ddgl.cli.attach import _attach, _exit_code, _use_live
 from ddgl.client import GitLabClient
 from ddgl.config import Config
+from ddgl.exceptions import ConfigError
 from ddgl.model.attach import ResultEvent
 
 _TEST_CONFIG = Config(
@@ -100,8 +102,33 @@ def _mock_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRouter]:
         yield router
 
 
-async def _fake_load_config() -> Config:
+async def _fake_load_config(cache: Cache | None = None) -> Config:
     return _TEST_CONFIG
+
+
+class TestAttachConfig:
+    async def test_loads_config_with_open_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        received_cache: Cache | None = None
+
+        async def fail_after_capturing_cache(cache: Cache | None = None) -> Config:
+            nonlocal received_cache
+            received_cache = cache
+            raise ConfigError("stop")
+
+        Cache._instance = None
+        monkeypatch.setattr("ddgl.cli.attach.CACHE_DIR", tmp_path)
+        monkeypatch.setattr("ddgl.cli.attach.load_config", fail_after_capturing_cache)
+
+        exit_code = await _attach(
+            ref="main", pipeline_id=None, depth=10, interval=1, heartbeat=False,
+            detail="normal", wait_for_start=True, follow=False, timeout=None,
+            output_json=False, plain=True, force_live=False, no_cache=False,
+        )
+
+        assert exit_code == 2
+        assert received_cache is not None
 
 
 class TestAttachApiError:

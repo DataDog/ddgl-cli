@@ -90,8 +90,8 @@ async def _jobs_list(
     quiet: bool = False,
     no_cache: bool = False,
 ) -> tuple[Pipeline, list[Job]]:
-    config = await load_config()
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+        config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:
             with nullcontext() if quiet else console.status("Resolving pipeline…"):
                 pipeline = await resolve_pipeline(
@@ -181,8 +181,8 @@ async def _jobs_get(
     quiet: bool = False,
     no_cache: bool = False,
 ) -> list[Job]:
-    config = await load_config()
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
+        config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:
             if job_id is not None:
                 with nullcontext() if quiet else console.status("Fetching job…"):
