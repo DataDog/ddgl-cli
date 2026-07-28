@@ -35,13 +35,15 @@ uv run ruff check --fix
 ```
 src/ddgl/
 ├── client.py               low-level async GitLab API wrapper
-├── config.py               Config dataclass + load_config()
 ├── constants.py            enums (PipelineStatus, JobStatus), TTLs
 ├── exceptions.py           exception hierarchy
 ├── git.py                  async git helpers (detect project, current branch)
 ├── shell.py                sync + async subprocess wrappers
 │
+├── config/                 Config resolution — env vars, config file, git detection
+│   └── loader.py           Config struct + load_config()
 ├── model/                  domain types (mostly msgspec.Struct)
+│   └── config.py           ConfigFile — TOML config-file schema
 ├── core/                   business logic — no I/O, no UI
 ├── cache/                  multi-backend cache layer
 │   └── backends/
@@ -411,7 +413,7 @@ Defined in `constants.py`:
 | `CACHE_TTL_API_PIPELINE`      | 30 s   | Single pipeline API response |
 | `CACHE_TTL_API_JOB_LIST`      | 15 s   | Job list pages               |
 | `CACHE_TTL_API_JOB`           | 60 s   | Single job API response      |
-| `CACHE_TTL_DDTOOL_TOKEN`      | 1 h    | Tokens issued by ddtool      |
+| `CACHE_TTL_TOKEN`             | 1 h    | Resolved GitLab tokens       |
 
 ---
 

@@ -50,10 +50,10 @@ def parse_project_path(remote_url: str) -> str:
     """Extract the project path (org/repo) from a git remote URL.
 
     Handles SSH and HTTPS formats for any host:
-        git@github.com:DataDog/ddgl.git       -> DataDog/ddgl
-        git@gitlab.ddbuild.io:DataDog/ddgl.git -> DataDog/ddgl
-        https://github.com/DataDog/ddgl.git   -> DataDog/ddgl
-        ssh://git@gitlab.com/group/project.git -> group/project
+        git@github.com:DataDog/ddgl.git         -> DataDog/ddgl
+        git@gitlab.example.com:DataDog/ddgl.git -> DataDog/ddgl
+        https://github.com/DataDog/ddgl.git     -> DataDog/ddgl
+        ssh://git@gitlab.com/group/project.git  -> group/project
     """
     # SSH format: git@host:group/project.git
     ssh_match = re.match(r"^[\w.-]+@[\w.-]+:(.+?)(?:\.git)?$", remote_url)

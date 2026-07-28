@@ -28,16 +28,36 @@ pip install git+https://github.com/ddoghq-sandbox/ddgl
 
 ## Authentication & Configuration
 
-Set `GITLAB_TOKEN` to a [personal access token](https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html) with `read_api` scope. If the variable is not set, `ddtool auth gitlab token` is tried automatically (Datadog internal).
+Set `GITLAB_TOKEN` to a [personal access token](https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html) with `read_api` scope. Alternatively, configure `token_file` or `token_command` in the [config file](#config-file) to resolve a token automatically.
 
 The project is auto-detected from the `origin` git remote when run inside a repository. You can override any setting with environment variables:
 
-| Variable            | Default             | Description                                        |
-| ------------------- | ------------------- | -------------------------------------------------- |
-| `GITLAB_TOKEN`      | —                   | Personal access token (required)                   |
-| `GITLAB_URL`        | `gitlab.ddbuild.io` | GitLab instance base URL                           |
-| `GITLAB_PROJECT_ID` | auto-detected       | Project path, e.g. `my-group/my-project`           |
-| `DDGL_LOG_LEVEL`    | `WARNING`           | Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| Variable               | Default       | Description                                          |
+| ---------------------- | ------------- | ----------------------------------------------------- |
+| `GITLAB_TOKEN`         | —             | Personal access token                                 |
+| `GITLAB_URL`           | `gitlab.com`  | GitLab instance base URL                               |
+| `GITLAB_PROJECT_ID`    | auto-detected | Project path, e.g. `my-group/my-project`                |
+| `DDGL_CONFIG_FILE`     | see below     | Path to the TOML config file                            |
+| `DDGL_GITHUB_FALLBACK` | `false`       | Assume the GitHub remote's org/repo path on GitLab too  |
+| `DDGL_LOG_LEVEL`       | `WARNING`     | Log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`     |
+
+### Config file
+
+For settings you don't want to repeat as environment variables, ddgl reads an optional TOML config file from the platform's standard config directory (e.g. `~/.config/ddgl/config.toml` on Linux/macOS), or the path given by `DDGL_CONFIG_FILE`:
+
+```toml
+gitlab_url = "https://gitlab.example.com"
+token_file = "/run/secrets/gitlab-token"
+token_command = ["my-auth-tool", "print-token"]
+github_fallback = false
+```
+
+- `gitlab_url` — same as `GITLAB_URL`; used when the env var is unset.
+- `token_file` — path to a file containing the token (read and stripped). Checked before `token_command`.
+- `token_command` — a command, as a TOML array (no shell involved), that prints a token to stdout.
+- `github_fallback` — if `true` and no GitLab remote is found, assume the first GitHub remote's org/repo path is also the GitLab project path. Off by default.
+
+Environment variables always take precedence over the config file.
 
 ## Quick Start
 
