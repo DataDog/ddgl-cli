@@ -23,7 +23,7 @@ logger = logging.getLogger("ddgl")
 _CONFIG_FILE_ENV = "DDGL_CONFIG_FILE"
 
 
-def _config_file_path() -> Path:
+def get_config_file_path() -> Path:
     override = os.environ.get(_CONFIG_FILE_ENV)
     if override:
         return Path(override)
@@ -32,7 +32,7 @@ def _config_file_path() -> Path:
 
 def load_config_file() -> ConfigFile:
     """Load the optional TOML config file. Returns ``ConfigFile()`` if absent."""
-    path = _config_file_path()
+    path = get_config_file_path()
     if not path.is_file():
         return ConfigFile()
     try:
