@@ -4,6 +4,7 @@
 """Tests for src/ddgl/core/pipeline.py."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from collections.abc import Iterator
@@ -372,6 +373,7 @@ class TestFindLatestPipeline:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        monkeypatch.setattr(logging.getLogger("ddgl"), "propagate", True)
         mock_api.get("/projects/grp%2Fproj/pipelines").mock(
             return_value=Response(200, json=[])
         )
