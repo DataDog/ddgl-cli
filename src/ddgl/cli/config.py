@@ -37,7 +37,7 @@ def path(
         console.print_json(data=str(path.resolve()))
         return
 
-    console.print(path)
+    console.print(path, soft_wrap=True)
 
 
 @click.command()
@@ -72,12 +72,12 @@ def show(output_json: bool, output_raw: bool, censor: bool) -> None:
 
     if output_json:
         # Don't use print_json, we don't really care about pretty-printing
-        console.print(msgspec.json.encode(data).decode())
+        console.print(msgspec.json.encode(data).decode(), soft_wrap=True)
         return
 
     # Sanitize any Nones before exporting as toml
     sanitized = _strip_none(msgspec.to_builtins(data))
-    console.print(msgspec.toml.encode(sanitized).decode())
+    console.print(msgspec.toml.encode(sanitized).decode(), soft_wrap=True)
 
 def _strip_none(obj):
     if obj is None:
