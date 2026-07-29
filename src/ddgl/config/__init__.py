@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
-from ddgl.config.loader import Config, load_config
+from ddgl.config.loader import (
+    Config,
+    get_config_file_path,
+    load_config,
+    load_config_file,
+)
 
-__all__ = ["Config", "load_config"]
+__all__ = ["Config", "load_config", "load_config_file", "get_config_file_path"]
