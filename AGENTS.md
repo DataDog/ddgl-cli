@@ -1,4 +1,4 @@
-# Claude guidelines for ddgl
+# Agent guidelines for ddgl
 
 ## Working style
 
