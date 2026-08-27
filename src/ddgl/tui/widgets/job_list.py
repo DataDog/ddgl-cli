@@ -17,7 +17,12 @@ from textual.widgets import DataTable
 from ddgl.model.job import Job
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.search_bar import FilterSpec, job_text_matches
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import (
+    job_status_color,
+    job_status_icon,
+    status_color,
+    status_icon,
+)
 
 # ---------------------------------------------------------------------------
 # Sort modes
@@ -463,7 +468,9 @@ class JobListPanel(DataTable):
     def _add_job_row(
         self, job: Job, *, indent: bool = False, is_last: bool = False
     ) -> None:
-        color = status_color(job.status)
+        color = job_status_color(job)
+        icon = job_status_icon(job)
+        label = "warning" if job.has_failed and not job.is_blocking else str(job.status)
         key = str(job.id)
 
         if indent:
@@ -471,13 +478,13 @@ class JobListPanel(DataTable):
             connector = "└─ " if is_last else "├─ "
             status_cell = Text()
             status_cell.append(connector, style=f"dim {color}")
-            status_cell.append(f"{status_icon(job.status)} {job.status}", style=color)
+            status_cell.append(f"{icon} {label}", style=color)
             stage_cell = Text(f"  {_truncate(job.stage, 18)}", style=color)
             started_cell = Text(f"  {_fmt_started_at(job.started_at)}", style=color)
             duration_cell = Text(f"  {_fmt_duration(job.duration)}", style=color)
             name_cell = Text(job.name, style=color)
         else:
-            status_cell = Text(f"{status_icon(job.status)} {job.status}", style=color)
+            status_cell = Text(f"{icon} {label}", style=color)
             stage_cell = Text(_truncate(job.stage, 20), style=color)
             started_cell = Text(_fmt_started_at(job.started_at), style=color)
             duration_cell = Text(_fmt_duration(job.duration), style=color)

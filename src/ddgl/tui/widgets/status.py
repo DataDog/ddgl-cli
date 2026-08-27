@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.text import Text
+
+if TYPE_CHECKING:
+    from ddgl.model.job import Job
 
 _STATUS_MAP: dict[str, tuple[str, str]] = {
     "success": ("✓", "#2DA160"),
     "failed": ("✗", "#DD2B0E"),
+    "failed_allowed": ("⚠", "#C17D10"),
     "running": ("●", "#1F75CB"),
     "pending": ("○", "#C17D10"),
     "canceled": ("⊘", "#737278"),
@@ -37,3 +43,23 @@ def status_color(status: str) -> str:
 def status_text(status: str) -> Text:
     icon, color = _STATUS_MAP.get(status, _DEFAULT)
     return Text(f"{icon} {status}", style=color)
+
+
+def _job_status_key(job: Job) -> str:
+    """Status-map lookup key for a job, folding an allowed failure into its own key.
+
+    "Allowed failure" isn't a status GitLab reports — it's `status ==
+    failed AND allow_failure` — so it can't be answered from a bare status
+    string. Callers that need to distinguish it take the `Job`.
+    """
+    if job.has_failed and not job.is_blocking:
+        return "failed_allowed"
+    return str(job.status)
+
+
+def job_status_icon(job: Job) -> str:
+    return status_icon(_job_status_key(job))
+
+
+def job_status_color(job: Job) -> str:
+    return status_color(_job_status_key(job))

@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import pytest
+from textual.app import App, ComposeResult
 
 from ddgl.constants import JobStatus
 from ddgl.tui.widgets.job_list import (
+    JobListPanel,
     SortMode,
     _apply_filter,
     _apply_sort,
@@ -465,3 +467,39 @@ def test_group_jobs_preserves_pre_sorted_order() -> None:
     assert isinstance(rows[0], _GroupRow)
     assert rows[0].base_name == "alpha-job"
     assert rows[1].base_name == "zebra-job"
+
+
+# ---------------------------------------------------------------------------
+# JobListPanel — allowed-failure row rendering
+# ---------------------------------------------------------------------------
+
+
+class _PanelApp(App[None]):
+    def compose(self) -> ComposeResult:
+        yield JobListPanel()
+
+
+async def test_allowed_failure_row_shows_warning_glyph_and_label() -> None:
+    app = _PanelApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(JobListPanel)
+        panel.jobs = [
+            make_job(id=1, name="flaky", stage="test", status=JobStatus.FAILED, allow_failure=True)
+        ]
+        await pilot.pause()
+        row = panel.get_row("1")
+        assert row[0].plain == "⚠ warning"
+        assert row[0].style == "#C17D10"
+
+
+async def test_blocking_failure_row_unchanged() -> None:
+    app = _PanelApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(JobListPanel)
+        panel.jobs = [
+            make_job(id=1, name="unit", stage="test", status=JobStatus.FAILED, allow_failure=False)
+        ]
+        await pilot.pause()
+        row = panel.get_row("1")
+        assert row[0].plain == "✗ failed"
+        assert row[0].style == "#DD2B0E"
