@@ -19,11 +19,11 @@ from ddgl.constants import (
     CACHE_TTL_API_JOB_LIST,
     CACHE_TTL_API_PIPELINE,
     CACHE_TTL_API_PIPELINE_LIST,
+    HTTP_RETRY_ATTEMPTS,
+    HTTP_RETRY_BACKOFF_INITIAL_SECONDS,
+    HTTP_RETRY_BACKOFF_MULTIPLIER,
     MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
-    RETRY_ATTEMPTS,
-    RETRY_BACKOFF_INITIAL_SECONDS,
-    RETRY_BACKOFF_MULTIPLIER,
     JobStatus,
     PipelineScope,
 )
@@ -48,7 +48,7 @@ logger = logging.getLogger("ddgl.http")
 
 def _backoff_delay(attempt: int) -> float:
     """Exponential backoff delay before the given 0-indexed retry attempt."""
-    return RETRY_BACKOFF_INITIAL_SECONDS * (RETRY_BACKOFF_MULTIPLIER**attempt)
+    return HTTP_RETRY_BACKOFF_INITIAL_SECONDS * (HTTP_RETRY_BACKOFF_MULTIPLIER**attempt)
 
 
 def _retry_after_seconds(resp: httpx.Response) -> float | None:
@@ -109,8 +109,8 @@ class GitLabClient:
 
         Retries a connection-level failure (timeout, DNS, reset — GitLab
         never even responded) or a retryable HTTP status (408/429/5xx, see
-        RETRYABLE_STATUS_CODES) up to RETRY_ATTEMPTS times, honoring a 429's
-        `Retry-After` header when present.
+        RETRYABLE_STATUS_CODES) up to HTTP_RETRY_ATTEMPTS times, honoring a
+        429's `Retry-After` header when present.
 
         Does NOT raise on a non-2xx response itself — callers still call
         `_raise_for_status()` on the returned response, so the exact
@@ -120,8 +120,8 @@ class GitLabClient:
         ultimately has.
         """
         last_exc: httpx.TransportError | None = None
-        for attempt in range(RETRY_ATTEMPTS):
-            is_last_attempt = attempt == RETRY_ATTEMPTS - 1
+        for attempt in range(HTTP_RETRY_ATTEMPTS):
+            is_last_attempt = attempt == HTTP_RETRY_ATTEMPTS - 1
             try:
                 resp = await self._http.get(path, params=params)
             except httpx.TransportError as exc:
@@ -131,7 +131,7 @@ class GitLabClient:
                 delay = _backoff_delay(attempt)
                 logger.warning(
                     "GET %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
-                    path, exc, delay, attempt + 2, RETRY_ATTEMPTS,
+                    path, exc, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
                 )
                 await asyncio.sleep(delay)
                 continue
@@ -142,7 +142,7 @@ class GitLabClient:
             delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
             logger.warning(
                 "GET %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
-                path, resp.status_code, delay, attempt + 2, RETRY_ATTEMPTS,
+                path, resp.status_code, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
             )
             await asyncio.sleep(delay)
 

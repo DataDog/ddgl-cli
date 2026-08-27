@@ -377,7 +377,7 @@ class TestRetryOnTransientError:
         )
         with pytest.raises(GitLabAPIError):
             await client.get_pipeline(100)
-        assert route.call_count == 3  # RETRY_ATTEMPTS: exhausted, then raised
+        assert route.call_count == 3  # HTTP_RETRY_ATTEMPTS: exhausted, then raised
 
     async def test_respects_retry_after_header(
         self, client: GitLabClient, mock_api: respx.MockRouter,

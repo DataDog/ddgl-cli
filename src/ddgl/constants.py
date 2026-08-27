@@ -10,9 +10,9 @@ DEFAULT_GITLAB_URL = "https://gitlab.com"
 MAX_PAGES = 50
 MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
 
-RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client GET call
-RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1
-RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by this
+HTTP_RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client HTTP call
+HTTP_RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1
+HTTP_RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by this
 
 # attach()'s poll loop: give up after this many CONSECUTIVE poll ticks fail
 # (even after the client's own per-call retries are exhausted), rather than
@@ -26,6 +26,11 @@ CACHE_TTL_API_PIPELINE_LIST = 10.0        # 10 s  — pipeline list browse
 CACHE_TTL_API_PIPELINE = 30.0             # 30 s  — single pipeline detail
 CACHE_TTL_API_JOB_LIST = 15.0             # 15 s  — job list (burst dedup for history tab)
 CACHE_TTL_API_JOB = 60.0                  # 60 s  — single job detail
+
+
+class HttpMethod(StrEnum):
+    GET = "GET"
+    POST = "POST"
 
 
 class PipelineScope(StrEnum):
