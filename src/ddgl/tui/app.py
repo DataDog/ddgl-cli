@@ -142,27 +142,21 @@ class PipelineViewer(App[None]):
     ) -> None:
         self._text_filter = parse_query(message.query)
         self._text_filter.regex = message.regex
-        # A `status:`/`stage:` token typed in the search box takes over as
-        # the authoritative filter for that dimension, replacing whatever
-        # the dropdown held — both the button's own display state AND
-        # `_dropdown_statuses`/`_dropdown_stages`. Only the button used to
-        # be updated here, leaving `_dropdown_*` stale until the dropdown
-        # was next opened and confirmed — `_update_job_filter()` unions
-        # them with the text filter, so a stale value silently OR'd in
-        # whatever the dropdown last held instead of respecting what was
-        # just typed.
-        #
-        # Guarded on non-empty so that plain free-text search (no
-        # `status:`/`stage:` token) leaves the current status/stage
-        # filtering untouched, rather than resetting it to "no filter".
-        if self._text_filter.statuses:
-            status_btn = self.query_one("#status-filter", FilterButton)
-            status_btn.set_selected(self._text_filter.statuses)
-            self._dropdown_statuses = status_btn.selected
-        if self._text_filter.stages:
-            stage_btn = self.query_one("#stage-filter", FilterButton)
-            stage_btn.set_selected(self._text_filter.stages)
-            self._dropdown_stages = stage_btn.selected
+        # Sync the dropdown buttons' own *display* state to reflect tokens
+        # typed in the search box — but never `_dropdown_statuses`/
+        # `_dropdown_stages` themselves. Those stay independent, driven
+        # only by the dropdown modal (`on_filter_button_filters_changed`).
+        # `_update_job_filter()` gives typed tokens precedence when
+        # present, so this button-label sync is purely cosmetic; keeping
+        # `_dropdown_*` untouched here means clearing a typed token falls
+        # back to whatever the dropdown was actually set to, rather than
+        # a value overwritten (and stuck) from the last thing you typed.
+        self.query_one("#status-filter", FilterButton).set_selected(
+            self._text_filter.statuses
+        )
+        self.query_one("#stage-filter", FilterButton).set_selected(
+            self._text_filter.stages
+        )
         self._update_job_filter()
 
     def on_filter_button_filters_changed(
@@ -175,10 +169,13 @@ class PipelineViewer(App[None]):
         self._update_job_filter()
 
     def _update_job_filter(self) -> None:
+        # A typed status:/stage: token takes over as the authoritative
+        # filter for that dimension; only fall back to the dropdown's
+        # selection when nothing was typed.
         spec = FilterSpec(
             text=self._text_filter.text,
-            statuses=self._text_filter.statuses | self._dropdown_statuses,
-            stages=self._text_filter.stages | self._dropdown_stages,
+            statuses=self._text_filter.statuses or self._dropdown_statuses,
+            stages=self._text_filter.stages or self._dropdown_stages,
             regex=self._text_filter.regex,
         )
         self.query_one(JobListPanel).filter_spec = spec

@@ -203,6 +203,45 @@ async def test_plain_text_search_preserves_default_status_filter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clearing_status_token_restores_dropdown_filter() -> None:
+    """Regression: typing a status: token then clearing it must fall back
+    to the dropdown's actual selection, not get stuck on the last typed
+    value.
+
+    An earlier fix made `on_fuzzy_search_input_search_changed` overwrite
+    `_dropdown_statuses` directly whenever a status: token was typed. That
+    overwrite persisted even after the token was deleted (the empty-token
+    guard skipped re-syncing), permanently discarding whatever the dropdown
+    had actually been set to. Dropdown state must stay independent of
+    typed tokens; `_update_job_filter()` gives typed tokens precedence
+    only while they're present.
+    """
+    jobs = [
+        make_job(id=1, name="unit-tests", status=JobStatus.FAILED),
+        make_job(id=2, name="unit-skip", status=JobStatus.SKIPPED),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        default_statuses = set(app._dropdown_statuses)
+        job_list = app.query_one(JobListPanel)
+
+        app.action_focus_search()
+        await pilot.pause()
+        for ch in "status:failed":
+            await pilot.press(ch)
+        await pilot.pause(0.2)
+        assert job_list.filter_spec.statuses == {"failed"}
+        # Dropdown state itself must be untouched by typing.
+        assert app._dropdown_statuses == default_statuses
+
+        search = app.query_one("#search")
+        search.clear()
+        await pilot.pause(0.2)
+        assert job_list.filter_spec.statuses == default_statuses
+
+
+@pytest.mark.asyncio
 async def test_status_filter_options_include_allowed_failure() -> None:
     jobs = [
         make_job(id=1, status=JobStatus.FAILED, allow_failure=True),
