@@ -63,4 +63,15 @@ class Job(msgspec.Struct):
 
     @property
     def has_failed(self) -> bool:
+        """Status is FAILED, regardless of allow_failure.
+
+        Does NOT account for `allow_failure` — a job with `allow_failure: true`
+        that failed returns True here but does not fail the pipeline. Use
+        `is_blocking` when you mean "failed in a way that matters".
+        """
         return self.status == JobStatus.FAILED
+
+    @property
+    def is_blocking(self) -> bool:
+        """Failed in a way that actually fails the pipeline."""
+        return self.has_failed and not self.allow_failure

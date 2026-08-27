@@ -86,6 +86,26 @@ class TestJob:
         j = self._make(status=JobStatus.SUCCESS)
         assert j.has_failed is False
 
+    def test_has_failed_true_regardless_of_allow_failure(self) -> None:
+        j = self._make(status=JobStatus.FAILED, allow_failure=True)
+        assert j.has_failed is True
+
+    def test_is_blocking_when_failed_and_not_allowed(self) -> None:
+        j = self._make(status=JobStatus.FAILED, allow_failure=False)
+        assert j.is_blocking is True
+
+    def test_is_blocking_false_when_failed_but_allowed(self) -> None:
+        j = self._make(status=JobStatus.FAILED, allow_failure=True)
+        assert j.is_blocking is False
+
+    def test_is_blocking_false_when_not_failed(self) -> None:
+        j = self._make(status=JobStatus.SUCCESS, allow_failure=False)
+        assert j.is_blocking is False
+
+    def test_is_blocking_false_when_success_and_allow_failure(self) -> None:
+        j = self._make(status=JobStatus.SUCCESS, allow_failure=True)
+        assert j.is_blocking is False
+
 
 class TestJobLog:
     def test_ansi_stripping(self) -> None:
