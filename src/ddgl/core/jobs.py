@@ -102,14 +102,17 @@ async def list_jobs(
 def _make_job_predicate(
     *,
     failed_only: bool,
+    include_allowed_failures: bool,
     name_pattern: str | None,
     stage: str | None,
 ) -> Callable[[Job], bool]:
     compiled = re.compile(name_pattern) if name_pattern else None
 
     def _pred(job: Job) -> bool:
-        if failed_only and not job.is_blocking:
-            return False
+        if failed_only:
+            failed = job.has_failed if include_allowed_failures else job.is_blocking
+            if not failed:
+                return False
         if compiled and not compiled.search(job.name):
             return False
         if stage and job.stage != stage:
@@ -124,6 +127,7 @@ def filter_jobs(
     jobs: AsyncIterable[Job],
     *,
     failed_only: bool = ...,
+    include_allowed_failures: bool = ...,
     name_pattern: str | None = ...,
     stage: str | None = ...,
 ) -> AsyncIterator[Job]: ...
@@ -134,6 +138,7 @@ def filter_jobs(
     jobs: Iterable[Job],
     *,
     failed_only: bool = ...,
+    include_allowed_failures: bool = ...,
     name_pattern: str | None = ...,
     stage: str | None = ...,
 ) -> list[Job]: ...
@@ -143,15 +148,25 @@ def filter_jobs(
     jobs: AsyncIterable[Job] | Iterable[Job],
     *,
     failed_only: bool = False,
+    include_allowed_failures: bool = False,
     name_pattern: str | None = None,
     stage: str | None = None,
 ) -> AsyncIterator[Job] | list[Job]:
     """Client-side filter. All active predicates compose with AND.
 
+    `include_allowed_failures` only has an effect together with
+    `failed_only`: it restores jobs with `allow_failure` set (excluded by
+    default — see `Job.is_blocking`) to the failed-jobs result.
+
     Accepts both sync iterables (returns list) and async iterables (returns
     AsyncIterator, yielding matching jobs as they arrive).
     """
-    pred = _make_job_predicate(failed_only=failed_only, name_pattern=name_pattern, stage=stage)
+    pred = _make_job_predicate(
+        failed_only=failed_only,
+        include_allowed_failures=include_allowed_failures,
+        name_pattern=name_pattern,
+        stage=stage,
+    )
     if isinstance(jobs, AsyncIterable):
         async def _afilter() -> AsyncIterator[Job]:
             async for job in jobs:

@@ -284,3 +284,12 @@ class TestFilterJobs:
         ]
         result = filter_jobs(jobs, failed_only=True)
         assert [j.id for j in result] == [1, 3]
+
+    def test_failed_only_with_include_allowed_failures_restores_old_behaviour(self) -> None:
+        jobs = self._make_jobs() + [
+            Job.from_api(
+                _job_payload(5, status="failed", name="flaky-test", stage="test", allow_failure=True)
+            )
+        ]
+        result = filter_jobs(jobs, failed_only=True, include_allowed_failures=True)
+        assert [j.id for j in result] == [1, 3, 5]

@@ -56,7 +56,7 @@ def output_options(f: F) -> F:
 
 
 def job_filter_options(f: F) -> F:
-    """Add -f/--failed, --stage, --name to a command."""
+    """Add -f/--failed, --stage, --name, --include-allowed-failures to a command."""
     f = click.option(
         "--name",
         "name_pattern",
@@ -69,10 +69,15 @@ def job_filter_options(f: F) -> F:
         help="Filter by stage name (exact match).",
     )(f)
     f = click.option(
+        "--include-allowed-failures",
+        is_flag=True,
+        help="With -f/--failed, also include jobs with allow_failure set.",
+    )(f)
+    f = click.option(
         "-f",
         "--failed",
         "failed_only",
         is_flag=True,
-        help="Show/fetch only failed jobs.",
+        help="Show/fetch only failed jobs (excludes allowed failures).",
     )(f)
     return f  # type: ignore[return-value]
