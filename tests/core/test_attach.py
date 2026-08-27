@@ -112,10 +112,17 @@ def _pipeline_payload(pipeline_id: int, status: str = "running", ref: str = "mai
     }
 
 
-def _job_payload(job_id: int, status: str = "created", name: str = "job", stage: str = "test") -> dict[str, Any]:
+def _job_payload(
+    job_id: int,
+    status: str = "created",
+    name: str = "job",
+    stage: str = "test",
+    allow_failure: bool = False,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": job_id, "name": name, "stage": stage, "status": status, "ref": "main",
         "duration": 30.0 if status in ("success", "failed") else None,
+        "allow_failure": allow_failure,
     }
     if status == "failed":
         payload["failure_reason"] = "script_failure"
@@ -240,6 +247,29 @@ class TestAttachFailure:
 
         job_event = next(e for e in events if isinstance(e, JobEvent))
         assert job_event.message == "script_failure"
+
+    async def test_allowed_failure_excluded_from_failed_jobs(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        """A job with allow_failure=True does not fail the pipeline, so
+        it must not show up in the rollup's failed_jobs — matching what
+        GitLab itself reports as the pipeline's verdict."""
+        _mock_resolve(mock_api, pipeline_id=1)
+
+        jobs_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs")
+        jobs_route.side_effect = [
+            Response(200, json=[_job_payload(10, "running", "flaky", allow_failure=True)]),
+            Response(
+                200, json=[_job_payload(10, "failed", "flaky", allow_failure=True)]
+            ),
+        ]
+        pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
+        pipeline_route.side_effect = [Response(200, json=_pipeline_payload(1, "success"))]
+
+        events = await _collect(client, ref="main")
+        result = events[-1]
+        assert isinstance(result, ResultEvent)
+        assert result.failed_jobs == ()
 
 
 class TestAttachAlreadyTerminal:

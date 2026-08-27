@@ -108,7 +108,7 @@ def _make_job_predicate(
     compiled = re.compile(name_pattern) if name_pattern else None
 
     def _pred(job: Job) -> bool:
-        if failed_only and not job.has_failed:
+        if failed_only and not job.is_blocking:
             return False
         if compiled and not compiled.search(job.name):
             return False
