@@ -12,6 +12,7 @@ from ddgl.model.job import Job
 from ddgl.tui.widgets.status import (
     job_status_color,
     job_status_icon,
+    job_status_label,
     status_color,
     status_icon,
     status_text,
@@ -112,3 +113,17 @@ class TestJobStatusIconColor:
         job = _make_job(status=JobStatus.SUCCESS, allow_failure=True)
         assert job_status_icon(job) == "✓"
         assert job_status_color(job) == "#2DA160"
+
+
+class TestJobStatusLabel:
+    def test_allowed_failure_shows_warning(self) -> None:
+        job = _make_job(status=JobStatus.FAILED, allow_failure=True)
+        assert job_status_label(job) == "warning"
+
+    def test_blocking_failure_shows_failed(self) -> None:
+        job = _make_job(status=JobStatus.FAILED, allow_failure=False)
+        assert job_status_label(job) == "failed"
+
+    def test_non_failed_job_with_allow_failure_shows_own_status(self) -> None:
+        job = _make_job(status=JobStatus.SUCCESS, allow_failure=True)
+        assert job_status_label(job) == "success"

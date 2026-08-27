@@ -45,16 +45,18 @@ def status_text(status: str) -> Text:
     return Text(f"{icon} {status}", style=color)
 
 
-def _job_status_key(job: Job) -> str:
-    """Status-map lookup key for a job, folding an allowed failure into its own key.
+def job_status_key(job: Job) -> str:
+    """Pseudo-status for a job, folding an allowed failure into its own key.
 
     "Allowed failure" isn't a status GitLab reports — it's `status ==
     failed AND allow_failure` — so it can't be answered from a bare status
     string. Callers that need to distinguish it take the `Job`.
 
-    Uses the same "allowed-failure" spelling as `job_list.status_token`
-    (the filter/sort pseudo-status) — one name for one concept, even
-    though the two live in different modules for different purposes.
+    This is THE canonical "allowed-failure" pseudo-status — every module
+    that needs one (icon/color lookups here, `job_list.status_token` for
+    filtering/sorting/grouping, `pipeline_info`'s per-status counts, ...)
+    calls this rather than re-deriving the same `has_failed and not
+    is_blocking` check locally.
     """
     if job.has_failed and not job.is_blocking:
         return "allowed-failure"
@@ -62,8 +64,18 @@ def _job_status_key(job: Job) -> str:
 
 
 def job_status_icon(job: Job) -> str:
-    return status_icon(_job_status_key(job))
+    return status_icon(job_status_key(job))
 
 
 def job_status_color(job: Job) -> str:
-    return status_color(_job_status_key(job))
+    return status_color(job_status_key(job))
+
+
+def job_status_label(job: Job) -> str:
+    """Human-readable status label for a job, rendering an allowed failure as "warning".
+
+    A single place for the "warning" text so every job-status renderer
+    (job list, DAG, history, job detail, ...) shows the same label instead
+    of each re-deriving it locally.
+    """
+    return "warning" if job_status_key(job) == "allowed-failure" else str(job.status)

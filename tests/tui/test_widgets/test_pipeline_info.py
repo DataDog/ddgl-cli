@@ -108,6 +108,17 @@ def test_render_job_stats_omits_zero_counts() -> None:
     assert "✗" not in text  # no failures
 
 
+def test_render_job_stats_allowed_failure_gets_own_bucket() -> None:
+    jobs = [
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+        make_job(status=JobStatus.FAILED, allow_failure=False),
+    ]
+    text = _render_job_stats(jobs).plain
+    assert "⚠ 2" in text  # two allowed failures, counted separately
+    assert "✗ 1" in text  # one blocking failure, unaffected
+
+
 def test_render_with_jobs_includes_stats() -> None:
     p = make_pipeline()
     jobs = [make_job(status=JobStatus.SUCCESS)]

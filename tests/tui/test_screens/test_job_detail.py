@@ -109,6 +109,15 @@ def test_render_meta_contains_status_icon() -> None:
     assert "✗" in plain
 
 
+def test_render_meta_allowed_failure_shows_warning() -> None:
+    job = make_job(status=JobStatus.FAILED, allow_failure=True)
+    text = _render_meta(job)
+    assert "⚠" in text.plain
+    assert "warning" in text.plain
+    assert "failed" not in text.plain
+    assert any(s.style == "#C17D10" for s in text.spans)
+
+
 def test_render_meta_contains_duration() -> None:
     job = make_job(duration=252.0)
     plain = _render_meta(job).plain

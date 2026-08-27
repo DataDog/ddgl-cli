@@ -20,6 +20,7 @@ from ddgl.tui.widgets.search_bar import FilterSpec, job_text_matches
 from ddgl.tui.widgets.status import (
     job_status_color,
     job_status_icon,
+    job_status_label,
     status_color,
     status_icon,
 )
@@ -487,7 +488,7 @@ class JobListPanel(DataTable):
     ) -> None:
         color = job_status_color(job)
         icon = job_status_icon(job)
-        label = "warning" if job.has_failed and not job.is_blocking else str(job.status)
+        label = job_status_label(job)
         key = str(job.id)
 
         if indent:
