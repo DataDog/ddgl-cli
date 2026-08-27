@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 _STATUS_MAP: dict[str, tuple[str, str]] = {
     "success": ("✓", "#2DA160"),
     "failed": ("✗", "#DD2B0E"),
-    "failed_allowed": ("⚠", "#C17D10"),
+    "allowed-failure": ("⚠", "#C17D10"),
     "running": ("●", "#1F75CB"),
     "pending": ("○", "#C17D10"),
     "canceled": ("⊘", "#737278"),
@@ -51,9 +51,13 @@ def _job_status_key(job: Job) -> str:
     "Allowed failure" isn't a status GitLab reports — it's `status ==
     failed AND allow_failure` — so it can't be answered from a bare status
     string. Callers that need to distinguish it take the `Job`.
+
+    Uses the same "allowed-failure" spelling as `job_list.status_token`
+    (the filter/sort pseudo-status) — one name for one concept, even
+    though the two live in different modules for different purposes.
     """
     if job.has_failed and not job.is_blocking:
-        return "failed_allowed"
+        return "allowed-failure"
     return str(job.status)
 
 

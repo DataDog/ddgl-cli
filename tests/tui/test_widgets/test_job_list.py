@@ -22,10 +22,12 @@ from ddgl.tui.widgets.job_list import (
     _sort_alphabetical,
     _sort_by_stage,
     _sort_by_start_time,
+    _status_summary,
     _sum_duration,
     _truncate,
     _worst_status,
     matrix_base_name,
+    status_token,
 )
 from ddgl.tui.widgets.search_bar import FilterSpec
 
@@ -321,6 +323,45 @@ def test_apply_filter_empty_jobs() -> None:
     assert _apply_filter([], FilterSpec(statuses={"failed"})) == []
 
 
+def test_apply_filter_status_failed_excludes_allowed_failures() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.FAILED, allow_failure=False),
+        make_job(id=2, status=JobStatus.FAILED, allow_failure=True),
+    ]
+    result = _apply_filter(jobs, FilterSpec(statuses={"failed"}))
+    assert [j.id for j in result] == [1]
+
+
+def test_apply_filter_status_allowed_failure_selects_exactly_those() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.FAILED, allow_failure=False),
+        make_job(id=2, status=JobStatus.FAILED, allow_failure=True),
+        make_job(id=3, status=JobStatus.SUCCESS, allow_failure=True),
+    ]
+    result = _apply_filter(jobs, FilterSpec(statuses={"allowed-failure"}))
+    assert [j.id for j in result] == [2]
+
+
+# ---------------------------------------------------------------------------
+# status_token
+# ---------------------------------------------------------------------------
+
+
+def test_status_token_blocking_failure() -> None:
+    job = make_job(status=JobStatus.FAILED, allow_failure=False)
+    assert status_token(job) == "failed"
+
+
+def test_status_token_allowed_failure() -> None:
+    job = make_job(status=JobStatus.FAILED, allow_failure=True)
+    assert status_token(job) == "allowed-failure"
+
+
+def test_status_token_non_failed_ignores_allow_failure() -> None:
+    job = make_job(status=JobStatus.SUCCESS, allow_failure=True)
+    assert status_token(job) == "success"
+
+
 # ---------------------------------------------------------------------------
 # matrix_base_name
 # ---------------------------------------------------------------------------
@@ -368,6 +409,38 @@ def test_worst_status_single_job() -> None:
 def test_worst_status_all_success() -> None:
     jobs = [make_job(status=JobStatus.SUCCESS), make_job(status=JobStatus.SUCCESS)]
     assert _worst_status(jobs) == "success"
+
+
+def test_worst_status_blocking_failure_beats_allowed_failure() -> None:
+    jobs = [
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+        make_job(status=JobStatus.FAILED, allow_failure=False),
+    ]
+    assert _worst_status(jobs) == "failed"
+
+
+def test_worst_status_allowed_failure_beats_canceled() -> None:
+    jobs = [
+        make_job(status=JobStatus.CANCELED),
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+    ]
+    assert _worst_status(jobs) == "allowed-failure"
+
+
+# ---------------------------------------------------------------------------
+# _status_summary
+# ---------------------------------------------------------------------------
+
+
+def test_status_summary_shows_allowed_failure_bucket() -> None:
+    jobs = [
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+        make_job(status=JobStatus.FAILED, allow_failure=True),
+        make_job(status=JobStatus.SUCCESS),
+    ]
+    text = _status_summary(jobs)
+    assert "⚠2" in text.plain
+    assert "✗" not in text.plain
 
 
 # ---------------------------------------------------------------------------

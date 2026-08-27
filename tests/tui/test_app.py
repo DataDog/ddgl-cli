@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
+from ddgl.constants import JobStatus
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.app import PipelineViewer
+from ddgl.tui.widgets.filter_buttons import FilterButton
 from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 
@@ -128,3 +130,31 @@ async def test_sort_mode_cycles_on_s_key() -> None:
         job_list.focus()
         await pilot.press("s")
         assert job_list.sort_mode == initial.next()
+
+
+@pytest.mark.asyncio
+async def test_allowed_failure_visible_by_default() -> None:
+    """The default status dropdown selection must include "allowed-failure"
+    so jobs with allow_failure set don't silently vanish now that they no
+    longer match the "failed" pseudo-status by default."""
+    jobs = [make_job(id=1, status=JobStatus.FAILED, allow_failure=True)]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        job_list = app.query_one(JobListPanel)
+        assert job_list.jobs[0].id == 1
+        # Not filtered out by the default status dropdown selection.
+        assert "allowed-failure" in app._dropdown_statuses
+
+
+@pytest.mark.asyncio
+async def test_status_filter_options_include_allowed_failure() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.FAILED, allow_failure=True),
+        make_job(id=2, status=JobStatus.SUCCESS),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        status_btn = app.query_one("#status-filter", FilterButton)
+        assert "allowed-failure" in status_btn._options
