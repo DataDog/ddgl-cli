@@ -211,8 +211,8 @@ GitLab's own UI renders an allowed failure as an **orange warning**, not a red f
 
 | Surface | Today | After |
 | --- | --- | --- |
-| `src/ddgl/render/_styles.py:10` | `"failed": "red"` | add `"failed_allowed": "yellow"` |
-| `src/ddgl/render/job.py` | allowed failures render as plain `failed` in red | render as `failed (allowed)` in yellow |
+| `src/ddgl/render/_styles.py:10` | `"failed": "red"` | add `"failed_allowed": "orange1"` |
+| `src/ddgl/render/_styles.py` (`format_job_status`) | allowed failures render as plain `failed` in red | render as `warning` in orange — shorter than `failed (allowed)` so it fits the TUI's 14-char status column, and matches GitLab's own "passed with warnings" vocabulary rather than inventing new wording |
 | `src/ddgl/tui/widgets/status.py:10` | `"failed": ("✗", "#DD2B0E")` | add `("⚠", "#C17D10")` for the allowed variant |
 | `src/ddgl/tui/widgets/job_list.py` | one red `failed` cell style | allowed failures get the warning glyph + colour |
 
