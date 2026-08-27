@@ -119,7 +119,7 @@ def status_token(job: Job) -> str:
     status for these purposes matches against this, never `job.status`
     directly, so the pseudo-status exists in exactly one place.
     """
-    if job.has_failed and not job.is_blocking:
+    if job.is_allowed_failure:
         return "allowed-failure"
     return str(job.status)
 

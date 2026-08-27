@@ -58,7 +58,7 @@ def job_status_key(job: Job) -> str:
     calls this rather than re-deriving the same `has_failed and not
     is_blocking` check locally.
     """
-    if job.has_failed and not job.is_blocking:
+    if job.is_allowed_failure:
         return "allowed-failure"
     return str(job.status)
 

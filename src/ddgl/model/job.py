@@ -75,3 +75,14 @@ class Job(msgspec.Struct):
     def is_blocking(self) -> bool:
         """Failed in a way that actually fails the pipeline."""
         return self.has_failed and not self.allow_failure
+
+    @property
+    def is_allowed_failure(self) -> bool:
+        """Failed, but explicitly permitted to — doesn't fail the pipeline.
+
+        Equivalent to `has_failed and not is_blocking`. The canonical check
+        for "should this render/filter/group as an allowed failure" —
+        render, TUI status, and job-list filtering all call this instead
+        of each re-deriving the same boolean.
+        """
+        return self.has_failed and not self.is_blocking

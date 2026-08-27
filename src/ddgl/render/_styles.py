@@ -41,7 +41,7 @@ def format_job_status(job: Job) -> str:
     failure" isn't a status GitLab reports — it's `status == failed AND
     allow_failure` — a fact only the domain object can answer.
     """
-    if job.has_failed and not job.is_blocking:
+    if job.is_allowed_failure:
         color = _STATUS_COLORS["failed_allowed"]
         return f"[{color}]●[/{color}] warning"
     return format_status(str(job.status))
