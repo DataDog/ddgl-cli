@@ -107,6 +107,11 @@ class FilterButton(Button):
         self._selected = selected & set(self._options)
         self._refresh_label()
 
+    @property
+    def selected(self) -> set[str]:
+        """The button's current selection, after intersecting with its options."""
+        return self._selected
+
     def _refresh_label(self) -> None:
         count = len(self._selected)
         self.label = (

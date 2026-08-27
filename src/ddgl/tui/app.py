@@ -142,13 +142,27 @@ class PipelineViewer(App[None]):
     ) -> None:
         self._text_filter = parse_query(message.query)
         self._text_filter.regex = message.regex
-        # Sync dropdown button labels to reflect tokens typed in the search box.
-        self.query_one("#status-filter", FilterButton).set_selected(
-            self._text_filter.statuses
-        )
-        self.query_one("#stage-filter", FilterButton).set_selected(
-            self._text_filter.stages
-        )
+        # A `status:`/`stage:` token typed in the search box takes over as
+        # the authoritative filter for that dimension, replacing whatever
+        # the dropdown held — both the button's own display state AND
+        # `_dropdown_statuses`/`_dropdown_stages`. Only the button used to
+        # be updated here, leaving `_dropdown_*` stale until the dropdown
+        # was next opened and confirmed — `_update_job_filter()` unions
+        # them with the text filter, so a stale value silently OR'd in
+        # whatever the dropdown last held instead of respecting what was
+        # just typed.
+        #
+        # Guarded on non-empty so that plain free-text search (no
+        # `status:`/`stage:` token) leaves the current status/stage
+        # filtering untouched, rather than resetting it to "no filter".
+        if self._text_filter.statuses:
+            status_btn = self.query_one("#status-filter", FilterButton)
+            status_btn.set_selected(self._text_filter.statuses)
+            self._dropdown_statuses = status_btn.selected
+        if self._text_filter.stages:
+            stage_btn = self.query_one("#stage-filter", FilterButton)
+            stage_btn.set_selected(self._text_filter.stages)
+            self._dropdown_stages = stage_btn.selected
         self._update_job_filter()
 
     def on_filter_button_filters_changed(
