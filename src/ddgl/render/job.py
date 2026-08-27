@@ -10,7 +10,12 @@ from rich.text import Text
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.render._console import console
-from ddgl.render._styles import format_datetime, format_duration, format_status
+from ddgl.render._styles import (
+    format_datetime,
+    format_duration,
+    format_job_status,
+    format_status,
+)
 
 
 def render_job_table(jobs: list[Job], *, pipeline: Pipeline | None = None) -> None:
@@ -44,7 +49,7 @@ def render_job_table(jobs: list[Job], *, pipeline: Pipeline | None = None) -> No
             table.add_row(
                 str(j.id),
                 name_cell,
-                format_status(j.status),
+                format_job_status(j),
                 format_duration(j.duration),
                 format_datetime(j.started_at, short=True),
             )
@@ -59,7 +64,7 @@ def render_job_detail(job: Job) -> None:
 
     fields = [
         ("Stage", job.stage or "—"),
-        ("Status", format_status(job.status)),
+        ("Status", format_job_status(job)),
         ("Ref", job.ref or "—"),
         ("Duration", format_duration(job.duration)),
         ("Allow failure", "yes" if job.allow_failure else "no"),
