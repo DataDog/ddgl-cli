@@ -67,12 +67,17 @@ class TestJob:
             "id": 10, "name": "test", "stage": "test",
             "status": "failed", "ref": "main",
             "failure_reason": "script_failure",
-            "pipeline": {"id": 1},  # extra nested data ignored
+            "pipeline": {"id": 1, "project_id": 7},  # only `id` is read
         }
         j = Job.from_api(data)
         assert j.name == "test"
         assert j.status is JobStatus.FAILED
         assert j.failure_reason == "script_failure"
+        assert j.pipeline_id == 1
+
+    def test_from_api_pipeline_id_none_when_absent(self) -> None:
+        data = {"id": 10, "name": "test", "stage": "test", "status": "failed"}
+        assert Job.from_api(data).pipeline_id is None
 
     def test_is_running(self) -> None:
         j = self._make(status=JobStatus.RUNNING)
