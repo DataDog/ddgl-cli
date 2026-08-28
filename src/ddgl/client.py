@@ -29,6 +29,7 @@ from ddgl.constants import (
     PipelineScope,
 )
 from ddgl.exceptions import (
+    RATE_LIMITED_STATUS_CODES,
     RETRYABLE_STATUS_CODES,
     ConfigError,
     GitLabAPIError,
@@ -214,6 +215,22 @@ class GitLabClient:
             retry_statuses=RETRYABLE_STATUS_CODES, retry_transport=True,
         )
 
+    async def _post_response(self, path: str, json: dict[str, Any] | None = None) -> httpx.Response:
+        """POST with automatic retry on a 429 only.
+
+        Unlike `_get_response`, a POST is not idempotent — GitLab may have
+        fully processed the request even if the response never arrived, so
+        re-sending it on a 5xx or a transport error (timeout/connection
+        reset) could duplicate the side effect (e.g. mint two retried
+        jobs). Only a 429 is safe to retry: it means the request was
+        *rejected* before GitLab acted on it. See `_request` for the full
+        retry mechanics — this is a thin POST-flavored wrapper over it.
+        """
+        return await self._request(
+            HttpMethod.POST, path, json=json,
+            retry_statuses=RATE_LIMITED_STATUS_CODES, retry_transport=False,
+        )
+
     def _raise_for_status(self, resp: httpx.Response, method: HttpMethod) -> None:
         """Translate HTTP errors into typed exceptions.
 
@@ -269,6 +286,21 @@ class GitLabClient:
             key = self._cache_key(path, params)
             self._cache[CacheNS.API_RESPONSES].set(key, json.dumps(data), ttl=ttl)
         return data
+
+    async def _post(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        """POST and parse the JSON response body.
+
+        Never cached — a POST is a mutation, not a fetch.
+
+        Raises:
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status.
+        """
+        logger.debug("POST %s", path)
+        resp = await self._post_response(path, json=json)
+        logger.debug("POST %s -> %d", path, resp.status_code)
+        self._raise_for_status(resp, HttpMethod.POST)
+        return resp.json()
 
     async def _get_text(self, path: str) -> str:
         """Fetch a plain-text response body.
@@ -514,6 +546,28 @@ class GitLabClient:
             raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
 
+    async def retry_pipeline(
+        self,
+        pipeline_id: int,
+        project_id: str | None = None,
+    ) -> Pipeline:
+        """Retry every failed and canceled job in a pipeline.
+
+        Returns only the `Pipeline` — GitLab does not report which jobs it
+        restarted (see `retry_job` for that per-job detail).
+
+        Raises:
+            NotFoundError: pipeline does not exist.
+            GitLabAPIError: other HTTP error (e.g. 403 insufficient token scope).
+        """
+        logger.info("Retrying pipeline %d", pipeline_id)
+        base = self._project_path(project_id)
+        try:
+            data = await self._post(f"{base}/pipelines/{pipeline_id}/retry")
+        except NotFoundError:
+            raise NotFoundError("pipeline", pipeline_id)
+        return Pipeline.from_api(data)
+
     # -- Jobs --
 
     async def fetch_jobs(
@@ -565,24 +619,53 @@ class GitLabClient:
         scope: JobStatus | None = None,
         *,
         fresh: bool = False,
+        include_retried: bool = False,
     ) -> list[Job]:
         """Get all jobs for a pipeline (exhausts pagination).
 
         If *fresh* is True, bypasses the low-level API response cache for
         each page fetched. Used by `ddgl attach` when polling running job
         status (see `get_pipeline`).
+
+        If *include_retried* is True, prior attempts of a retried job are
+        included too (GitLab excludes them by default) — see
+        `get_job_attempts`, which is this with `include_retried=True`.
         """
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
         params: dict[str, Any] = {"per_page": per_page}
         if scope is not None:
             params["scope"] = scope
+        if include_retried:
+            params["include_retried"] = True
         ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
             ttl=ttl,
             **params,
+        )
+
+    async def get_job_attempts(
+        self,
+        pipeline_id: int,
+        project_id: str | None = None,
+    ) -> list[Job]:
+        """Get every job record for a pipeline, including retried ones.
+
+        "Attempts" rather than "retries" to head off an off-by-one: a job
+        that has never been retried has 1 attempt, 0 retries.
+
+        Always `fresh=True` — this backs the retry ledger's per-job-name
+        attempt count, so a cached (stale, up to 15s old) count could let a
+        run exceed `--retry-attempts`. Bypassing the cache also sidesteps
+        a sharper correctness issue: `_get_page`'s cache-hit path always
+        reports a lone cached page as `has_next=False`, so a cached read
+        of a pipeline with more than one page of jobs would silently drop
+        every page past the first.
+        """
+        return await self.get_all_jobs(
+            pipeline_id, project_id, fresh=True, include_retried=True,
         )
 
     async def get_job(
@@ -600,6 +683,30 @@ class GitLabClient:
         base = self._project_path(project_id)
         try:
             data = await self._get(f"{base}/jobs/{job_id}", ttl=CACHE_TTL_API_JOB)
+        except NotFoundError:
+            raise NotFoundError("job", job_id)
+        return Job.from_api(data)
+
+    async def retry_job(
+        self,
+        job_id: int,
+        project_id: str | None = None,
+    ) -> Job:
+        """Retry a single job.
+
+        GitLab mints a *new* job record under a different ID — the old
+        job's ID never appears again in the pipeline's job list. Anything
+        tracking retries across attempts (see `get_job_attempts`) must key
+        on the job's NAME, not its ID.
+
+        Raises:
+            NotFoundError: job does not exist.
+            GitLabAPIError: other HTTP error (e.g. 403 insufficient token scope).
+        """
+        logger.info("Retrying job %d", job_id)
+        base = self._project_path(project_id)
+        try:
+            data = await self._post(f"{base}/jobs/{job_id}/retry")
         except NotFoundError:
             raise NotFoundError("job", job_id)
         return Job.from_api(data)

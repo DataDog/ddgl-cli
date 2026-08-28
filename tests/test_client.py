@@ -302,6 +302,42 @@ class TestGetAllJobs:
         with pytest.raises(GitLabAPIError):
             await client.get_all_jobs(100)
 
+    async def test_include_retried_propagates_query_param(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        await client.get_all_jobs(100, include_retried=True)
+
+        assert route.calls[0].request.url.params["include_retried"] == "true"
+
+    async def test_include_retried_omitted_by_default(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        await client.get_all_jobs(100)
+
+        assert "include_retried" not in route.calls[0].request.url.params
+
+
+class TestGetJobAttempts:
+    async def test_fetches_with_include_retried(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        jobs = await client.get_job_attempts(100)
+
+        assert len(jobs) == 2
+        assert route.calls[0].request.url.params["include_retried"] == "true"
+
 
 class TestGetJob:
     async def test_returns_job(
@@ -317,6 +353,47 @@ class TestGetJob:
         assert result.status == "success"
 
 
+class TestRetryJob:
+    async def test_returns_new_job(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        new_job = {"id": 501, "name": "build", "stage": "build",
+                   "status": "pending", "ref": "main"}
+        route = mock_api.post(
+            "/projects/my-group%2Fmy-project/jobs/1/retry",
+        ).mock(return_value=httpx.Response(200, json=new_job))
+
+        result = await client.retry_job(1)
+
+        assert isinstance(result, Job)
+        assert result.id == 501
+        assert result.status == "pending"
+        assert route.call_count == 1
+
+    async def test_404_maps_to_not_found_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        from ddgl.exceptions import NotFoundError
+
+        mock_api.post(
+            "/projects/my-group%2Fmy-project/jobs/1/retry",
+        ).mock(return_value=httpx.Response(404, json={"message": "404 Not found"}))
+
+        with pytest.raises(NotFoundError):
+            await client.retry_job(1)
+
+    async def test_403_maps_to_gitlab_api_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.post(
+            "/projects/my-group%2Fmy-project/jobs/1/retry",
+        ).mock(return_value=httpx.Response(403, json={"message": "Forbidden"}))
+
+        with pytest.raises(GitLabAPIError) as exc_info:
+            await client.retry_job(1)
+        assert exc_info.value.status_code == 403
+
+
 class TestGetPipeline:
     async def test_returns_pipeline(
         self, client: GitLabClient, mock_api: respx.MockRouter
@@ -329,6 +406,46 @@ class TestGetPipeline:
         assert isinstance(result, Pipeline)
         assert result.sha == "abc123"
         assert result.duration == 299
+
+
+class TestRetryPipeline:
+    async def test_returns_pipeline(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        retried = {**MOCK_PIPELINE_DETAIL, "status": "running"}
+        route = mock_api.post(
+            "/projects/my-group%2Fmy-project/pipelines/100/retry",
+        ).mock(return_value=httpx.Response(200, json=retried))
+
+        result = await client.retry_pipeline(100)
+
+        assert isinstance(result, Pipeline)
+        assert result.id == 100
+        assert result.status == "running"
+        assert route.call_count == 1
+
+    async def test_404_maps_to_not_found_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        from ddgl.exceptions import NotFoundError
+
+        mock_api.post(
+            "/projects/my-group%2Fmy-project/pipelines/100/retry",
+        ).mock(return_value=httpx.Response(404, json={"message": "404 Not found"}))
+
+        with pytest.raises(NotFoundError):
+            await client.retry_pipeline(100)
+
+    async def test_403_maps_to_gitlab_api_error(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.post(
+            "/projects/my-group%2Fmy-project/pipelines/100/retry",
+        ).mock(return_value=httpx.Response(403, json={"message": "Forbidden"}))
+
+        with pytest.raises(GitLabAPIError) as exc_info:
+            await client.retry_pipeline(100)
+        assert exc_info.value.status_code == 403
 
 
 class TestRetryOnTransientError:
@@ -396,6 +513,60 @@ class TestRetryOnTransientError:
         ]
         await client.get_pipeline(100)
         assert sleeps == [7.0]  # honored the header, not the default backoff
+
+
+class TestPostRetrySafety:
+    """POST is non-idempotent, so its retry policy is deliberately much
+    narrower than GET's: only a 429 (request rejected, never processed) is
+    safe to retry. Exercised via retry_job() as a representative caller."""
+
+    async def test_429_with_retry_after_is_retried(
+        self, client: GitLabClient, mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sleeps: list[float] = []
+
+        async def _fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
+        new_job = {"id": 501, "name": "build", "stage": "build",
+                   "status": "pending", "ref": "main"}
+        route = mock_api.post("/projects/my-group%2Fmy-project/jobs/1/retry")
+        route.side_effect = [
+            httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "3"}),
+            httpx.Response(200, json=new_job),
+        ]
+
+        result = await client.retry_job(1)
+
+        assert result.id == 501
+        assert route.call_count == 2
+        assert sleeps == [3.0]
+
+    async def test_5xx_is_not_retried(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        """Unlike GET, a 5xx on POST must NOT be retried — GitLab may have
+        already processed the request, and re-sending it could mint a
+        second retried job."""
+        route = mock_api.post(
+            "/projects/my-group%2Fmy-project/jobs/1/retry",
+        ).mock(return_value=httpx.Response(500, json={"message": "boom"}))
+
+        with pytest.raises(GitLabAPIError):
+            await client.retry_job(1)
+        assert route.call_count == 1
+
+    async def test_transport_error_is_not_retried(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.post("/projects/my-group%2Fmy-project/jobs/1/retry")
+        route.side_effect = [httpx.ConnectError("connection reset")]
+
+        with pytest.raises(httpx.ConnectError):
+            await client.retry_job(1)
+        assert route.call_count == 1
 
 
 class TestGetJobLog:
@@ -560,6 +731,24 @@ class TestClientCaching:
             async with GitLabClient(TEST_CONFIG, cache=cache) as client:
                 await client.get_all_jobs(100)
                 await client.get_all_jobs(100, fresh=True)
+
+        assert route.call_count == 2
+
+    async def test_get_job_attempts_always_bypasses_cache(
+        self, tmp_path: Path, mock_api: respx.MockRouter
+    ) -> None:
+        """get_job_attempts always re-hits the API, with no fresh= knob to
+        opt out — a cached, up-to-15s-stale attempt count could let a
+        retry run exceed --retry-attempts, and _get_page's cache-hit path
+        would silently drop pages past the first for a multi-page result."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        with Cache.open(tmp_path / "cache") as cache:
+            async with GitLabClient(TEST_CONFIG, cache=cache) as client:
+                await client.get_all_jobs(100)  # warm the API response cache
+                await client.get_job_attempts(100)
 
         assert route.call_count == 2
 
