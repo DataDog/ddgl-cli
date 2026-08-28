@@ -8,27 +8,13 @@ import logging
 from collections import defaultdict
 from collections.abc import Sequence
 
-import msgspec
-
 from ddgl.client import GitLabClient
 from ddgl.exceptions import GitLabAPIError, NotFoundError
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
+from ddgl.model.retry import RetryOutcome
 
 logger = logging.getLogger("ddgl.core.retry")
-
-
-class RetryOutcome(msgspec.Struct, frozen=True):
-    """The result of retrying one job, as part of a `retry_jobs` batch.
-
-    `new_job` and `error` are mutually exclusive: exactly one is set,
-    depending on whether the retry POST succeeded.
-    """
-
-    old_job_id: int
-    job_name: str
-    new_job: Job | None = None
-    error: str | None = None
 
 
 async def retry_job(client: GitLabClient, job_id: int) -> Job:
