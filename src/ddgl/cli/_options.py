@@ -3,15 +3,41 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TypeVar
 
 import rich_click as click
 
+from ddgl.render._console import console
+
 CACHE_DIR = Path("~/.cache/ddgl").expanduser()
 
 F = TypeVar("F", bound=Callable)
+
+
+def stdin_is_tty() -> bool:
+    """Whether stdin can carry an interactive answer.
+
+    A named function rather than an inline `sys.stdin.isatty()` because it
+    gates whether a command may act without confirmation, and Click's
+    CliRunner swaps `sys.stdin` for a non-TTY pipe — so tests can only
+    reach the interactive path by substituting this.
+    """
+    return sys.stdin.isatty()
+
+
+@contextmanager
+def status_spinner(label: str, *, quiet: bool) -> Iterator[None]:
+    """Show a progress spinner, unless *quiet*.
+
+    Commands suppress it while emitting `--json`, where a spinner would
+    write control characters into machine-read output.
+    """
+    with nullcontext() if quiet else console.status(label):
+        yield
 
 
 def pipeline_resolution_options(f: F) -> F:

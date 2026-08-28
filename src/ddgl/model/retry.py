@@ -20,3 +20,22 @@ class RetryOutcome(msgspec.Struct, frozen=True):
     job_name: str
     new_job: Job | None = None
     error: str | None = None
+
+
+class RetrySelection(msgspec.Struct, frozen=True):
+    """Which jobs a retry will act on, and what they were narrowed from.
+
+    `matched` counts what the filters selected *before* the retryable
+    gate, so a caller can tell "nothing matched your filter" apart from
+    "things matched but none of them can be retried" — two situations that
+    want different advice.
+
+    `pipeline_id`/`ref` name the pipeline the jobs belong to, for output.
+    Both are None when the jobs span more than one pipeline, which only
+    `--job ID` can produce.
+    """
+
+    jobs: list[Job]
+    matched: int
+    pipeline_id: int | None = None
+    ref: str | None = None

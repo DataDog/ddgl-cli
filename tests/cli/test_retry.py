@@ -16,7 +16,6 @@ from httpx import Response
 
 from ddgl.cache import Cache
 from ddgl.cli import main
-from ddgl.cli.retry import _target_of
 from ddgl.config import Config
 
 _TEST_CONFIG = Config(
@@ -42,21 +41,8 @@ def mock_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRouter]:
 
 
 # ---------------------------------------------------------------------------
-# Local scaffolding — stand-ins for Job/Pipeline, so these tests don't break
-# when an unrelated production field is added.
+# API response helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeJob:
-    def __init__(self, pipeline_id: int | None, ref: str = "main") -> None:
-        self.pipeline_id = pipeline_id
-        self.ref = ref
-
-
-class _FakePipeline:
-    def __init__(self, id: int, ref: str) -> None:
-        self.id = id
-        self.ref = ref
 
 
 def _pipeline_payload(pipeline_id: int = 100, status: str = "failed") -> dict[str, Any]:
@@ -70,43 +56,13 @@ def _job_payload(
     status: str = "failed",
     stage: str = "test",
     allow_failure: bool = False,
-    pipeline_id: int | None = 100,
+    pipeline_id: int = 100,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    return {
         "id": job_id, "name": name, "stage": stage, "status": status,
         "ref": "main", "allow_failure": allow_failure,
+        "pipeline": {"id": pipeline_id},
     }
-    if pipeline_id is not None:
-        payload["pipeline"] = {"id": pipeline_id}
-    return payload
-
-
-# ---------------------------------------------------------------------------
-# _target_of — which pipeline to name in output
-# ---------------------------------------------------------------------------
-
-
-class TestTargetOf:
-    def test_resolved_pipeline_wins(self) -> None:
-        pipeline = _FakePipeline(id=7, ref="feature")
-        jobs = [_FakeJob(pipeline_id=99)]
-        assert _target_of(jobs, pipeline) == (7, "feature")  # type: ignore[arg-type]
-
-    def test_derived_from_jobs_when_no_pipeline(self) -> None:
-        jobs = [_FakeJob(pipeline_id=100), _FakeJob(pipeline_id=100)]
-        assert _target_of(jobs, None) == (100, "main")  # type: ignore[arg-type]
-
-    def test_none_when_jobs_span_pipelines(self) -> None:
-        jobs = [_FakeJob(pipeline_id=100), _FakeJob(pipeline_id=101)]
-        assert _target_of(jobs, None) == (None, None)  # type: ignore[arg-type]
-
-    def test_none_when_back_reference_missing(self) -> None:
-        jobs = [_FakeJob(pipeline_id=None)]
-        assert _target_of(jobs, None) == (None, None)  # type: ignore[arg-type]
-
-    def test_ref_dropped_when_jobs_disagree(self) -> None:
-        jobs = [_FakeJob(pipeline_id=100, ref="main"), _FakeJob(pipeline_id=100, ref="other")]
-        assert _target_of(jobs, None) == (100, None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +561,7 @@ class TestConfirmation:
         self, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         posted = self._mock(mock_api)
-        monkeypatch.setattr("ddgl.cli.retry._stdin_is_tty", lambda: True)
+        monkeypatch.setattr("ddgl.cli.retry.stdin_is_tty", lambda: True)
         monkeypatch.setattr(click, "confirm", _decline)
 
         result = CliRunner().invoke(
@@ -619,7 +575,7 @@ class TestConfirmation:
         self, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         posted = self._mock(mock_api)
-        monkeypatch.setattr("ddgl.cli.retry._stdin_is_tty", lambda: True)
+        monkeypatch.setattr("ddgl.cli.retry.stdin_is_tty", lambda: True)
         monkeypatch.setattr(click, "confirm", _accept)
 
         result = CliRunner().invoke(
