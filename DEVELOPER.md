@@ -165,6 +165,26 @@ Trace
 
 `GitLabClient` is an async context manager backed by `httpx.AsyncClient`. It handles authentication (via `PRIVATE-TOKEN` header), error translation, and optional low-level API response caching.
 
+#### Method signatures
+
+Every public method follows the same shape: **the primary subject of the call is positional, everything else is keyword-only.** The subject is the resource id (`get_job(job_id)`, `get_all_jobs(pipeline_id)`) or, for the pipeline-list family, the ref being listed (`get_all_pipelines(ref)`). Options are never positional — they read as anonymous values at the call site, and adding a parameter mid-list silently changes what existing positional arguments bind to.
+
+Options then split three ways:
+
+| Kind | Params | Why |
+| --- | --- | --- |
+| ddgl concerns | `project_id`, `fresh` | Not GitLab query params at all — `project_id` is a path component, `fresh` maps to a cache `ttl` and is never sent upstream. Always explicit. |
+| Common GitLab query params | `ref`, `per_page`, `scope` | Used across many call sites; explicit and typed for discoverability. |
+| Everything else | `**params` | Forwarded verbatim as query parameters. A one-off param (`include_retried`, and later `order_by`, `source`, `updated_after`, …) needs no signature change on every method in the family. |
+
+Single-object getters (`get_pipeline`, `get_job`, `retry_job`, `retry_pipeline`) take no `**params` — those endpoints accept no meaningful query parameters.
+
+> [!WARNING]
+> Because `**params` is forwarded blind, a misspelled name is **silently ignored** rather than raising `TypeError`. Two rules keep that safe:
+>
+> 1. **Don't hand-write a raw param at a call site.** Wrap it in a named, documented method — `get_job_attempts(pipeline_id)` is the reference example, being `get_all_jobs(..., include_retried=True)` with a docstring explaining what "attempts" means and why it's always `fresh`.
+> 2. **Promote on second use.** Any param that acquires a second caller graduates to an explicit keyword argument.
+
 #### Pagination methods
 
 Every paginated resource exposes three variants following a consistent naming convention:

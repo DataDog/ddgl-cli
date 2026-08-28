@@ -70,7 +70,29 @@ def _retry_after_seconds(resp: httpx.Response) -> float | None:
 
 
 class GitLabClient:
-    """Async GitLab REST API client."""
+    """Async GitLab REST API client.
+
+    Method signatures follow one convention: the primary subject of the
+    call is positional (the resource id, or the `ref` being listed), and
+    every option is keyword-only. Options split three ways:
+
+    - **ddgl concerns** — `project_id` (a path component) and `fresh` (a
+      cache-control knob, never sent upstream). Always explicit.
+    - **Common GitLab query params** — `ref`, `per_page`, `scope`.
+      Explicit and typed, because they're used across many call sites and
+      benefit from discoverability.
+    - **Everything else** — collected into `**params` and forwarded
+      verbatim as query parameters, so a one-off param (`include_retried`,
+      and later `order_by`, `source`, `updated_after`, …) doesn't need a
+      signature change on every method in the family.
+
+    Because `**params` is forwarded blind, a misspelled name is silently
+    ignored rather than raising `TypeError`. Two rules keep that safe:
+    callers should not hand-write a raw param at the call site — wrap it
+    in a named, documented method instead (`get_job_attempts` is the
+    reference example) — and any param that acquires a second caller
+    should graduate to an explicit keyword argument.
+    """
 
     def __init__(self, config: Config, cache: Cache | None = None) -> None:
         self._config = config
@@ -461,11 +483,16 @@ class GitLabClient:
         per_page: int = 20,
         scope: PipelineScope | None = None,
         fresh: bool = False,
+        **params: Any,
     ) -> Page[Pipeline]:
-        """Fetch a single page of pipelines."""
+        """Fetch a single page of pipelines.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Fetching pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -484,11 +511,16 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        **params: Any,
     ) -> AsyncIterator[Page[Pipeline]]:
-        """Stream pages of pipelines."""
+        """Stream pages of pipelines.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Streaming pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -508,11 +540,16 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        **params: Any,
     ) -> list[Pipeline]:
-        """Get all pipelines (exhausts pagination)."""
+        """Get all pipelines (exhausts pagination).
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Getting all pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -582,11 +619,16 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        **params: Any,
     ) -> Page[Job]:
-        """Fetch a single page of jobs for a pipeline."""
+        """Fetch a single page of jobs for a pipeline.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Fetching jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
         return await self._get_page(
@@ -603,11 +645,16 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        **params: Any,
     ) -> AsyncIterator[Page[Job]]:
-        """Stream pages of jobs for a pipeline."""
+        """Stream pages of jobs for a pipeline.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Streaming jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
         async for page in self._paginate(
@@ -626,7 +673,7 @@ class GitLabClient:
         per_page: int = 100,
         scope: JobStatus | None = None,
         fresh: bool = False,
-        include_retried: bool = False,
+        **params: Any,
     ) -> list[Job]:
         """Get all jobs for a pipeline (exhausts pagination).
 
@@ -634,17 +681,15 @@ class GitLabClient:
         each page fetched. Used by `ddgl attach` when polling running job
         status (see `get_pipeline`).
 
-        If *include_retried* is True, prior attempts of a retried job are
-        included too (GitLab excludes them by default) — see
-        `get_job_attempts`, which is this with `include_retried=True`.
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring) — e.g. `include_retried=True`, which
+        `get_job_attempts` wraps.
         """
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
-        if include_retried:
-            params["include_retried"] = True
         ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         return await self._get_all(
             f"{base}/pipelines/{pipeline_id}/jobs",

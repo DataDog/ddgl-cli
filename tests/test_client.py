@@ -324,6 +324,22 @@ class TestGetAllJobs:
 
         assert "include_retried" not in route.calls[0].request.url.params
 
+    async def test_arbitrary_params_forwarded_verbatim(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        """**params is a passthrough for query params the client has no
+        explicit keyword for, so a new GitLab filter needs no signature
+        change here."""
+        route = mock_api.get(
+            "/projects/my-group%2Fmy-project/pipelines/100/jobs",
+        ).mock(return_value=_paginated_response(MOCK_JOBS_PAGE1))
+
+        await client.get_all_jobs(100, order_by="id", sort="asc")
+
+        sent = route.calls[0].request.url.params
+        assert sent["order_by"] == "id"
+        assert sent["sort"] == "asc"
+
 
 class TestGetJobAttempts:
     async def test_fetches_with_include_retried(
