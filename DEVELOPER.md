@@ -209,7 +209,9 @@ All `iter_` and `get_all_` methods raise `PaginationLimitError` after `MAX_PAGES
 
 #### Retry
 
-`_get_response()` (the raw HTTP GET underneath `_get`/`_get_text`/`_get_page`, so every `get_`/`fetch_`/`iter_`/`get_all_` method benefits uniformly) retries a connection-level failure or a `RETRYABLE_STATUS_CODES` response up to `RETRY_ATTEMPTS` (3) times, backing off `RETRY_BACKOFF_SECONDS` (`0.5s`, `1.5s`) between attempts. A `429`'s `Retry-After` header, when present, is honored in place of the fixed backoff. Retry happens *before* `_raise_for_status()` runs — it only ever sees the final response, so error *mapping* (`ConfigError`/`NotFoundError`/`GitLabAPIError`) is unaffected by retrying.
+`_get_response()` (the raw HTTP GET underneath `_get`/`_get_text`/`_get_page`, so every `get_`/`fetch_`/`iter_`/`get_all_` method benefits uniformly) retries a connection-level failure or a `RETRYABLE_STATUS_CODES` response up to `HTTP_RETRY_ATTEMPTS` (3) times, backing off `HTTP_RETRY_BACKOFF_INITIAL_SECONDS * HTTP_RETRY_BACKOFF_MULTIPLIER ** attempt` (`0.5s`, then `1.0s`) between attempts. A `429`'s `Retry-After` header, when present, is honored in place of the computed backoff. Retry happens *before* `_raise_for_status()` runs — it only ever sees the final response, so error *mapping* (`ConfigError`/`NotFoundError`/`GitLabAPIError`) is unaffected by retrying.
+
+These `HTTP_RETRY_*` constants are **transport** retry — resending an HTTP request that failed in flight. Unrelated to retrying a *CI job*, which is the `ddgl retry` feature.
 
 #### Low-level API caching
 
