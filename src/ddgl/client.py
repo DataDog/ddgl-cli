@@ -116,33 +116,36 @@ class GitLabClient:
         retry_statuses: frozenset[int] = frozenset(),
         retry_transport: bool = False,
     ) -> httpx.Response:
-        """Issue one HTTP request, retrying according to the caller's policy.
+        """Issue one HTTP request, retrying per `retry_statuses`/`retry_transport`.
 
-        The retry policy is passed in rather than decided here because it
-        depends on whether the request is *idempotent*, which only the
-        caller knows. A GET can always be safely re-sent. A POST cannot:
-        re-sending `POST /jobs/:id/retry` after a timeout or a 502 could
-        mint two jobs, because there is no way to distinguish "GitLab never
-        saw it" from "GitLab processed it and the response was lost on the
-        way back".
+        Those two knobs aren't independently chosen per call in practice —
+        each of this method's two callers passes a fixed pair: see their
+        values below. They're still parameters of `_request` (rather than
+        switched on `method` inside this function) because *why* GET and
+        POST differ is idempotency, a property of the specific
+        endpoint/verb that only the caller knows: a GET can always be
+        safely re-sent. A POST cannot: re-sending `POST /jobs/:id/retry`
+        after a timeout or a 502 could mint two jobs, because there is no
+        way to distinguish "GitLab never saw it" from "GitLab processed it
+        and the response was lost on the way back".
 
         Args:
-            method: HTTP verb. Also forwarded to `_raise_for_status` so
-                `GitLabAPIError` reports the right verb.
+            method: HTTP verb, forwarded to `self._http.request`.
             path: Path relative to the client's `base_url`.
             params: Query-string parameters. GET only, in practice.
             json: JSON request body. POST only, in practice.
             retry_statuses: HTTP status codes to treat as retryable. Empty
-                (the default) means "never retry on status". GET passes
-                `RETRYABLE_STATUS_CODES` (408/429/5xx). POST passes
-                `RATE_LIMITED_STATUS_CODES` ({429}) only — a 429 means the
-                request was *rejected* rather than processed, so re-sending
-                it is safe even for a non-idempotent verb.
+                (the default) means "never retry on status". `_get_response`
+                passes `RETRYABLE_STATUS_CODES` (408/429/5xx); `_post_response`
+                passes `RATE_LIMITED_STATUS_CODES` ({429}) only — a 429 means
+                the request was *rejected* rather than processed, so
+                re-sending it is safe even for a non-idempotent verb.
             retry_transport: Whether to retry an `httpx.TransportError`
                 (timeout, DNS failure, connection reset — GitLab never
-                responded at all). True for GET. **False for POST**:
-                "no response" is precisely the ambiguous case where a
-                re-send might duplicate the side effect.
+                responded at all). `_get_response` passes True.
+                `_post_response` passes **False**: "no response" is
+                precisely the ambiguous case where a re-send might
+                duplicate the side effect.
 
         Retries up to `HTTP_RETRY_ATTEMPTS` times with exponential backoff
         (`HTTP_RETRY_BACKOFF_INITIAL_SECONDS` *
@@ -218,13 +221,8 @@ class GitLabClient:
     async def _post_response(self, path: str, json: dict[str, Any] | None = None) -> httpx.Response:
         """POST with automatic retry on a 429 only.
 
-        Unlike `_get_response`, a POST is not idempotent — GitLab may have
-        fully processed the request even if the response never arrived, so
-        re-sending it on a 5xx or a transport error (timeout/connection
-        reset) could duplicate the side effect (e.g. mint two retried
-        jobs). Only a 429 is safe to retry: it means the request was
-        *rejected* before GitLab acted on it. See `_request` for the full
-        retry mechanics — this is a thin POST-flavored wrapper over it.
+        Unlike GET, a POST isn't idempotent, so it can't be retried as
+        aggressively — see `_request`'s docstring for the full rationale.
         """
         return await self._request(
             HttpMethod.POST, path, json=json,
