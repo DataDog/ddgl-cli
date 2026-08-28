@@ -122,6 +122,22 @@ class TestJob:
         j = self._make(status=JobStatus.SUCCESS, allow_failure=True)
         assert j.is_allowed_failure is False
 
+    def test_is_retryable_when_failed(self) -> None:
+        j = self._make(status=JobStatus.FAILED)
+        assert j.is_retryable is True
+
+    def test_is_retryable_when_canceled(self) -> None:
+        j = self._make(status=JobStatus.CANCELED)
+        assert j.is_retryable is True
+
+    def test_is_retryable_false_when_success(self) -> None:
+        j = self._make(status=JobStatus.SUCCESS)
+        assert j.is_retryable is False
+
+    def test_is_retryable_false_when_running(self) -> None:
+        j = self._make(status=JobStatus.RUNNING)
+        assert j.is_retryable is False
+
 
 class TestJobLog:
     def test_ansi_stripping(self) -> None:

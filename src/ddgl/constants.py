@@ -19,6 +19,10 @@ HTTP_RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multipli
 # warning and skipping forever with no --timeout set.
 MAX_CONSECUTIVE_POLL_FAILURES = 5
 
+# Defaults for RetryPolicy (model/attach.py) / --retry-attempts / --retry-total.
+DEFAULT_JOB_RETRY_ATTEMPTS = 2  # per job name, counting the original run; 0 = unlimited
+DEFAULT_JOB_RETRY_TOTAL = 50    # across the whole attach run; 0 = unlimited
+
 CACHE_TTL_TOKEN = 3600.0                  # 1 h   — resolved GitLab tokens
 CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change
 CACHE_TTL_FINISHED_JOB = 604800.0         # 1 w   — finished jobs don't change
@@ -103,5 +107,15 @@ JOB_RUNNING = frozenset(
     {
         JobStatus.RUNNING,
         JobStatus.PENDING,
+    }
+)
+
+# A deliberate narrowing of GitLab's actual retry rule, which also permits
+# retrying a *successful* job — see Job.is_retryable. --force is the escape
+# hatch for that wider set (cli/retry.py).
+JOB_RETRYABLE = frozenset(
+    {
+        JobStatus.FAILED,
+        JobStatus.CANCELED,
     }
 )

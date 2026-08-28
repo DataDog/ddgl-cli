@@ -7,7 +7,7 @@ from typing import Any
 
 import msgspec
 
-from ddgl.constants import JOB_RUNNING, JobStatus
+from ddgl.constants import JOB_RETRYABLE, JOB_RUNNING, JobStatus
 
 
 class Job(msgspec.Struct):
@@ -81,3 +81,14 @@ class Job(msgspec.Struct):
         of each re-deriving the same boolean.
         """
         return self.has_failed and not self.is_blocking
+
+    @property
+    def is_retryable(self) -> bool:
+        """Failed or canceled — the default candidate set for auto-retry
+        and `ddgl retry`'s targeted mode.
+
+        A deliberate narrowing of GitLab's actual rule, which also permits
+        retrying a *successful* job — `--force` (cli/retry.py) is the
+        escape hatch for that wider set.
+        """
+        return self.status in JOB_RETRYABLE

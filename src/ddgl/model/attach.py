@@ -8,6 +8,8 @@ from typing import ClassVar
 
 import msgspec
 
+from ddgl.constants import DEFAULT_JOB_RETRY_ATTEMPTS, DEFAULT_JOB_RETRY_TOTAL
+
 
 class DetailLevel(StrEnum):
     """How much of attach()'s event stream a renderer shows, ordered from
@@ -53,6 +55,20 @@ class DetailLevel(StrEnum):
 
 
 _DETAIL_RANK = {level: i for i, level in enumerate(DetailLevel)}
+
+
+class RetryPolicy(msgspec.Struct, frozen=True):
+    """Auto-retry configuration for one `ddgl attach` run.
+
+    Populated from the `--retry`/`--retry-attempts`/`--retry-total`/
+    `--retry-exclude` CLI flags (cli/attach.py) and consumed by the poll
+    loop's `_apply_retry_policy` (core/attach.py).
+    """
+
+    enabled: bool = False
+    attempts_per_job: int = DEFAULT_JOB_RETRY_ATTEMPTS  # 0 = unlimited
+    total: int = DEFAULT_JOB_RETRY_TOTAL                # 0 = unlimited
+    exclude: tuple[str, ...] = ()  # job-name regexes never auto-retried
 
 
 class AttachEvent(msgspec.Struct, kw_only=True, tag_field="kind"):
