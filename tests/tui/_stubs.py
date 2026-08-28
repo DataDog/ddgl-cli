@@ -26,6 +26,9 @@ def make_job(
     name: str = "test",
     stage: str = "test",
     status: JobStatus = JobStatus.SUCCESS,
+    pipeline_id: int = 1,
     **kwargs: object,
 ) -> Job:
-    return Job(id=id, name=name, stage=stage, status=status, **kwargs)  # type: ignore[arg-type]
+    return Job(
+        id=id, name=name, stage=stage, status=status, pipeline_id=pipeline_id, **kwargs
+    )  # type: ignore[arg-type]

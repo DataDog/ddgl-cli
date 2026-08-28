@@ -57,6 +57,7 @@ def _job_payload(
         "stage": stage,
         "status": status,
         "ref": "main",
+        "pipeline": {"id": 100},
         "web_url": f"https://gitlab.example.com/grp/proj/-/jobs/{job_id}",
         "allow_failure": allow_failure,
         "failure_reason": None,

@@ -17,10 +17,11 @@ class Job(msgspec.Struct):
     name: str
     stage: str
     status: JobStatus
+    pipeline_id: int
+    """The containing pipeline's ID, read from the job payload's nested
+    `pipeline` object. Required: every job endpoint GitLab exposes returns
+    it, so a missing one means the payload isn't a job."""
     ref: str = ""
-    pipeline_id: int | None = None
-    """The containing pipeline's ID, from the job payload's nested
-    `pipeline` object. None only when a payload omits it."""
     web_url: str = ""
     allow_failure: bool = False
     failure_reason: str | None = None
@@ -40,14 +41,13 @@ class Job(msgspec.Struct):
     def from_api(cls, data: dict[str, Any], **kwargs: Any) -> Job:
         runner = data.get("runner") or {}
         needs_raw = data.get("needs") or []
-        pipeline = data.get("pipeline") or {}
         return cls(
             id=data["id"],
             name=data["name"],
             stage=data["stage"],
             status=JobStatus(data["status"]),
+            pipeline_id=data["pipeline"]["id"],
             ref=data.get("ref", ""),
-            pipeline_id=pipeline.get("id"),
             web_url=data.get("web_url", ""),
             allow_failure=data.get("allow_failure", False),
             failure_reason=data.get("failure_reason"),

@@ -22,7 +22,7 @@ from ddgl.tui.widgets.status import (
 def _make_job(**overrides: object) -> Job:
     defaults: dict[str, object] = {
         "id": 1, "name": "build", "stage": "build",
-        "status": JobStatus.FAILED,
+        "status": JobStatus.FAILED, "pipeline_id": 1,
     }
     return Job(**(defaults | overrides))  # type: ignore[arg-type]
 

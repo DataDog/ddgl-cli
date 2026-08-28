@@ -51,6 +51,7 @@ def _job_payload(
         "stage": stage,
         "status": status,
         "ref": "main",
+        "pipeline": {"id": 100},
     }
 
 
@@ -66,6 +67,7 @@ def _pipeline_payload(pipeline_id: int, status: str = "running") -> dict[str, An
 def _make_job(**overrides: object) -> Job:
     defaults: dict[str, object] = {
         "id": 1, "name": "build", "stage": "build", "status": "failed",
+        "pipeline_id": 100,
     }
     return Job(**(defaults | overrides))
 

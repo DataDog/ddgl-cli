@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import msgspec
+import pytest
 
 from ddgl.constants import JobStatus, PipelineStatus
 from ddgl.model.attach import HeartbeatEvent, JobEvent, ResultEvent, SnapshotEvent
@@ -58,7 +59,7 @@ class TestJob:
     def _make(self, **overrides: object) -> Job:
         defaults: dict[str, object] = {
             "id": 1, "name": "build", "stage": "build",
-            "status": JobStatus.SUCCESS, "ref": "main",
+            "status": JobStatus.SUCCESS, "ref": "main", "pipeline_id": 1,
         }
         return Job(**(defaults | overrides))
 
@@ -75,9 +76,12 @@ class TestJob:
         assert j.failure_reason == "script_failure"
         assert j.pipeline_id == 1
 
-    def test_from_api_pipeline_id_none_when_absent(self) -> None:
+    def test_from_api_requires_the_nested_pipeline(self) -> None:
+        """A payload with no `pipeline` isn't a job GitLab ever returns, so
+        this is a hard error rather than a silently-unlabelled job."""
         data = {"id": 10, "name": "test", "stage": "test", "status": "failed"}
-        assert Job.from_api(data).pipeline_id is None
+        with pytest.raises(KeyError):
+            Job.from_api(data)
 
     def test_is_running(self) -> None:
         j = self._make(status=JobStatus.RUNNING)

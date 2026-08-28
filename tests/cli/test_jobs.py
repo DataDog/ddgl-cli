@@ -63,7 +63,7 @@ def _job_payload(
 ) -> dict[str, Any]:
     return {
         "id": job_id, "name": name, "stage": "test", "status": status,
-        "ref": "main", "allow_failure": allow_failure,
+        "ref": "main", "allow_failure": allow_failure, "pipeline": {"id": 1},
     }
 
 

@@ -40,7 +40,9 @@ _ENCODED_PROJECT = _PROJECT_ID.replace("/", "%2F")
 
 
 def _job(job_id: int, stage: str, status: JobStatus) -> Job:
-    return Job(id=job_id, name=f"job-{job_id}", stage=stage, status=status)
+    return Job(
+        id=job_id, name=f"job-{job_id}", stage=stage, status=status, pipeline_id=1
+    )
 
 
 class TestCurrentStage:
@@ -121,6 +123,7 @@ def _job_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": job_id, "name": name, "stage": stage, "status": status, "ref": "main",
+        "pipeline": {"id": 100},
         "duration": 30.0 if status in ("success", "failed") else None,
         "allow_failure": allow_failure,
     }
@@ -366,7 +369,12 @@ class TestAttachFollow:
 
         async def get_all_jobs(pipeline_id: int, **kwargs: Any) -> Any:
             if pipeline_id == 2:
-                return [Job(id=20, name="a", stage="test", status=JobStatus.SUCCESS)]
+                return [
+                    Job(
+                        id=20, name="a", stage="test",
+                        status=JobStatus.SUCCESS, pipeline_id=2,
+                    )
+                ]
             return await real_get_all_jobs(cached_client, pipeline_id, **kwargs)
 
         async def get_pipeline(pipeline_id: int, **kwargs: Any) -> Pipeline:

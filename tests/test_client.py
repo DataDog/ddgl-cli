@@ -33,14 +33,14 @@ MOCK_PIPELINE_DETAIL = {
 
 MOCK_JOBS_PAGE1 = [
     {"id": 1, "name": "build", "stage": "build", "status": "success",
-     "ref": "main"},
+     "ref": "main", "pipeline": {"id": 100}},
     {"id": 2, "name": "test", "stage": "test", "status": "failed",
-     "ref": "main", "failure_reason": "script_failure"},
+     "ref": "main", "failure_reason": "script_failure", "pipeline": {"id": 100}},
 ]
 
 MOCK_JOBS_PAGE2 = [
     {"id": 3, "name": "deploy", "stage": "deploy", "status": "success",
-     "ref": "main"},
+     "ref": "main", "pipeline": {"id": 100}},
 ]
 
 
@@ -247,7 +247,7 @@ class TestGetAllJobs:
         def _respond(request: Any, **kwargs: Any) -> httpx.Response:
             page = int(request.url.params["page"])
             return _paginated_response(
-                [{"id": page, "name": f"job-{page}", "stage": "test",
+                [{"id": page, "name": f"job-{page}", "stage": "test", "pipeline": {"id": 100},
                   "status": "success", "ref": "main"}],
                 page=page,
                 next_page=page + 1 if page < n_pages else None,
@@ -288,7 +288,7 @@ class TestGetAllJobs:
             if page == 3:
                 return httpx.Response(500, json={"message": "boom"})
             return _paginated_response(
-                [{"id": page, "name": f"job-{page}", "stage": "test",
+                [{"id": page, "name": f"job-{page}", "stage": "test", "pipeline": {"id": 100},
                   "status": "success", "ref": "main"}],
                 page=page,
                 next_page=page + 1 if page < 4 else None,
@@ -374,7 +374,7 @@ class TestRetryJob:
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
         new_job = {"id": 501, "name": "build", "stage": "build",
-                   "status": "pending", "ref": "main"}
+                   "status": "pending", "ref": "main", "pipeline": {"id": 100}}
         route = mock_api.post(
             "/projects/my-group%2Fmy-project/jobs/1/retry",
         ).mock(return_value=httpx.Response(200, json=new_job))
@@ -547,7 +547,7 @@ class TestPostRetrySafety:
 
         monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
         new_job = {"id": 501, "name": "build", "stage": "build",
-                   "status": "pending", "ref": "main"}
+                   "status": "pending", "ref": "main", "pipeline": {"id": 100}}
         route = mock_api.post("/projects/my-group%2Fmy-project/jobs/1/retry")
         route.side_effect = [
             httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "3"}),
