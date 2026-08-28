@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Iterable
 
@@ -13,6 +12,7 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB, PipelineScope, PipelineStatus
+from ddgl.core._concurrency import gather_bounded
 from ddgl.exceptions import NoPipelineFoundError, ShellError
 from ddgl.git import get_current_branch, get_recent_shas, looks_like_sha
 from ddgl.model.pipeline import Pipeline
@@ -115,8 +115,8 @@ async def get_pipelines(
 
     misses = [pid for pid in ids if pid not in cached_map]
     if misses:
-        fresh = await asyncio.gather(
-            *[get_pipeline(client, pid, cache=cache) for pid in misses]
+        fresh = await gather_bounded(
+            get_pipeline(client, pid, cache=cache) for pid in misses
         )
         for p in fresh:
             cached_map[p.id] = p

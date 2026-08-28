@@ -9,6 +9,7 @@ DEFAULT_GITLAB_URL = "https://gitlab.com"
 
 MAX_PAGES = 50
 MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
+MAX_CONCURRENT_REQUESTS = 10  # cap on simultaneous in-flight requests in core/'s bulk helpers
 
 HTTP_RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client HTTP call
 HTTP_RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1

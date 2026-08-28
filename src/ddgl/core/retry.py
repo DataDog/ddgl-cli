@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
 
 from ddgl.client import GitLabClient
+from ddgl.core._concurrency import gather_bounded
 from ddgl.exceptions import GitLabAPIError, NotFoundError
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
@@ -65,7 +65,7 @@ async def retry_jobs(client: GitLabClient, jobs: Sequence[Job]) -> list[RetryOut
             return RetryOutcome(old_job_id=job.id, job_name=job.name, error=str(exc))
         return RetryOutcome(old_job_id=job.id, job_name=job.name, new_job=new_job)
 
-    return list(await asyncio.gather(*[_retry_one(job) for job in jobs]))
+    return await gather_bounded(_retry_one(job) for job in jobs)
 
 
 async def count_attempts(

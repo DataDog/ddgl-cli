@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
@@ -13,6 +12,7 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB, JobStatus
+from ddgl.core._concurrency import gather_bounded
 from ddgl.model.job import Job
 
 logger = logging.getLogger("ddgl.core.jobs")
@@ -60,9 +60,7 @@ async def get_jobs(
 
     misses = [jid for jid in ids if jid not in cached_map]
     if misses:
-        fresh: list[Job] = list(
-            await asyncio.gather(*[client.get_job(jid) for jid in misses])
-        )
+        fresh: list[Job] = await gather_bounded(client.get_job(jid) for jid in misses)
         cache_terminal_jobs(cache, project_id, fresh)
         for j in fresh:
             cached_map[j.id] = j
