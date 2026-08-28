@@ -24,6 +24,7 @@ from ddgl.constants import (
     HTTP_RETRY_BACKOFF_MULTIPLIER,
     MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
+    HttpMethod,
     JobStatus,
     PipelineScope,
 )
@@ -104,45 +105,86 @@ class GitLabClient:
         raw = f"{path}?{'&'.join(f'{k}={v}' for k, v in sorted(params.items()))}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    async def _get_response(self, path: str, **params: Any) -> httpx.Response:
-        """GET with automatic retry on transient (retryable) failures.
+    async def _request(
+        self,
+        method: HttpMethod,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        retry_statuses: frozenset[int] = frozenset(),
+        retry_transport: bool = False,
+    ) -> httpx.Response:
+        """Issue one HTTP request, retrying according to the caller's policy.
 
-        Retries a connection-level failure (timeout, DNS, reset — GitLab
-        never even responded) or a retryable HTTP status (408/429/5xx, see
-        RETRYABLE_STATUS_CODES) up to HTTP_RETRY_ATTEMPTS times, honoring a
-        429's `Retry-After` header when present.
+        The retry policy is passed in rather than decided here because it
+        depends on whether the request is *idempotent*, which only the
+        caller knows. A GET can always be safely re-sent. A POST cannot:
+        re-sending `POST /jobs/:id/retry` after a timeout or a 502 could
+        mint two jobs, because there is no way to distinguish "GitLab never
+        saw it" from "GitLab processed it and the response was lost on the
+        way back".
 
-        Does NOT raise on a non-2xx response itself — callers still call
-        `_raise_for_status()` on the returned response, so the exact
-        exception mapping (ConfigError/NotFoundError/GitLabAPIError) stays
-        defined in exactly one place. This only decides whether to retry
-        before handing back whatever response (or connection error) it
-        ultimately has.
+        Args:
+            method: HTTP verb. Also forwarded to `_raise_for_status` so
+                `GitLabAPIError` reports the right verb.
+            path: Path relative to the client's `base_url`.
+            params: Query-string parameters. GET only, in practice.
+            json: JSON request body. POST only, in practice.
+            retry_statuses: HTTP status codes to treat as retryable. Empty
+                (the default) means "never retry on status". GET passes
+                `RETRYABLE_STATUS_CODES` (408/429/5xx). POST passes
+                `RATE_LIMITED_STATUS_CODES` ({429}) only — a 429 means the
+                request was *rejected* rather than processed, so re-sending
+                it is safe even for a non-idempotent verb.
+            retry_transport: Whether to retry an `httpx.TransportError`
+                (timeout, DNS failure, connection reset — GitLab never
+                responded at all). True for GET. **False for POST**:
+                "no response" is precisely the ambiguous case where a
+                re-send might duplicate the side effect.
+
+        Retries up to `HTTP_RETRY_ATTEMPTS` times with exponential backoff
+        (`HTTP_RETRY_BACKOFF_INITIAL_SECONDS` *
+        `HTTP_RETRY_BACKOFF_MULTIPLIER` ** attempt), honoring a 429's
+        `Retry-After` header in place of the computed delay when one is
+        present and numeric.
+
+        Returns:
+            The final `httpx.Response`, whatever its status. Deliberately
+            does NOT raise on a non-2xx — callers still run
+            `_raise_for_status`, so the exception mapping
+            (ConfigError/NotFoundError/GitLabAPIError) stays defined in
+            exactly one place.
+
+        Raises:
+            httpx.TransportError: The request never got a response, and
+                either `retry_transport` is False or the attempts were
+                exhausted.
         """
         last_exc: httpx.TransportError | None = None
         for attempt in range(HTTP_RETRY_ATTEMPTS):
             is_last_attempt = attempt == HTTP_RETRY_ATTEMPTS - 1
             try:
-                resp = await self._http.get(path, params=params)
+                resp = await self._http.request(method, path, params=params, json=json)
             except httpx.TransportError as exc:
                 last_exc = exc
-                if is_last_attempt:
+                if not retry_transport or is_last_attempt:
                     raise
                 delay = _backoff_delay(attempt)
                 logger.warning(
-                    "GET %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
-                    path, exc, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
+                    "%s %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
+                    method, path, exc, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
                 )
                 await asyncio.sleep(delay)
                 continue
 
-            if resp.status_code not in RETRYABLE_STATUS_CODES or is_last_attempt:
+            if resp.status_code not in retry_statuses or is_last_attempt:
                 return resp
 
             delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
             logger.warning(
-                "GET %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
-                path, resp.status_code, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
+                "%s %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
+                method, path, resp.status_code, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
             )
             await asyncio.sleep(delay)
 
@@ -151,7 +193,28 @@ class GitLabClient:
         assert last_exc is not None
         raise last_exc
 
-    def _raise_for_status(self, resp: httpx.Response) -> None:
+    async def _get_response(self, path: str, **params: Any) -> httpx.Response:
+        """GET with automatic retry on transient (retryable) failures.
+
+        Retries a connection-level failure (timeout, DNS, reset — GitLab
+        never even responded) or a retryable HTTP status (408/429/5xx, see
+        RETRYABLE_STATUS_CODES) up to HTTP_RETRY_ATTEMPTS times, honoring a
+        429's `Retry-After` header when present. See `_request` for the
+        full retry mechanics — this is a thin GET-flavored wrapper over it.
+
+        Does NOT raise on a non-2xx response itself — callers still call
+        `_raise_for_status()` on the returned response, so the exact
+        exception mapping (ConfigError/NotFoundError/GitLabAPIError) stays
+        defined in exactly one place. This only decides whether to retry
+        before handing back whatever response (or connection error) it
+        ultimately has.
+        """
+        return await self._request(
+            HttpMethod.GET, path, params=params,
+            retry_statuses=RETRYABLE_STATUS_CODES, retry_transport=True,
+        )
+
+    def _raise_for_status(self, resp: httpx.Response, method: HttpMethod) -> None:
         """Translate HTTP errors into typed exceptions.
 
         Raises:
@@ -173,7 +236,7 @@ class GitLabClient:
                     ) from exc
                 raise NotFoundError(path, "") from exc
             raise GitLabAPIError(
-                resp.status_code, "GET", path,
+                resp.status_code, method, path,
                 resp.text[:200] if resp.text else "",
             ) from exc
 
@@ -198,7 +261,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp)
+        self._raise_for_status(resp, HttpMethod.GET)
         data = resp.json()
         if self._cache is not None and ttl > 0:
             from ddgl.cache import CacheNS
@@ -217,7 +280,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp)
+        self._raise_for_status(resp, HttpMethod.GET)
         return resp.text
 
     async def _get_page(
@@ -248,7 +311,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp)
+        self._raise_for_status(resp, HttpMethod.GET)
         page = Page.from_response(resp, item_factory)
         if self._cache is not None and ttl > 0:
             from ddgl.cache import CacheNS
@@ -580,7 +643,7 @@ class GitLabClient:
                 if resp.status_code == 404:
                     raise NotFoundError("job", job_id) from exc
                 raise GitLabAPIError(
-                    resp.status_code, "GET", path,
+                    resp.status_code, HttpMethod.GET, path,
                     (await resp.aread()).decode()[:200],
                 ) from exc
             async for line in resp.aiter_lines():
