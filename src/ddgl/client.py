@@ -229,8 +229,12 @@ class GitLabClient:
             retry_statuses=RATE_LIMITED_STATUS_CODES, retry_transport=False,
         )
 
-    def _raise_for_status(self, resp: httpx.Response, method: HttpMethod) -> None:
+    def _raise_for_status(self, resp: httpx.Response) -> None:
         """Translate HTTP errors into typed exceptions.
+
+        The HTTP verb for `GitLabAPIError.method` is read off `resp.request`
+        rather than taken as a parameter — the response already carries it,
+        so there is nothing for a caller to get out of sync with.
 
         Raises:
             ConfigError: HTTP 404 when the project itself is not found.
@@ -251,7 +255,7 @@ class GitLabClient:
                     ) from exc
                 raise NotFoundError(path, "") from exc
             raise GitLabAPIError(
-                resp.status_code, method, path,
+                resp.status_code, HttpMethod(resp.request.method), path,
                 resp.text[:200] if resp.text else "",
             ) from exc
 
@@ -276,7 +280,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp, HttpMethod.GET)
+        self._raise_for_status(resp)
         data = resp.json()
         if self._cache is not None and ttl > 0:
             from ddgl.cache import CacheNS
@@ -297,7 +301,7 @@ class GitLabClient:
         logger.debug("POST %s", path)
         resp = await self._post_response(path, json=json)
         logger.debug("POST %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp, HttpMethod.POST)
+        self._raise_for_status(resp)
         return resp.json()
 
     async def _get_text(self, path: str) -> str:
@@ -310,7 +314,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp, HttpMethod.GET)
+        self._raise_for_status(resp)
         return resp.text
 
     async def _get_page(
@@ -341,7 +345,7 @@ class GitLabClient:
         logger.debug("GET %s", path)
         resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
-        self._raise_for_status(resp, HttpMethod.GET)
+        self._raise_for_status(resp)
         page = Page.from_response(resp, item_factory)
         if self._cache is not None and ttl > 0:
             from ddgl.cache import CacheNS
