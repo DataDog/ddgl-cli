@@ -50,6 +50,11 @@ async def retry_pipeline(client: GitLabClient, pipeline_id: int) -> Pipeline:
         NotFoundError: pipeline does not exist.
         GitLabAPIError: other HTTP error (e.g. 403 insufficient token scope).
     """
+    # Says "every failed and canceled job" rather than restating the
+    # client's own "Retrying pipeline N": this is the line that makes a
+    # bulk run distinguishable from a targeted one in a log, since bulk
+    # otherwise never touches the selection path that announces itself.
+    logger.info("Retrying every failed and canceled job in pipeline %d", pipeline_id)
     return await client.retry_pipeline(pipeline_id)
 
 
