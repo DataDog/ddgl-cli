@@ -456,10 +456,10 @@ class GitLabClient:
     async def fetch_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
-        *,
         fresh: bool = False,
     ) -> Page[Pipeline]:
         """Fetch a single page of pipelines."""
@@ -480,6 +480,7 @@ class GitLabClient:
     async def iter_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
@@ -503,6 +504,7 @@ class GitLabClient:
     async def get_all_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
@@ -525,8 +527,8 @@ class GitLabClient:
     async def get_pipeline(
         self,
         pipeline_id: int,
-        project_id: str | None = None,
         *,
+        project_id: str | None = None,
         fresh: bool = False,
     ) -> Pipeline:
         """Get details of a single pipeline.
@@ -551,6 +553,7 @@ class GitLabClient:
     async def retry_pipeline(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
     ) -> Pipeline:
         """Retry every failed and canceled job in a pipeline.
@@ -575,6 +578,7 @@ class GitLabClient:
     async def fetch_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
@@ -595,6 +599,7 @@ class GitLabClient:
     async def iter_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
@@ -616,10 +621,10 @@ class GitLabClient:
     async def get_all_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
-        *,
         fresh: bool = False,
         include_retried: bool = False,
     ) -> list[Job]:
@@ -651,6 +656,7 @@ class GitLabClient:
     async def get_job_attempts(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
     ) -> list[Job]:
         """Get every job record for a pipeline, including retried ones.
@@ -667,12 +673,13 @@ class GitLabClient:
         every page past the first.
         """
         return await self.get_all_jobs(
-            pipeline_id, project_id, fresh=True, include_retried=True,
+            pipeline_id, project_id=project_id, fresh=True, include_retried=True,
         )
 
     async def get_job(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> Job:
         """Get details of a single job.
@@ -692,6 +699,7 @@ class GitLabClient:
     async def retry_job(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> Job:
         """Retry a single job.
@@ -716,6 +724,7 @@ class GitLabClient:
     async def get_job_log(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> str:
         """Get the raw log output of a job.
@@ -734,6 +743,7 @@ class GitLabClient:
     async def stream_job_log(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream the raw log of a job line by line.
