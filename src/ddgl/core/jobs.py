@@ -17,17 +17,13 @@ from ddgl.model.job import Job
 
 logger = logging.getLogger("ddgl.core.jobs")
 
-JOB_TERMINAL = frozenset(
-    {JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.SKIPPED}
-)
-
 
 def cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: Iterable[Job]) -> None:
     """Write terminal-state jobs to the durable object cache."""
     if cache is None:
         return
     for job in jobs:
-        if job.status in JOB_TERMINAL:
+        if job.is_terminal:
             cache[CacheNS.OBJECTS].set(
                 ("jobs", project_id, job.id), job, ttl=CACHE_TTL_FINISHED_JOB
             )

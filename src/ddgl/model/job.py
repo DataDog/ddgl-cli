@@ -7,7 +7,7 @@ from typing import Any
 
 import msgspec
 
-from ddgl.constants import JOB_RETRYABLE, JOB_RUNNING, JobStatus
+from ddgl.constants import JOB_RETRYABLE, JOB_RUNNING, JOB_TERMINAL, JobStatus
 
 
 class Job(msgspec.Struct):
@@ -65,6 +65,11 @@ class Job(msgspec.Struct):
     @property
     def is_running(self) -> bool:
         return self.status in JOB_RUNNING
+
+    @property
+    def is_terminal(self) -> bool:
+        """Reached a status it won't move out of — done, one way or another."""
+        return self.status in JOB_TERMINAL
 
     @property
     def has_failed(self) -> bool:

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
-from ddgl.core.jobs import JOB_TERMINAL, cache_terminal_jobs
+from ddgl.core.jobs import cache_terminal_jobs
 from ddgl.core.pipeline import cache_terminal_pipeline, list_pipelines, resolve_pipeline
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
@@ -47,57 +47,7 @@ logger = logging.getLogger("ddgl.core.attach")
 # sequence again — that's the whole resumability story.
 
 
-def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
-    """Return (jobs_total, jobs_done, failed_job_names) for a job list."""
-    total = len(jobs)
-    done = sum(1 for j in jobs if j.status in JOB_TERMINAL)
-    failed = tuple(j.name for j in jobs if j.is_blocking)
-    return total, done, failed
-
-
-def _current_stage(jobs: list[Job]) -> str | None:
-    """Best-effort 'what stage are we in' for the live view's headline.
-
-    The OLDEST stage that still has at least one not-yet-done job — the
-    stage actually holding up progress, not the most-recently-started one.
-    "Oldest" is approximated by each stage's minimum job ID: GitLab returns
-    jobs newest-ID-first (not in stage order — there is no API field for
-    stage sequence), but job IDs are assigned in roughly creation order, and
-    jobs are normally created stage-by-stage at pipeline start. Falls back
-    to the oldest stage overall once everything is done, or None for an
-    empty job list.
-    """
-    if not jobs:
-        return None
-
-    min_id_by_stage: dict[str, int] = {}
-    incomplete_stages: set[str] = set()
-    for job in jobs:
-        min_id_by_stage[job.stage] = min(min_id_by_stage.get(job.stage, job.id), job.id)
-        if job.status not in JOB_TERMINAL:
-            incomplete_stages.add(job.stage)
-
-    candidates = incomplete_stages or min_id_by_stage.keys()
-    return min(candidates, key=lambda s: min_id_by_stage[s])
-
-
-def build_context(state: PipelineState) -> EventContext:
-    """The rollup fields to attach to every event emitted for `state`."""
-    total, done, failed = _rollup(state.jobs)
-    elapsed = state.pipeline.elapsed
-    return EventContext(
-        pipeline_id=state.pipeline.id,
-        ref=state.pipeline.ref,
-        current_stage=_current_stage(state.jobs),
-        pipeline_elapsed=elapsed.total_seconds() if elapsed is not None else None,
-        jobs_total=total,
-        jobs_done=done,
-        failed_jobs=failed,
-        eta_seconds=None,  # no ETA estimation in v1
-    )
-
-
-def diff_pipeline_status(
+def _build_pipeline_event(
     prev: Pipeline, curr: Pipeline, context: EventContext
 ) -> PipelineEvent | None:
     """A PipelineEvent if the pipeline changed status, else None."""
@@ -111,7 +61,7 @@ def diff_pipeline_status(
     )
 
 
-def diff_job_statuses(
+def _build_job_events(
     prev: list[Job], curr: list[Job], context: EventContext
 ) -> list[JobEvent]:
     """A JobEvent per job whose status changed, in `curr` order.
@@ -143,7 +93,7 @@ def diff_job_statuses(
     return events
 
 
-def diff_tick_events(
+def _build_tick_events(
     prev: PipelineState | None,
     curr: PipelineState,
     *,
@@ -165,10 +115,10 @@ def diff_tick_events(
         return [SnapshotEvent(ts=now_iso(), status=str(curr.pipeline.status), **context.as_fields())]
 
     events: list[AttachEvent] = []
-    pipeline_event = diff_pipeline_status(prev.pipeline, curr.pipeline, context)
+    pipeline_event = _build_pipeline_event(prev.pipeline, curr.pipeline, context)
     if pipeline_event is not None:
         events.append(pipeline_event)
-    events.extend(diff_job_statuses(prev.jobs, curr.jobs, context))
+    events.extend(_build_job_events(prev.jobs, curr.jobs, context))
 
     if events:
         events.append(PollEvent(ts=now_iso(), **context.as_fields()))
@@ -177,7 +127,7 @@ def diff_tick_events(
     return events
 
 
-async def get_pipeline_state(
+async def _get_pipeline_state(
     client: GitLabClient, pipeline_id: int, *, cache: Cache | None, project_id: str
 ) -> PipelineState:
     """Fetch a pipeline's current status and its full job list.
@@ -200,7 +150,7 @@ async def get_pipeline_state(
     return PipelineState(pipeline=pipeline, jobs=jobs)
 
 
-async def check_for_new_pipeline(
+async def _check_for_new_pipeline(
     client: GitLabClient, current: PipelineState, *, cache: Cache | None, project_id: str
 ) -> PipelineState | None:
     """The state of a pipeline newer than `current`'s for the same ref, or
@@ -210,7 +160,7 @@ async def check_for_new_pipeline(
     caller's own poll of the current pipeline unaffected.
 
     The newer pipeline's status comes from the listing that found it, so
-    unlike `get_pipeline_state` this issues no second request for it.
+    unlike `_get_pipeline_state` this issues no second request for it.
     """
     try:
         candidates = await list_pipelines(
@@ -366,14 +316,14 @@ async def _poll_pipeline(
 
     # The resolved pipeline and its jobs are the first tick, so the loop
     # starts already holding one: re-reading them through
-    # get_pipeline_state() would repeat a fetch just made.
+    # _get_pipeline_state() would repeat a fetch just made.
     prev: PipelineState | None = None
     curr = PipelineState(pipeline=pipeline, jobs=jobs)
     consecutive_failures = 0
 
     while True:
-        context = build_context(curr)
-        for event in diff_tick_events(prev, curr, context=context, heartbeat=heartbeat):
+        context = EventContext.from_state(curr)
+        for event in _build_tick_events(prev, curr, context=context, heartbeat=heartbeat):
             yield event
 
         if curr.pipeline.is_finished:
@@ -395,7 +345,7 @@ async def _poll_pipeline(
             await asyncio.sleep(interval)
 
             if follow:
-                switched = await check_for_new_pipeline(
+                switched = await _check_for_new_pipeline(
                     client, curr, cache=cache, project_id=project_id
                 )
                 if switched is not None:
@@ -403,7 +353,7 @@ async def _poll_pipeline(
                         ts=now_iso(),
                         message=f"newer pipeline #{switched.pipeline.id} found for ref "
                                 f"{switched.pipeline.ref!r}; switching from #{curr.pipeline.id}",
-                        **build_context(switched).as_fields(),
+                        **EventContext.from_state(switched).as_fields(),
                     )
                     # No previous tick for a pipeline we've never seen, so
                     # the next pass snapshots it instead of diffing it
@@ -412,7 +362,7 @@ async def _poll_pipeline(
                     break
 
             try:
-                curr = await get_pipeline_state(
+                curr = await _get_pipeline_state(
                     client, curr.pipeline.id, cache=cache, project_id=project_id
                 )
             except (GitLabAPIError, httpx.TransportError) as exc:

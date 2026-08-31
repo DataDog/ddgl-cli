@@ -291,3 +291,91 @@ class TestResultEventConstructors:
         one rather than reporting the pipeline as some default."""
         result = ResultEvent.timed_out(HeartbeatEvent(ts="now", pipeline_id=9))
         assert result.status is None
+
+
+class TestPipelineState:
+    def _job(self, job_id: int, stage: str, status: JobStatus) -> Job:
+        return Job(
+            id=job_id, name=f"job-{job_id}", stage=stage, status=status, pipeline_id=1
+        )
+
+    def _state(self, jobs: list[Job]) -> PipelineState:
+        return PipelineState(
+            pipeline=Pipeline(id=1, ref="main", status=PipelineStatus.RUNNING), jobs=jobs
+        )
+
+    def test_jobs_done_counts_terminal_jobs(self) -> None:
+        state = self._state([
+            self._job(1, "build", JobStatus.SUCCESS),
+            self._job(2, "test", JobStatus.RUNNING),
+            self._job(3, "test", JobStatus.SKIPPED),
+        ])
+        assert state.jobs_done == 2
+
+    def test_failed_job_names_excludes_allowed_failures(self) -> None:
+        allowed = self._job(2, "test", JobStatus.FAILED)
+        allowed.allow_failure = True
+        state = self._state([self._job(1, "test", JobStatus.FAILED), allowed])
+        assert state.failed_job_names == ("job-1",)
+
+    # -- current_stage: the oldest stage still holding incomplete work --
+
+    def test_current_stage_none_without_jobs(self) -> None:
+        assert self._state([]).current_stage is None
+
+    def test_current_stage_single_stage(self) -> None:
+        state = self._state([
+            self._job(1, "build", JobStatus.RUNNING),
+            self._job(2, "build", JobStatus.CREATED),
+        ])
+        assert state.current_stage == "build"
+
+    def test_current_stage_is_oldest_incomplete_not_most_advanced(self) -> None:
+        """Regression: must pick the EARLIEST (lowest min job ID) stage that
+        still has incomplete work — the bottleneck — not whichever stage
+        happens to have the highest-ID (most recently created/advanced) job.
+
+        Deliberately constructed so a naive 'first not-done job in list
+        order' (the old, buggy behavior) would pick the wrong stage: GitLab
+        returns jobs newest-ID-first, so a highest-ID-first list places the
+        most-advanced stage's job before the oldest stage's job.
+        """
+        state = self._state([
+            self._job(30, "deploy", JobStatus.RUNNING),
+            self._job(20, "test", JobStatus.SUCCESS),
+            self._job(10, "build", JobStatus.RUNNING),
+        ])
+        assert state.current_stage == "build"
+
+    def test_current_stage_ignores_fully_done_stages(self) -> None:
+        state = self._state([
+            self._job(10, "build", JobStatus.SUCCESS),
+            self._job(20, "test", JobStatus.RUNNING),
+            self._job(30, "deploy", JobStatus.CREATED),
+        ])
+        assert state.current_stage == "test"
+
+    def test_current_stage_all_done_falls_back_to_oldest_overall(self) -> None:
+        state = self._state([
+            self._job(30, "deploy", JobStatus.SUCCESS),
+            self._job(10, "build", JobStatus.SUCCESS),
+            self._job(20, "test", JobStatus.SUCCESS),
+        ])
+        assert state.current_stage == "build"
+
+
+class TestEventContextFromState:
+    def test_reads_the_rollup_off_the_state(self) -> None:
+        state = PipelineState(
+            pipeline=Pipeline(id=42, ref="feature", status=PipelineStatus.RUNNING),
+            jobs=[
+                Job(id=1, name="a", stage="build", status=JobStatus.SUCCESS, pipeline_id=42),
+                Job(id=2, name="b", stage="test", status=JobStatus.FAILED, pipeline_id=42),
+            ],
+        )
+        context = EventContext.from_state(state)
+        assert (context.pipeline_id, context.ref) == (42, "feature")
+        assert (context.jobs_total, context.jobs_done) == (2, 2)
+        assert context.failed_jobs == ("b",)
+        assert context.current_stage == "build"  # all done -> oldest overall
+        assert context.eta_seconds is None

@@ -68,12 +68,53 @@ _DETAIL_RANK = {level: i for i, level in enumerate(DetailLevel)}
 class PipelineState(msgspec.Struct):
     """A pipeline and the jobs belonging to it, as of one point in time.
 
-    What `ddgl attach` reads on each poll tick, and what it diffs against
-    the previous tick to work out which events to emit.
+    What `ddgl attach` reads on each poll tick, and what it compares
+    against the previous tick to work out which events to emit.
     """
 
     pipeline: Pipeline
     jobs: list[Job]
+
+    @property
+    def jobs_done(self) -> int:
+        return sum(1 for job in self.jobs if job.is_terminal)
+
+    @property
+    def failed_job_names(self) -> tuple[str, ...]:
+        """Names of jobs that failed in a way that fails the pipeline.
+
+        Excludes allowed failures, matching the verdict GitLab itself
+        reports for the pipeline (see `Job.is_blocking`).
+        """
+        return tuple(job.name for job in self.jobs if job.is_blocking)
+
+    @property
+    def current_stage(self) -> str | None:
+        """Best-effort 'what stage are we in' for the live view's headline.
+
+        The OLDEST stage that still has at least one not-yet-done job —
+        the stage actually holding up progress, not the most-recently-
+        started one. "Oldest" is approximated by each stage's minimum job
+        ID: GitLab returns jobs newest-ID-first (not in stage order —
+        there is no API field for stage sequence), but job IDs are
+        assigned in roughly creation order, and jobs are normally created
+        stage-by-stage at pipeline start. Falls back to the oldest stage
+        overall once everything is done, or None with no jobs.
+        """
+        if not self.jobs:
+            return None
+
+        min_id_by_stage: dict[str, int] = {}
+        incomplete_stages: set[str] = set()
+        for job in self.jobs:
+            min_id_by_stage[job.stage] = min(
+                min_id_by_stage.get(job.stage, job.id), job.id
+            )
+            if not job.is_terminal:
+                incomplete_stages.add(job.stage)
+
+        candidates = incomplete_stages or min_id_by_stage.keys()
+        return min(candidates, key=lambda stage: min_id_by_stage[stage])
 
 
 class EventContext(msgspec.Struct, frozen=True):
@@ -94,6 +135,21 @@ class EventContext(msgspec.Struct, frozen=True):
     jobs_done: int | None = None
     failed_jobs: tuple[str, ...] = ()
     eta_seconds: float | None = None
+
+    @classmethod
+    def from_state(cls, state: PipelineState) -> EventContext:
+        """The rollup for every event emitted about `state`."""
+        elapsed = state.pipeline.elapsed
+        return cls(
+            pipeline_id=state.pipeline.id,
+            ref=state.pipeline.ref,
+            current_stage=state.current_stage,
+            pipeline_elapsed=elapsed.total_seconds() if elapsed is not None else None,
+            jobs_total=len(state.jobs),
+            jobs_done=state.jobs_done,
+            failed_jobs=state.failed_job_names,
+            eta_seconds=None,  # no ETA estimation in v1
+        )
 
     def as_fields(self) -> dict[str, Any]:
         """Keyword arguments for constructing an `AttachEvent`."""

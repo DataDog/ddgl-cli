@@ -111,6 +111,17 @@ JOB_RUNNING = frozenset(
     }
 )
 
+# Statuses a job no longer moves out of — see Job.is_terminal. What makes a
+# job safe to cache durably (core/jobs.py) and counted as done in a rollup.
+JOB_TERMINAL = frozenset(
+    {
+        JobStatus.SUCCESS,
+        JobStatus.FAILED,
+        JobStatus.CANCELED,
+        JobStatus.SKIPPED,
+    }
+)
+
 # A deliberate narrowing of GitLab's actual retry rule, which also permits
 # retrying a *successful* job — see Job.is_retryable. --force is the escape
 # hatch for that wider set (cli/retry.py).

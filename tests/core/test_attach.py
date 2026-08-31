@@ -15,7 +15,7 @@ from httpx import Response
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.core.attach import _current_stage, attach, diff_tick_events
+from ddgl.core.attach import _build_tick_events, attach
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
     AttachEvent,
@@ -36,57 +36,10 @@ from ._stubs import TEST_CONFIG, FakeCache
 _PROJECT_ID = TEST_CONFIG.project_id
 _ENCODED_PROJECT = _PROJECT_ID.replace("/", "%2F")
 
-# ---------------------------------------------------------------------------
-# _current_stage — "oldest stage still holding incomplete jobs"
-# ---------------------------------------------------------------------------
-
-
 def _job(job_id: int, stage: str, status: JobStatus) -> Job:
     return Job(
         id=job_id, name=f"job-{job_id}", stage=stage, status=status, pipeline_id=1
     )
-
-
-class TestCurrentStage:
-    def test_empty_returns_none(self) -> None:
-        assert _current_stage([]) is None
-
-    def test_single_stage(self) -> None:
-        jobs = [_job(1, "build", JobStatus.RUNNING), _job(2, "build", JobStatus.CREATED)]
-        assert _current_stage(jobs) == "build"
-
-    def test_returns_oldest_incomplete_stage_not_most_advanced(self) -> None:
-        """Regression: must pick the EARLIEST (lowest min job ID) stage that
-        still has incomplete work — the bottleneck — not whichever stage
-        happens to have the highest-ID (most recently created/advanced) job.
-
-        Deliberately constructed so a naive 'first not-done job in list
-        order' (the old, buggy behavior) would pick the wrong stage: GitLab
-        returns jobs newest-ID-first, so a highest-ID-first list places the
-        most-advanced stage's job before the oldest stage's job.
-        """
-        jobs = [
-            _job(30, "deploy", JobStatus.RUNNING),   # newest, most-advanced stage — still incomplete
-            _job(20, "test", JobStatus.SUCCESS),      # test stage: done
-            _job(10, "build", JobStatus.RUNNING),     # oldest stage — still incomplete: this is the answer
-        ]
-        assert _current_stage(jobs) == "build"
-
-    def test_ignores_stage_with_no_incomplete_jobs(self) -> None:
-        jobs = [
-            _job(10, "build", JobStatus.SUCCESS),   # done — not a candidate
-            _job(20, "test", JobStatus.RUNNING),    # oldest remaining incomplete stage
-            _job(30, "deploy", JobStatus.CREATED),
-        ]
-        assert _current_stage(jobs) == "test"
-
-    def test_all_done_falls_back_to_oldest_stage_overall(self) -> None:
-        jobs = [
-            _job(30, "deploy", JobStatus.SUCCESS),
-            _job(10, "build", JobStatus.SUCCESS),
-            _job(20, "test", JobStatus.SUCCESS),
-        ]
-        assert _current_stage(jobs) == "build"
 
 
 def _pipeline(pipeline_id: int, status: PipelineStatus, ref: str = "main") -> Pipeline:
@@ -102,13 +55,13 @@ class TestTransitionEvents:
 
     def test_prev_none_yields_a_single_snapshot(self) -> None:
         curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
-        events = diff_tick_events(None, curr, context=_EMPTY_CTX, heartbeat=False)
+        events = _build_tick_events(None, curr, context=_EMPTY_CTX, heartbeat=False)
         assert [_kind(e) for e in events] == ["snapshot"]
 
     def test_pipeline_status_change_yields_pipeline_then_poll(self) -> None:
         prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
         curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.SUCCESS), jobs=[])
-        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
         assert [_kind(e) for e in events] == ["pipeline", "poll"]
 
     def test_job_status_change_yields_job_then_poll(self) -> None:
@@ -116,7 +69,7 @@ class TestTransitionEvents:
         job_after = _job(10, "build", JobStatus.SUCCESS)
         prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_before])
         curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_after])
-        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
         assert [_kind(e) for e in events] == ["job", "poll"]
         job_event = events[0]
         assert isinstance(job_event, JobEvent)
@@ -131,19 +84,19 @@ class TestTransitionEvents:
             pipeline=_pipeline(1, PipelineStatus.RUNNING),
             jobs=[_job(99, "build", JobStatus.PENDING)],
         )
-        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
         job_event = next(e for e in events if isinstance(e, JobEvent))
         assert job_event.old_status is None
         assert job_event.job_id == 99
 
     def test_nothing_changed_yields_nothing_by_default(self) -> None:
         obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
-        events = diff_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=False)
+        events = _build_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=False)
         assert events == []
 
     def test_nothing_changed_yields_heartbeat_when_enabled(self) -> None:
         obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
-        events = diff_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=True)
+        events = _build_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=True)
         assert [_kind(e) for e in events] == ["heartbeat"]
 
 
