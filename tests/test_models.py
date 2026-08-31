@@ -7,7 +7,15 @@ import msgspec
 import pytest
 
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.model.attach import HeartbeatEvent, JobEvent, ResultEvent, SnapshotEvent
+from ddgl.model.attach import (
+    AttachEvent,
+    EventContext,
+    HeartbeatEvent,
+    JobEvent,
+    PipelineState,
+    ResultEvent,
+    SnapshotEvent,
+)
 from ddgl.model.job import Job
 from ddgl.model.log import JobLog
 from ddgl.model.pipeline import Pipeline
@@ -232,3 +240,54 @@ class TestAttachEvent:
             "status": "running", "jobs_total": 5, "jobs_done": 1,
             "failed_jobs": [], "eta_seconds": None,
         }
+
+
+class TestEventContext:
+    def test_fields_match_attach_events_base_fields(self) -> None:
+        """EventContext exists to be splatted into any AttachEvent, so its
+        fields must stay exactly AttachEvent's own (minus `ts`, which is
+        per-event rather than per-tick). Adding a rollup field to one and
+        not the other would otherwise fail only at runtime, on whichever
+        event kind happened to be constructed first."""
+        context_fields = set(EventContext.__struct_fields__)
+        event_fields = set(AttachEvent.__struct_fields__) - {"ts"}
+        assert context_fields == event_fields
+
+    def test_as_fields_constructs_an_event(self) -> None:
+        context = EventContext(pipeline_id=7, ref="main", jobs_total=3, jobs_done=1)
+        event = HeartbeatEvent(ts="now", **context.as_fields())
+        assert (event.pipeline_id, event.ref) == (7, "main")
+        assert (event.jobs_total, event.jobs_done) == (3, 1)
+
+
+class TestResultEventConstructors:
+    def _state(self, status: PipelineStatus) -> PipelineState:
+        return PipelineState(
+            pipeline=Pipeline(id=1, ref="main", status=status), jobs=[]
+        )
+
+    def test_terminal_carries_status_and_context(self) -> None:
+        context = EventContext(pipeline_id=1, ref="main", jobs_total=2, jobs_done=2)
+        result = ResultEvent.terminal(self._state(PipelineStatus.SUCCESS), context)
+        assert result.reason == "terminal"
+        assert result.status == "success"
+        assert (result.pipeline_id, result.jobs_done) == (1, 2)
+
+    def test_timed_out_without_any_event(self) -> None:
+        """No event yet means no pipeline was ever resolved."""
+        result = ResultEvent.timed_out(None)
+        assert result.reason == "timeout"
+        assert result.pipeline_id is None
+        assert result.status is None
+
+    def test_timed_out_carries_the_last_events_state(self) -> None:
+        last = HeartbeatEvent(ts="now", pipeline_id=9, ref="main", jobs_total=5, jobs_done=4)
+        result = ResultEvent.timed_out(last)
+        assert result.reason == "timeout"
+        assert (result.pipeline_id, result.jobs_total, result.jobs_done) == (9, 5, 4)
+
+    def test_timed_out_leaves_status_none_for_a_statusless_event(self) -> None:
+        """HeartbeatEvent has no status field — the result must not invent
+        one rather than reporting the pipeline as some default."""
+        result = ResultEvent.timed_out(HeartbeatEvent(ts="now", pipeline_id=9))
+        assert result.status is None

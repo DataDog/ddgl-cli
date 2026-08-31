@@ -3,12 +3,20 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import msgspec
 
 from ddgl.constants import DEFAULT_JOB_RETRY_ATTEMPTS, DEFAULT_JOB_RETRY_TOTAL
+from ddgl.model.job import Job
+from ddgl.model.pipeline import Pipeline
+
+
+def now_iso() -> str:
+    """The current UTC time, as the ISO string every event's `ts` uses."""
+    return datetime.now(UTC).isoformat()
 
 
 class DetailLevel(StrEnum):
@@ -55,6 +63,41 @@ class DetailLevel(StrEnum):
 
 
 _DETAIL_RANK = {level: i for i, level in enumerate(DetailLevel)}
+
+
+class PipelineState(msgspec.Struct):
+    """A pipeline and the jobs belonging to it, as of one point in time.
+
+    What `ddgl attach` reads on each poll tick, and what it diffs against
+    the previous tick to work out which events to emit.
+    """
+
+    pipeline: Pipeline
+    jobs: list[Job]
+
+
+class EventContext(msgspec.Struct, frozen=True):
+    """The rollup fields carried by every `AttachEvent`.
+
+    These mirror `AttachEvent`'s own non-`ts` base fields exactly — they
+    are computed once per tick and spread into each event emitted for it,
+    so a renderer can read them off any event without tracking state
+    across the stream. `tests/test_models.py` asserts the two field sets
+    stay identical.
+    """
+
+    pipeline_id: int | None = None
+    ref: str | None = None
+    current_stage: str | None = None
+    pipeline_elapsed: float | None = None
+    jobs_total: int | None = None
+    jobs_done: int | None = None
+    failed_jobs: tuple[str, ...] = ()
+    eta_seconds: float | None = None
+
+    def as_fields(self) -> dict[str, Any]:
+        """Keyword arguments for constructing an `AttachEvent`."""
+        return msgspec.structs.asdict(self)
 
 
 class RetryPolicy(msgspec.Struct, frozen=True):
@@ -203,3 +246,43 @@ class ResultEvent(AttachEvent, kw_only=True, tag="result"):
 
     reason: str
     """Why this result happened: "terminal" or "timeout"."""
+
+    @classmethod
+    def terminal(cls, state: PipelineState, context: EventContext) -> ResultEvent:
+        """The result for a pipeline that reached a terminal status."""
+        elapsed = state.pipeline.elapsed
+        return cls(
+            ts=now_iso(),
+            status=str(state.pipeline.status),
+            duration=elapsed.total_seconds() if elapsed is not None else None,
+            reason="terminal",
+            **context.as_fields(),
+        )
+
+    @classmethod
+    def timed_out(cls, last_event: AttachEvent | None) -> ResultEvent:
+        """The result for a run that hit its timeout, carrying whatever
+        state the last emitted event knew.
+
+        `last_event` is None when the timeout elapsed before any event was
+        emitted — i.e. while still waiting for a pipeline to exist — so
+        there is no pipeline to report.
+        """
+        if last_event is None:
+            return cls(ts=now_iso(), reason="timeout")
+        return cls(
+            ts=now_iso(),
+            pipeline_id=last_event.pipeline_id,
+            ref=last_event.ref,
+            current_stage=last_event.current_stage,
+            pipeline_elapsed=last_event.pipeline_elapsed,
+            # Not every event kind carries a status; those that don't leave
+            # the result's status None rather than inventing one.
+            status=getattr(last_event, "status", None),
+            duration=last_event.pipeline_elapsed,
+            jobs_total=last_event.jobs_total,
+            jobs_done=last_event.jobs_done,
+            failed_jobs=last_event.failed_jobs,
+            eta_seconds=last_event.eta_seconds,
+            reason="timeout",
+        )
