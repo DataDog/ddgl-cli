@@ -15,12 +15,14 @@ from httpx import Response
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.core.attach import _current_stage, attach
+from ddgl.core.attach import _current_stage, attach, diff_tick_events
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
     AttachEvent,
+    EventContext,
     HeartbeatEvent,
     JobEvent,
+    PipelineState,
     PollEvent,
     ResultEvent,
     SnapshotEvent,
@@ -85,6 +87,64 @@ class TestCurrentStage:
             _job(20, "test", JobStatus.SUCCESS),
         ]
         assert _current_stage(jobs) == "build"
+
+
+def _pipeline(pipeline_id: int, status: PipelineStatus, ref: str = "main") -> Pipeline:
+    return Pipeline(id=pipeline_id, ref=ref, status=status)
+
+
+_EMPTY_CTX = EventContext(pipeline_id=1, ref="main", jobs_total=0, jobs_done=0)
+
+
+class TestTransitionEvents:
+    """Pure diff → events: no I/O, no engine, just the table from the
+    module's own docstring/design (§3.4 of the retry design doc)."""
+
+    def test_prev_none_yields_a_single_snapshot(self) -> None:
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = diff_tick_events(None, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["snapshot"]
+
+    def test_pipeline_status_change_yields_pipeline_then_poll(self) -> None:
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.SUCCESS), jobs=[])
+        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["pipeline", "poll"]
+
+    def test_job_status_change_yields_job_then_poll(self) -> None:
+        job_before = _job(10, "build", JobStatus.RUNNING)
+        job_after = _job(10, "build", JobStatus.SUCCESS)
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_before])
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_after])
+        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["job", "poll"]
+        job_event = events[0]
+        assert isinstance(job_event, JobEvent)
+        assert job_event.old_status == "running"
+        assert job_event.status == "success"
+
+    def test_a_job_not_in_prev_yields_job_with_no_old_status(self) -> None:
+        """A retried job surfaces this way: it vanishes from GitLab's job
+        list under its old ID and reappears under a new one."""
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        curr = PipelineState(
+            pipeline=_pipeline(1, PipelineStatus.RUNNING),
+            jobs=[_job(99, "build", JobStatus.PENDING)],
+        )
+        events = diff_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        job_event = next(e for e in events if isinstance(e, JobEvent))
+        assert job_event.old_status is None
+        assert job_event.job_id == 99
+
+    def test_nothing_changed_yields_nothing_by_default(self) -> None:
+        obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = diff_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=False)
+        assert events == []
+
+    def test_nothing_changed_yields_heartbeat_when_enabled(self) -> None:
+        obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = diff_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=True)
+        assert [_kind(e) for e in events] == ["heartbeat"]
 
 
 # ---------------------------------------------------------------------------
