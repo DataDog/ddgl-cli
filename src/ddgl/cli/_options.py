@@ -19,12 +19,9 @@ F = TypeVar("F", bound=Callable)
 
 
 def stdin_is_tty() -> bool:
-    """Whether stdin can carry an interactive answer.
+    """Whether stdin can carry an answer to a prompt.
 
-    A named function rather than an inline `sys.stdin.isatty()` because it
-    gates whether a command may act without confirmation, and Click's
-    CliRunner swaps `sys.stdin` for a non-TTY pipe — so tests can only
-    reach the interactive path by substituting this.
+    Wrapped in a function so tests can substitute it.
     """
     return sys.stdin.isatty()
 

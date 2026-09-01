@@ -120,11 +120,10 @@ class PipelineState(msgspec.Struct):
 class EventContext(msgspec.Struct, frozen=True):
     """The rollup fields carried by every `AttachEvent`.
 
-    These mirror `AttachEvent`'s own non-`ts` base fields exactly — they
-    are computed once per tick and spread into each event emitted for it,
-    so a renderer can read them off any event without tracking state
-    across the stream. `tests/test_models.py` asserts the two field sets
-    stay identical.
+    Exactly `AttachEvent`'s own non-`ts` base fields, computed once per
+    tick and spread into every event emitted for it, so a renderer can
+    read them off any event without tracking state across the stream. The
+    two field sets must stay identical; a test enforces it.
     """
 
     pipeline_id: int | None = None
@@ -148,7 +147,7 @@ class EventContext(msgspec.Struct, frozen=True):
             jobs_total=len(state.jobs),
             jobs_done=state.jobs_done,
             failed_jobs=state.failed_job_names,
-            eta_seconds=None,  # no ETA estimation in v1
+            eta_seconds=None,  # never estimated
         )
 
     def as_fields(self) -> dict[str, Any]:
@@ -159,9 +158,9 @@ class EventContext(msgspec.Struct, frozen=True):
 class RetryPolicy(msgspec.Struct, frozen=True):
     """Auto-retry configuration for one `ddgl attach` run.
 
-    Populated from the `--retry`/`--retry-attempts`/`--retry-total`/
-    `--retry-exclude` CLI flags (cli/attach.py) and consumed by the poll
-    loop's `_apply_retry_policy` (core/attach.py).
+    `attempts_per_job` caps retries of any single job name, counting
+    attempts GitLab made itself; `total` caps them across the whole run.
+    Either set to 0 means unlimited.
     """
 
     enabled: bool = False

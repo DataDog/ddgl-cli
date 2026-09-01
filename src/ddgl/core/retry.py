@@ -21,14 +21,10 @@ logger = logging.getLogger("ddgl.core.retry")
 
 
 async def retry_job(client: GitLabClient, job_id: int) -> Job:
-    """Retry a single job by ID.
+    """Retry a single job, returning the new `pending` job GitLab creates.
 
-    A pure passthrough to `client.retry_job` — no `cache` parameter, unlike
-    the rest of core/: the returned job is always `pending`, which can
-    never satisfy `cache_terminal_jobs`' terminal-state gate, so there is
-    nothing to cache here, by construction. This wrapper exists so callers
-    (cli/retry.py, the TUI's `r` binding) reach retry through core/ like
-    every other action, instead of importing client.py directly.
+    The new job has a different ID; the name is what carries across a
+    retry.
 
     Raises:
         NotFoundError: job does not exist.
@@ -40,11 +36,8 @@ async def retry_job(client: GitLabClient, job_id: int) -> Job:
 async def retry_pipeline(client: GitLabClient, pipeline_id: int) -> Pipeline:
     """Retry every failed and canceled job in a pipeline.
 
-    Returns only the `Pipeline` — GitLab does not report which jobs it
-    restarted (see `retry_job`/`retry_jobs` for that per-job detail).
-
-    A pure passthrough to `client.retry_pipeline`, for the same layering
-    reason as `retry_job` — see its docstring.
+    Returns the pipeline, now `running`. GitLab does not report which jobs
+    it restarted — use `retry_jobs` when that detail matters.
 
     Raises:
         NotFoundError: pipeline does not exist.
