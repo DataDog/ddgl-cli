@@ -9,11 +9,13 @@ import pytest
 from ddgl.constants import JobStatus, PipelineStatus
 from ddgl.model.attach import (
     AttachEvent,
+    DetailLevel,
     EventContext,
     HeartbeatEvent,
     JobEvent,
     PipelineState,
     ResultEvent,
+    RetryEvent,
     SnapshotEvent,
 )
 from ddgl.model.job import Job
@@ -240,6 +242,39 @@ class TestAttachEvent:
             "status": "running", "jobs_total": 5, "jobs_done": 1,
             "failed_jobs": [], "eta_seconds": None,
         }
+
+    def test_result_defaults_to_zero_retries(self) -> None:
+        e = ResultEvent(ts="2025-01-01T00:00:00Z", reason="terminal")
+        assert e.retries == 0
+
+    def test_result_retries_field(self) -> None:
+        e = ResultEvent(ts="2025-01-01T00:00:00Z", reason="terminal", retries=2)
+        assert e.retries == 2
+
+
+class TestRetryEvent:
+    def test_fields(self) -> None:
+        e = RetryEvent(
+            ts="2025-01-01T00:00:00Z",
+            job_id=98765, job_name="unit-tests-1", job_stage="test",
+            new_job_id=98801, attempt=2,
+        )
+        assert e.job_id == 98765
+        assert e.new_job_id == 98801
+        assert e.attempt == 2
+        assert e.min_detail_level == DetailLevel.MINIMAL
+
+    def test_json_roundtrip(self) -> None:
+        e = RetryEvent(
+            ts="2025-01-01T00:00:00Z", pipeline_id=1,
+            job_id=98765, job_name="unit-tests-1", job_stage="test",
+            new_job_id=98801, attempt=2,
+        )
+        decoded = msgspec.json.decode(msgspec.json.encode(e), type=dict)
+        assert decoded["kind"] == "retry"
+        assert decoded["job_id"] == 98765
+        assert decoded["new_job_id"] == 98801
+        assert decoded["attempt"] == 2
 
 
 class TestEventContext:

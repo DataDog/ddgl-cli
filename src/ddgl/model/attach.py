@@ -286,6 +286,30 @@ class SwitchedEvent(AttachEvent, kw_only=True, tag="switched"):
     """Human-readable description of the switch."""
 
 
+class RetryEvent(AttachEvent, kw_only=True, tag="retry"):
+    """A failed or canceled job was auto-retried."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.MINIMAL  # rare + high-signal
+
+    job_id: int
+    """The OLD job's GitLab ID — the one that failed and was retried, not
+    the new one GitLab minted."""
+
+    job_name: str
+    """The job's name, stable across the retry (unlike its ID)."""
+
+    job_stage: str
+    """That job's own stage."""
+
+    new_job_id: int
+    """The ID of the job GitLab created for this attempt."""
+
+    attempt: int
+    """This job name's attempt number after the retry (2 for a job
+    retried once, whether that's its first auto-retry or it already had
+    a manual one)."""
+
+
 class ResultEvent(AttachEvent, kw_only=True, tag="result"):
     """The final event of an attach() run."""
 
@@ -302,6 +326,10 @@ class ResultEvent(AttachEvent, kw_only=True, tag="result"):
 
     reason: str
     """Why this result happened: "terminal" or "timeout"."""
+
+    retries: int = 0
+    """Jobs successfully auto-retried over the course of the run. 0 when
+    --retry wasn't used."""
 
     @classmethod
     def terminal(cls, state: PipelineState, context: EventContext) -> ResultEvent:
