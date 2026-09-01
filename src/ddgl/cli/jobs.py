@@ -64,8 +64,11 @@ def jobs_list(
         sys.exit(1)
 
     if not result:
-        has_filters = failed_only or stage or name_pattern
-        click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+        if output_json:
+            click.echo("[]")
+        else:
+            has_filters = failed_only or stage or name_pattern
+            click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
         return
 
     if output_json:
@@ -152,8 +155,11 @@ def jobs_get(
         sys.exit(1)
 
     if not matched:
-        has_filters = failed_only or stage or name_pattern
-        click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+        if output_json:
+            click.echo("[]")
+        else:
+            has_filters = failed_only or stage or name_pattern
+            click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
         return
 
     if output_json:
