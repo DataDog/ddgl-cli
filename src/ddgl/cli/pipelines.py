@@ -51,7 +51,10 @@ def pipelines_list(
         sys.exit(1)
 
     if not result:
-        click.echo(f"No pipelines found for ref '{resolved_ref}'.")
+        if output_json:
+            click.echo("[]")
+        else:
+            click.echo(f"No pipelines found for ref '{resolved_ref}'.")
         return
 
     if output_json:
