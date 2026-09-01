@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING
 
 import httpx
+import msgspec
 
 from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
 from ddgl.core.jobs import cache_terminal_jobs
 from ddgl.core.pipeline import cache_terminal_pipeline, list_pipelines, resolve_pipeline
+from ddgl.core.retry import retry_jobs, tally_attempts
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
     AttachEvent,
@@ -23,6 +26,8 @@ from ddgl.model.attach import (
     PipelineState,
     PollEvent,
     ResultEvent,
+    RetryEvent,
+    RetryPolicy,
     SnapshotEvent,
     SwitchedEvent,
     now_iso,
@@ -33,6 +38,7 @@ if TYPE_CHECKING:
     from ddgl.client import GitLabClient
     from ddgl.model.job import Job
     from ddgl.model.pipeline import Pipeline
+    from ddgl.model.retry import AttemptTally, RetryOutcome
 
 logger = logging.getLogger("ddgl.core.attach")
 
@@ -124,6 +130,127 @@ def _build_tick_events(
         events.append(PollEvent(ts=now_iso(), **context.as_fields()))
     elif heartbeat:
         events.append(HeartbeatEvent(ts=now_iso(), **context.as_fields()))
+    return events
+
+
+class _RetryLedger(msgspec.Struct):
+    """What one attach run has to remember about the retries it issued."""
+
+    posted_job_ids: set[int] = msgspec.field(default_factory=set)
+    """Records already retried. GitLab may not have processed a POST by the
+    next tick, leaving the old failed record still the newest one for its
+    name."""
+
+    total_issued: int = 0
+    """Accepted retries so far, counted against `RetryPolicy.total`."""
+
+
+def _candidates_before_tally(
+    state: PipelineState, policy: RetryPolicy, ledger: _RetryLedger
+) -> list[Job]:
+    """Failed jobs that could still be retried, judged on what this tick
+    already knows: blocking, not already retried by this run, not
+    name-excluded, and within the global budget.
+
+    The remaining checks — newest record for the name, and per-name budget
+    — need an attempt tally, which costs a request. An empty result means
+    this tick needs no tally.
+    """
+    if policy.total and ledger.total_issued >= policy.total:
+        return []
+    return [
+        job for job in state.jobs
+        if job.is_blocking
+        and job.id not in ledger.posted_job_ids
+        and not any(re.search(pattern, job.name) for pattern in policy.exclude)
+    ]
+
+
+def _within_budget(job: Job, tally: AttemptTally, policy: RetryPolicy) -> bool:
+    """Whether `job` has attempts left under `RetryPolicy.attempts_per_job`.
+
+    A job that has never been retried already has one attempt, so the
+    comparison is against attempts *beyond* the first.
+    """
+    if not policy.attempts_per_job:
+        return True
+    return tally.count(job.name) - 1 < policy.attempts_per_job
+
+
+async def _apply_retry_policy(
+    client: GitLabClient,
+    state: PipelineState,
+    policy: RetryPolicy,
+    ledger: _RetryLedger,
+) -> tuple[list[RetryOutcome], AttemptTally | None]:
+    """Retry the failed jobs this tick allows, returning what happened and
+    the tally the decision used.
+
+    The tally is None when no job got as far as needing one.
+    """
+    if not policy.enabled:
+        return [], None
+
+    candidates = _candidates_before_tally(state, policy, ledger)
+    if not candidates:
+        return [], None
+
+    tally = await tally_attempts(client, state.pipeline.id, {j.name for j in candidates})
+
+    selected: list[Job] = []
+    for job in candidates:
+        if policy.total and ledger.total_issued + len(selected) >= policy.total:
+            logger.info("attach: retry budget of %d reached", policy.total)
+            break
+        if not tally.is_newest(job):
+            logger.info(
+                "attach: %s already has a newer attempt, not retrying job %d",
+                job.name, job.id,
+            )
+            continue
+        if not _within_budget(job, tally, policy):
+            logger.info(
+                "attach: %s has used its %d retries, not retrying job %d",
+                job.name, policy.attempts_per_job, job.id,
+            )
+            continue
+        selected.append(job)
+
+    if not selected:
+        return [], tally
+
+    outcomes = await retry_jobs(client, selected)
+    for outcome in outcomes:
+        ledger.posted_job_ids.add(outcome.old_job_id)
+        if outcome.new_job is not None:
+            ledger.total_issued += 1
+    return outcomes, tally
+
+
+def _build_retry_events(
+    outcomes: Sequence[RetryOutcome], tally: AttemptTally | None, context: EventContext
+) -> list[RetryEvent]:
+    """One event per retry GitLab accepted.
+
+    Rejected retries produce no event; `retry_jobs` has already logged
+    them, and there is no new job to point at.
+    """
+    events = []
+    for outcome in outcomes:
+        new_job = outcome.new_job
+        if new_job is None:
+            continue
+        events.append(
+            RetryEvent(
+                ts=now_iso(),
+                job_id=outcome.old_job_id,
+                job_name=outcome.job_name,
+                job_stage=new_job.stage,
+                new_job_id=new_job.id,
+                attempt=(tally.count(outcome.job_name) if tally else 0) + 1,
+                **context.as_fields(),
+            )
+        )
     return events
 
 
@@ -232,6 +359,7 @@ async def attach(
     wait_for_start: bool = True,
     follow: bool = False,
     timeout: float | None = None,
+    retry_policy: RetryPolicy | None = None,
     cache: Cache | None = None,
 ) -> AsyncIterator[AttachEvent]:
     """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
@@ -251,6 +379,7 @@ async def attach(
                 heartbeat=heartbeat,
                 wait_for_start=wait_for_start,
                 follow=follow,
+                retry_policy=retry_policy,
                 cache=cache,
             ):
                 last_event = event
@@ -269,6 +398,7 @@ async def _poll_pipeline(
     heartbeat: bool,
     wait_for_start: bool,
     follow: bool,
+    retry_policy: RetryPolicy | None,
     cache: Cache | None,
 ) -> AsyncIterator[AttachEvent]:
     """Yield the event stream for one attach run, ending at the pipeline's
@@ -317,6 +447,8 @@ async def _poll_pipeline(
     # The resolved pipeline and its jobs are the first tick, so the loop
     # starts already holding one: re-reading them through
     # _get_pipeline_state() would repeat a fetch just made.
+    policy = retry_policy or RetryPolicy()
+    ledger = _RetryLedger()
     prev: PipelineState | None = None
     curr = PipelineState(pipeline=pipeline, jobs=jobs)
     consecutive_failures = 0
@@ -326,12 +458,21 @@ async def _poll_pipeline(
         for event in _build_tick_events(prev, curr, context=context, heartbeat=heartbeat):
             yield event
 
-        if curr.pipeline.is_finished:
+        outcomes, tally = await _apply_retry_policy(client, curr, policy, ledger)
+        for event in _build_retry_events(outcomes, tally, context):
+            yield event
+
+        # A pipeline we just retried reads as terminal only because GitLab
+        # hasn't processed the retry yet; it is about to run again. Gating
+        # on accepted retries means a tick where every one was rejected
+        # still finishes normally instead of waiting for --timeout.
+        retried_now = sum(1 for o in outcomes if o.new_job is not None)
+        if curr.pipeline.is_finished and not retried_now:
             logger.info(
                 "attach: pipeline %d reached terminal status %s",
                 curr.pipeline.id, curr.pipeline.status,
             )
-            yield ResultEvent.terminal(curr, context)
+            yield ResultEvent.terminal(curr, context, retries=ledger.total_issued)
             return
 
         # Acquire the next tick. A failed read is skipped rather than fatal:

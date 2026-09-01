@@ -15,7 +15,7 @@ from ddgl.core.jobs import filter_jobs, get_jobs, list_jobs
 from ddgl.exceptions import GitLabAPIError, NotFoundError
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
-from ddgl.model.retry import RetryOutcome, RetrySelection
+from ddgl.model.retry import AttemptTally, RetryOutcome, RetrySelection
 
 logger = logging.getLogger("ddgl.core.retry")
 
@@ -155,18 +155,25 @@ async def select_in_pipeline(
     return _select(jobs, force=force, pipeline=pipeline)
 
 
-async def count_attempts(
+async def tally_attempts(
     client: GitLabClient, pipeline_id: int, names: set[str]
-) -> dict[str, int]:
-    """Attempt counts (job records seen, including retried ones) per job
-    name, restricted to `names`.
+) -> AttemptTally:
+    """Count the recorded attempts of each of `names`, and note which
+    record is the newest for each.
 
-    Wraps `client.get_job_attempts`, the only endpoint that reports prior
-    attempts — GitLab's normal job list excludes them.
+    Reads the one endpoint that reports superseded records
+    (`include_retried=true`); GitLab's normal job list omits them, so from
+    that list alone a job that was retried is indistinguishable from one
+    that never was.
+
+    Reflects the moment it is called — nothing is cached between calls.
     """
-    attempts = await client.get_job_attempts(pipeline_id)
+    records = await client.get_job_attempts(pipeline_id)
     counts: dict[str, int] = defaultdict(int)
-    for job in attempts:
-        if job.name in names:
-            counts[job.name] += 1
-    return dict(counts)
+    newest_ids: dict[str, int] = {}
+    for job in records:
+        if job.name not in names:
+            continue
+        counts[job.name] += 1
+        newest_ids[job.name] = max(newest_ids.get(job.name, job.id), job.id)
+    return AttemptTally(counts=dict(counts), newest_ids=newest_ids)

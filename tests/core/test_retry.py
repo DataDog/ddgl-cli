@@ -13,12 +13,12 @@ from httpx import Response
 
 from ddgl.client import GitLabClient
 from ddgl.core.retry import (
-    count_attempts,
     retry_job,
     retry_jobs,
     retry_pipeline,
     select_by_id,
     select_in_pipeline,
+    tally_attempts,
 )
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
@@ -173,7 +173,7 @@ class TestRetryJobs:
 # ---------------------------------------------------------------------------
 
 
-class TestCountAttempts:
+class TestTallyAttempts:
     async def test_counts_records_per_name(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
@@ -190,9 +190,11 @@ class TestCountAttempts:
             )
         )
 
-        counts = await count_attempts(client, 100, {"unit-tests", "lint"})
+        tally = await tally_attempts(client, 100, {"unit-tests", "lint"})
 
-        assert counts == {"unit-tests": 3, "lint": 1}
+        assert tally.count("unit-tests") == 3
+        assert tally.count("lint") == 1
+        assert tally.count("never-ran") == 0
 
     async def test_restricted_to_requested_names(
         self, client: GitLabClient, mock_api: respx.MockRouter
@@ -208,9 +210,10 @@ class TestCountAttempts:
             )
         )
 
-        counts = await count_attempts(client, 100, {"unit-tests"})
+        tally = await tally_attempts(client, 100, {"unit-tests"})
 
-        assert counts == {"unit-tests": 1}
+        assert tally.count("unit-tests") == 1
+        assert tally.count("lint") == 0
 
     async def test_uses_include_retried(
         self, client: GitLabClient, mock_api: respx.MockRouter
@@ -221,7 +224,7 @@ class TestCountAttempts:
             )
         )
 
-        await count_attempts(client, 100, {"unit-tests"})
+        await tally_attempts(client, 100, {"unit-tests"})
 
         assert route.calls[0].request.url.params["include_retried"] == "true"
 
@@ -373,3 +376,34 @@ class TestSelectInPipeline:
         )
 
         assert [j.id for j in selection.jobs] == [1, 2]
+
+    async def test_newest_id_is_the_highest_record_for_a_name(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        """Records arrive newest-first; the newest is by ID, not position."""
+        mock_api.get("/projects/grp%2Fproj/pipelines/100/jobs").mock(
+            return_value=Response(
+                200,
+                json=[
+                    _job_payload(7, name="unit-tests", status="pending"),
+                    _job_payload(3, name="unit-tests", status="failed"),
+                ],
+                headers={"x-total-pages": "1"},
+            )
+        )
+
+        tally = await tally_attempts(client, 100, {"unit-tests"})
+
+        assert tally.is_newest(_make_job(id=7, name="unit-tests")) is True
+        assert tally.is_newest(_make_job(id=3, name="unit-tests")) is False
+
+    async def test_unknown_name_is_never_newest(
+        self, client: GitLabClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.get("/projects/grp%2Fproj/pipelines/100/jobs").mock(
+            return_value=Response(200, json=[], headers={"x-total-pages": "1"})
+        )
+
+        tally = await tally_attempts(client, 100, {"unit-tests"})
+
+        assert tally.is_newest(_make_job(id=1, name="unit-tests")) is False

@@ -22,6 +22,28 @@ class RetryOutcome(msgspec.Struct, frozen=True):
     error: str | None = None
 
 
+class AttemptTally(msgspec.Struct, frozen=True):
+    """Every recorded attempt of each job name in a pipeline, including
+    ones GitLab's own `retry:` keyword made.
+    """
+
+    counts: dict[str, int]
+    newest_ids: dict[str, int]
+
+    def count(self, name: str) -> int:
+        """How many times `name` has run. 0 for an unknown name."""
+        return self.counts.get(name, 0)
+
+    def is_newest(self, job: Job) -> bool:
+        """Whether `job` is the most recent record for its name.
+
+        False means something has already retried it and the replacement
+        supersedes it. An unknown name is also False: with no record of
+        the job at all, there is no evidence it is current.
+        """
+        return self.newest_ids.get(job.name) == job.id
+
+
 class RetrySelection(msgspec.Struct, frozen=True):
     """Which jobs a retry will act on, and what they were narrowed from.
 

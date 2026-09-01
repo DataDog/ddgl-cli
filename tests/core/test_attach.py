@@ -25,6 +25,8 @@ from ddgl.model.attach import (
     PipelineState,
     PollEvent,
     ResultEvent,
+    RetryEvent,
+    RetryPolicy,
     SnapshotEvent,
     SwitchedEvent,
 )
@@ -678,3 +680,322 @@ class TestAttachPollResilience:
         assert "switched" not in [_kind(e) for e in events]
         assert events[-1].pipeline_id == 1
         assert events[-1].status == "success"
+
+
+# ---------------------------------------------------------------------------
+# --retry: the auto-retry policy (§3.5 of the retry design)
+# ---------------------------------------------------------------------------
+
+
+def _posts(mock_api: respx.MockRouter) -> list[str]:
+    """Paths of every POST the engine issued."""
+    return [c.request.url.path for c in mock_api.calls if c.request.method == "POST"]
+
+
+class _RetryScenario:
+    """Routes for a pipeline whose jobs can be auto-retried.
+
+    The poll and the attempt tally hit the same jobs path, told apart by
+    `include_retried`, so one route serves both. Both the job pages and
+    the pipeline statuses repeat their last entry once exhausted, so a
+    test only lists the ticks it cares about.
+    """
+
+    def __init__(self, mock_api: respx.MockRouter) -> None:
+        self.mock_api = mock_api
+        self.poll_pages: list[list[dict[str, Any]]] = [[]]
+        self.attempts: list[dict[str, Any]] = []
+        self.statuses: list[str] = ["failed"]
+        self.polls = 0
+        self._status_reads = 0
+
+    def _jobs(self, request: Any, **kwargs: Any) -> Response:
+        if request.url.params.get("include_retried") == "true":
+            return Response(200, json=self.attempts)
+        page = self.poll_pages[min(self.polls, len(self.poll_pages) - 1)]
+        self.polls += 1
+        return Response(200, json=page)
+
+    def _pipeline(self, request: Any, **kwargs: Any) -> Response:
+        # statuses[0] is served by the resolve (list) call, so the per-tick
+        # reads start at statuses[1].
+        index = min(self._status_reads + 1, len(self.statuses) - 1)
+        self._status_reads += 1
+        return Response(200, json=_pipeline_payload(1, self.statuses[index]))
+
+    def install(self) -> None:
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
+            side_effect=lambda request, **kw: Response(
+                200, json=[_pipeline_payload(1, self.statuses[0])]
+            )
+        )
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            side_effect=self._jobs
+        )
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
+            side_effect=self._pipeline
+        )
+
+    def accepts_retry(self, job_id: int, *, new_id: int, name: str = "a") -> respx.Route:
+        return self.mock_api.post(
+            f"/projects/{_ENCODED_PROJECT}/jobs/{job_id}/retry"
+        ).mock(return_value=Response(200, json=_job_payload(new_id, "pending", name)))
+
+    def rejects_retry(self, job_id: int) -> respx.Route:
+        return self.mock_api.post(
+            f"/projects/{_ENCODED_PROJECT}/jobs/{job_id}/retry"
+        ).mock(return_value=Response(403, json={"message": "403 Forbidden"}))
+
+
+@pytest.fixture()
+def retry_api() -> Iterator[respx.MockRouter]:
+    """A router for the retry scenarios.
+
+    Unlike `mock_api`, it doesn't require every route to be called: a
+    scenario wires the full set a retry run *could* need, and a test that
+    ends on the first tick legitimately never reaches some of them.
+    """
+    with respx.mock(base_url=TEST_CONFIG.api_url, assert_all_called=False) as router:
+        yield router
+
+
+@pytest.fixture()
+async def retry_client(retry_api: respx.MockRouter) -> GitLabClient:
+    async with GitLabClient(TEST_CONFIG) as c:
+        yield c
+
+
+@pytest.fixture()
+def scenario(retry_api: respx.MockRouter) -> _RetryScenario:
+    return _RetryScenario(retry_api)
+
+
+_RETRY_ON = RetryPolicy(enabled=True)
+
+
+class TestAttachRetry:
+    async def test_failed_job_is_retried_and_reported(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        route = scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert route.call_count == 1
+        retry = next(e for e in events if isinstance(e, RetryEvent))
+        assert (retry.job_id, retry.new_job_id, retry.job_name) == (10, 11, "a")
+        assert retry.attempt == 2  # the original run, plus this retry
+
+    async def test_a_retried_tick_does_not_end_the_run(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """The pipeline is already `failed` on the first tick, so without
+        the retry gate attach would report a result there and stop. The
+        run has to poll again to see what the retry did.
+
+        Only the API call count can show this: the second tick sees the
+        same (mocked) state, so it emits no events of its own.
+        """
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert any(isinstance(e, RetryEvent) for e in events)
+        assert scenario.polls >= 2
+
+    async def test_no_second_post_for_the_same_record(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """GitLab may still be reporting the old record on the next tick."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        route = scenario.accepts_retry(10, new_id=11)
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert route.call_count == 1
+
+    async def test_job_with_a_newer_record_is_not_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """Something already retried it — GitLab's own `retry:`, another
+        ddgl run, or a human in the web UI."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"),
+            _job_payload(99, "running", "a"),  # the newer attempt
+        ]
+        scenario.install()
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert _posts(retry_api) == []
+        assert not [e for e in events if isinstance(e, RetryEvent)]
+        assert events[-1].reason == "terminal"  # nothing retried, so it ends
+
+    async def test_attempts_budget_is_respected(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(30, "failed", "a")]]
+        # Three records for this name: the original plus two retries.
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"),
+            _job_payload(20, "failed", "a"),
+            _job_payload(30, "failed", "a"),
+        ]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, attempts_per_job=2),
+        )
+
+        assert _posts(retry_api) == []
+
+    async def test_total_budget_caps_the_run(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11, name="a")
+        scenario.accepts_retry(20, new_id=21, name="b")
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, total=1), timeout=0.2,
+        )
+
+        assert len(_posts(retry_api)) == 1
+
+    async def test_excluded_names_are_never_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
+        scenario.attempts = [_job_payload(10, "failed", "flaky-e2e")]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
+        )
+
+        assert _posts(retry_api) == []
+
+    async def test_allowed_failures_are_never_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.statuses = ["success"]  # an allowed failure doesn't fail it
+        scenario.poll_pages = [[_job_payload(10, "failed", "a", allow_failure=True)]]
+        scenario.attempts = [_job_payload(10, "failed", "a", allow_failure=True)]
+        scenario.install()
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert _posts(retry_api) == []
+
+    async def test_a_rejected_retry_does_not_stop_the_others(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.poll_pages = [[
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]
+        scenario.install()
+        rejected = scenario.rejects_retry(10)
+        accepted = scenario.accepts_retry(20, new_id=21, name="b")
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert rejected.called
+        assert accepted.call_count == 1
+        # Only the accepted retry produced an event.
+        assert [e.job_id for e in events if isinstance(e, RetryEvent)] == [20]
+
+    async def test_all_retries_rejected_still_terminates(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """Gating on accepted retries, not attempted ones — otherwise this
+        run would hang until --timeout."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.rejects_retry(10)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert events[-1].reason == "terminal"
+        assert events[-1].retries == 0
+
+    async def test_result_counts_the_retries(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.statuses = ["failed", "success"]
+        scenario.poll_pages = [
+            [_job_payload(10, "failed", "a")],
+            [_job_payload(11, "success", "a")],
+        ]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert events[-1].reason == "terminal"
+        assert events[-1].status == "success"
+        assert events[-1].retries == 1
+
+    async def test_disabled_by_default(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+
+        events = await _collect(retry_client, ref="main")
+
+        assert _posts(retry_api) == []
+        assert events[-1].retries == 0
+
+    async def test_no_tally_fetch_without_candidates(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """A tick with nothing failing must not pay for the extra call."""
+        scenario.statuses = ["success"]
+        scenario.poll_pages = [[_job_payload(10, "success", "a")]]
+        scenario.install()
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert not any(
+            c.request.url.params.get("include_retried") for c in retry_api.calls
+        )
+
+    async def test_no_tally_fetch_when_every_candidate_is_excluded(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """The local gates run first, so an excluded job costs no call."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
+        )
+
+        assert not any(
+            c.request.url.params.get("include_retried") for c in retry_api.calls
+        )

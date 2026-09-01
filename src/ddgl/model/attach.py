@@ -331,7 +331,9 @@ class ResultEvent(AttachEvent, kw_only=True, tag="result"):
     --retry wasn't used."""
 
     @classmethod
-    def terminal(cls, state: PipelineState, context: EventContext) -> ResultEvent:
+    def terminal(
+        cls, state: PipelineState, context: EventContext, *, retries: int = 0
+    ) -> ResultEvent:
         """The result for a pipeline that reached a terminal status."""
         elapsed = state.pipeline.elapsed
         return cls(
@@ -339,6 +341,7 @@ class ResultEvent(AttachEvent, kw_only=True, tag="result"):
             status=str(state.pipeline.status),
             duration=elapsed.total_seconds() if elapsed is not None else None,
             reason="terminal",
+            retries=retries,
             **context.as_fields(),
         )
 
