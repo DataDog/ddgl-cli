@@ -114,12 +114,15 @@ class PipelineViewer(App[None]):
             info.pipeline = value
             info.job_stats = []
 
-    def load_pipeline(self, pipeline: Pipeline, *, keep_existing: bool = False) -> None:
+    def load_pipeline(
+        self, pipeline: Pipeline, *, keep_existing: bool = False, fresh: bool = False
+    ) -> None:
         """Switch to a new pipeline: update info panel and reload jobs.
 
         When ``keep_existing=True`` the current job list stays visible while
         new jobs are fetched in the background (used for auto- and manual
-        refresh so the user can keep browsing during the reload).
+        refresh so the user can keep browsing during the reload). ``fresh``
+        bypasses the API response cache for the job fetch.
         """
         # Cancel any running auto-refresh timer before starting a new load.
         if self._refresh_timer is not None:
@@ -138,7 +141,7 @@ class PipelineViewer(App[None]):
             job_list.jobs = []
             loading.display = True
 
-        self._load_jobs(pipeline, keep_existing=keep_existing)
+        self._load_jobs(pipeline, keep_existing=keep_existing, fresh=fresh)
 
     def on_fuzzy_search_input_search_changed(
         self, message: FuzzySearchInput.SearchChanged
@@ -184,10 +187,14 @@ class PipelineViewer(App[None]):
         self.query_one(JobListPanel).filter_spec = spec
 
     @work(exclusive=True)
-    async def _load_jobs(self, pipeline: Pipeline, keep_existing: bool = False) -> None:
+    async def _load_jobs(
+        self, pipeline: Pipeline, keep_existing: bool = False, fresh: bool = False
+    ) -> None:
         try:
             jobs: list[Job] = []
-            async for job in list_jobs(self._client, pipeline.id, cache=self._cache):
+            async for job in list_jobs(
+                self._client, pipeline.id, cache=self._cache, fresh=fresh
+            ):
                 jobs.append(job)
         except Exception as e:
             if not keep_existing:
@@ -237,13 +244,13 @@ class PipelineViewer(App[None]):
         if self.pipeline is None:
             return
         try:
-            fresh = await get_pipeline(
+            refreshed = await get_pipeline(
                 self._client, self.pipeline.id, cache=self._cache
             )
         except Exception as e:
             self.notify(f"Auto-refresh failed: {e}", severity="warning")
             return
-        self.load_pipeline(fresh, keep_existing=True)
+        self.load_pipeline(refreshed, keep_existing=True)
 
     def action_refresh(self) -> None:
         if self.pipeline is not None:
@@ -251,12 +258,15 @@ class PipelineViewer(App[None]):
 
     @work(exclusive=False)
     async def _manual_refresh(self, pipeline: Pipeline) -> None:
+        """Re-fetch the pipeline and its jobs, bypassing the API response cache."""
         try:
-            fresh = await get_pipeline(self._client, pipeline.id, cache=self._cache)
+            refreshed = await get_pipeline(
+                self._client, pipeline.id, cache=self._cache, fresh=True
+            )
         except Exception as e:
             self.notify(f"Refresh failed: {e}", severity="error")
             return
-        self.load_pipeline(fresh, keep_existing=True)
+        self.load_pipeline(refreshed, keep_existing=True, fresh=True)
 
     def action_retry_job(self) -> None:
         job = self.query_one(JobListPanel).get_selected_job()

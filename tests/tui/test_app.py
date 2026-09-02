@@ -39,6 +39,8 @@ class _FakeClient:
         self.retry_error: Exception | None = None
         self._retry_new_job_id = 999
         self.get_pipeline_calls = 0
+        self.iter_jobs_fresh_values: list[bool] = []
+        self.get_pipeline_fresh_values: list[bool] = []
 
     # Needed by core/jobs.list_jobs → client.iter_jobs (must be async generator)
     async def iter_jobs(
@@ -46,13 +48,15 @@ class _FakeClient:
     ) -> AsyncIterator[Any]:
         from ddgl.model.page import Page
 
+        self.iter_jobs_fresh_values.append(fresh)
         yield Page(
             items=self._jobs, page=1, next_page=None,
             total_pages=1, total=len(self._jobs),
         )
 
-    async def get_pipeline(self, pipeline_id: int, **kwargs: Any) -> Pipeline:
+    async def get_pipeline(self, pipeline_id: int, *, fresh: bool = False, **kwargs: Any) -> Pipeline:
         self.get_pipeline_calls += 1
+        self.get_pipeline_fresh_values.append(fresh)
         return make_pipeline(id=pipeline_id)
 
     # Needed by PipelineListPanel.on_mount's initial fetch.
@@ -298,6 +302,10 @@ async def test_ctrl_r_still_refreshes() -> None:
         await pilot.pause()
         await app.workers.wait_for_complete()
         assert client.get_pipeline_calls == 1
+        # A manual refresh must bypass the API response cache, or the
+        # button can look like a no-op against a cached read.
+        assert client.get_pipeline_fresh_values[-1] is True
+        assert client.iter_jobs_fresh_values[-1] is True
 
 
 @pytest.mark.asyncio
@@ -357,6 +365,10 @@ async def test_r_with_retryable_job_confirms_then_retries_and_refreshes() -> Non
         await app.workers.wait_for_complete()
         assert client.retried_job_ids == [1]
         assert client.get_pipeline_calls == 1
+        # The post-retry reload must bypass the cache too, or the retried
+        # job can keep showing as failed for up to CACHE_TTL_API_JOB_LIST.
+        assert client.get_pipeline_fresh_values[-1] is True
+        assert client.iter_jobs_fresh_values[-1] is True
 
 
 @pytest.mark.asyncio
@@ -395,3 +407,5 @@ async def test_retrying_from_job_detail_screen_refreshes_pipeline_behind_it() ->
         # The refresh happens while the detail screen is still on top.
         assert isinstance(app.screen, JobDetailScreen)
         assert client.get_pipeline_calls == 1
+        assert client.get_pipeline_fresh_values[-1] is True
+        assert client.iter_jobs_fresh_values[-1] is True
