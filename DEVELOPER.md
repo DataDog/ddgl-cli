@@ -618,6 +618,29 @@ async def test_fetches_from_api_on_miss(client, mock_api):
     assert pipeline.id == 42
 ```
 
+### Testing Textual widgets and screens
+
+Two Textual-specific gotchas that don't show up until a test asserts on
+something Textual itself controls, rather than on `core`/`client`-level
+state:
+
+- **Don't assert identity on a `reactive` field.** Textual's `reactive`
+  descriptor skips the underlying assignment (and any `watch_*` call) when
+  the new value is `==` the old one, unless declared with
+  `always_update=True`. Domain types are `msgspec.Struct`, so two
+  independently-fetched objects with identical field values compare equal
+  — `app.pipeline is not old_pipeline` after a refresh can fail even
+  though the refresh genuinely ran, because Textual decided there was
+  nothing to update. Assert on an observable side effect instead (a call
+  count on the fake client, a field on the resulting object), not on
+  whether the reactive happened to get reassigned.
+
+- **A message handler patched onto an instance after construction is
+  never dispatched.** Textual resolves `on_<Message>` handlers from the
+  class, computed once, so `monkeypatch.setattr(app, "on_foo_bar", fn)` is
+  silently never called. Define a small `App`/`Screen` subclass with the
+  handler as a real method instead.
+
 ### Running tests
 
 ```bash
