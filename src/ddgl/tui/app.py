@@ -323,6 +323,13 @@ class PipelineViewer(App[None]):
             )
         )
 
+    def on_job_detail_screen_job_retried(
+        self, message: JobDetailScreen.JobRetried
+    ) -> None:
+        """Refresh behind the still-open job detail screen after a retry there."""
+        if self.pipeline is not None:
+            self._manual_refresh(self.pipeline)
+
     def action_help(self) -> None:
         self.push_screen(HelpModal())
 

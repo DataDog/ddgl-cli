@@ -8,6 +8,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import (
     Footer,
@@ -23,11 +24,13 @@ from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import get_job
 from ddgl.core.logs import get_log
+from ddgl.core.retry import retry_job
 from ddgl.format import parse_trace
 from ddgl.model.job import Job
 from ddgl.model.trace import LogLine, Section, Trace
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.search import apply_search
+from ddgl.tui.widgets.confirm import ConfirmModal
 from ddgl.tui.widgets.job_dag import JobDAGPanel
 from ddgl.tui.widgets.search_bar import FuzzySearchInput
 from ddgl.tui.widgets.status import job_status_color, job_status_icon, job_status_label
@@ -129,6 +132,13 @@ def _collect_nodes(
 class JobDetailScreen(Screen[None]):
     """Full-screen job detail view with tabbed content area."""
 
+    class JobRetried(Message):
+        """Posted after a successful retry, so PipelineViewer can refresh."""
+
+        def __init__(self, job: Job) -> None:
+            super().__init__()
+            self.job = job
+
     BINDINGS = [
         Binding("q", "app.pop_screen", "Close"),
         Binding("escape", "app.pop_screen", "Close", show=False),
@@ -140,6 +150,7 @@ class JobDetailScreen(Screen[None]):
         Binding("ctrl+up", "page_up_log", show=False),
         Binding("ctrl+down", "page_down_log", show=False),
         Binding("t", "toggle_sections", "Toggle sections"),
+        Binding("r", "retry_job", "Retry job"),
     ]
 
     def __init__(
@@ -231,6 +242,52 @@ class JobDetailScreen(Screen[None]):
         loading.display = False
         log_widget.display = True
         log_widget.focus()
+
+    # -- Retry ---------------------------------------------------------
+
+    def action_retry_job(self) -> None:
+        if not self._job.is_retryable:
+            self.notify("This job isn't failed or canceled.", severity="warning")
+            return
+
+        def _on_dismiss(confirmed: bool) -> None:
+            if confirmed:
+                self._retry_job()
+
+        self.app.push_screen(
+            ConfirmModal(
+                "Retry job?", f"{self._job.stage}/{self._job.name} — {self._job.status}"
+            ),
+            _on_dismiss,
+        )
+
+    @work
+    async def _retry_job(self) -> None:
+        try:
+            new_job = await retry_job(self._client, self._job.id)
+        except Exception as e:
+            self.notify(f"Retry failed: {e}", severity="error")
+            return
+        self._job = new_job
+        self.title = gradient_text(f"Job #{new_job.id}")
+        self.query_one("#job-meta", Static).update(_render_meta(new_job))
+        self._reset_log_pane()
+        self._fetch_log()
+        self.notify(f"Retried {new_job.name} → job #{new_job.id}")
+        self.post_message(self.JobRetried(new_job))
+
+    def _reset_log_pane(self) -> None:
+        """Clear the log tab back to its pre-fetch state, ready for _fetch_log."""
+        log_widget = self.query_one("#job-log", RichLog)
+        log_widget.clear()
+        log_widget.display = False
+        self.query_one("#log-loading", LoadingIndicator).display = True
+        self.query_one("#log-search", FuzzySearchInput).clear()
+        self._trace = None
+        self._log_lines = []
+        self._match_lines = []
+        self._current_match = -1
+        self._current_search = ""
 
     def _render_log(self) -> None:
         """Rebuild _log_lines from the current trace state and redraw the log widget."""

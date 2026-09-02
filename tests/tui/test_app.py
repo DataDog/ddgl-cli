@@ -67,6 +67,13 @@ class _FakeClient:
         self.retried_job_ids.append(job_id)
         return make_job(id=self._retry_new_job_id, name="the-retried-job")
 
+    # Needed by JobDetailScreen's own on-mount fetches.
+    async def get_job(self, job_id: int) -> Job:
+        return next(j for j in self._jobs if j.id == job_id)
+
+    async def get_job_log(self, job_id: int) -> str:
+        return ""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -365,3 +372,26 @@ async def test_r_with_retryable_job_cancelled_does_not_retry() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert client.retried_job_ids == []
+
+
+@pytest.mark.asyncio
+async def test_retrying_from_job_detail_screen_refreshes_pipeline_behind_it() -> None:
+    from ddgl.tui.screens.job_detail import JobDetailScreen
+
+    job = make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)
+    p1 = make_pipeline(id=1)
+    app = _make_app(pipeline=p1, jobs=[job])
+    client = app._client
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.push_screen(JobDetailScreen(job, client, app._cache, all_jobs=[job]))
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert client.retried_job_ids == [1]
+        # The refresh happens while the detail screen is still on top.
+        assert isinstance(app.screen, JobDetailScreen)
+        assert client.get_pipeline_calls == 1
