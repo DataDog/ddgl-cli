@@ -18,8 +18,9 @@ from ddgl.cli import main
 from ddgl.cli.attach import _attach, _exit_code, _use_live
 from ddgl.client import GitLabClient
 from ddgl.config import Config
+from ddgl.constants import DEFAULT_JOB_RETRY_ATTEMPTS, DEFAULT_JOB_RETRY_TOTAL
 from ddgl.exceptions import ConfigError
-from ddgl.model.attach import ResultEvent
+from ddgl.model.attach import ResultEvent, RetryPolicy
 
 _TEST_CONFIG = Config(
     gitlab_url="https://gitlab.example.com",
@@ -124,7 +125,7 @@ class TestAttachConfig:
         exit_code = await _attach(
             ref="main", pipeline_id=None, depth=10, interval=1, heartbeat=False,
             detail="normal", wait_for_start=True, follow=False, timeout=None,
-            output_json=False, plain=True, force_live=False, no_cache=False,
+            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=False,
         )
 
         assert exit_code == 2
@@ -149,7 +150,7 @@ class TestAttachApiError:
         exit_code = await _attach(
             ref="main", pipeline_id=None, depth=10, interval=0.01, heartbeat=False,
             detail="normal", wait_for_start=True, follow=False, timeout=None,
-            output_json=False, plain=True, force_live=False, no_cache=True,
+            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=True,
         )
         assert exit_code == 2
 
@@ -164,7 +165,101 @@ class TestAttachApiError:
         exit_code = await _attach(
             ref="main", pipeline_id=None, depth=10, interval=0.01, heartbeat=False,
             detail="normal", wait_for_start=True, follow=False, timeout=None,
-            output_json=False, plain=True, force_live=False, no_cache=True,
+            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=True,
         )
 
         assert exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# --retry flags
+# ---------------------------------------------------------------------------
+
+
+async def _unreachable(**kwargs: object) -> int:
+    raise AssertionError("the flag guard should have exited before running attach")
+
+
+class TestRetryFlags:
+    def _policy_from(self, args: list[str], monkeypatch: pytest.MonkeyPatch) -> RetryPolicy:
+        """Run `attach` far enough to capture the policy it built."""
+        captured: dict[str, RetryPolicy] = {}
+
+        async def fake_attach(**kwargs: object) -> int:
+            captured["policy"] = kwargs["retry_policy"]  # type: ignore[assignment]
+            return 0
+
+        monkeypatch.setattr("ddgl.cli.attach._attach", fake_attach)
+        result = CliRunner().invoke(main, ["attach", *args])
+        assert result.exit_code == 0, result.output
+        return captured["policy"]
+
+    def test_disabled_without_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._policy_from([], monkeypatch).enabled is False
+
+    def test_enabled_by_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        policy = self._policy_from(["--retry"], monkeypatch)
+        assert policy.enabled is True
+        assert policy.attempts_per_job == DEFAULT_JOB_RETRY_ATTEMPTS
+        assert policy.total == DEFAULT_JOB_RETRY_TOTAL
+        assert policy.exclude == ()
+
+    def test_tuning_values_are_threaded_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        policy = self._policy_from(
+            ["--retry", "--retry-attempts", "5", "--retry-total", "7",
+             "--retry-exclude", "e2e", "--retry-exclude", "^deploy"],
+            monkeypatch,
+        )
+        assert (policy.attempts_per_job, policy.total) == (5, 7)
+        assert policy.exclude == ("e2e", "^deploy")
+
+    def test_zero_means_unlimited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        policy = self._policy_from(
+            ["--retry", "--retry-attempts", "0", "--retry-total", "0"], monkeypatch
+        )
+        assert (policy.attempts_per_job, policy.total) == (0, 0)
+
+    @pytest.mark.parametrize(
+        "flag", [
+            ["--retry-attempts", "5"],
+            ["--retry-total", "7"],
+            ["--retry-exclude", "e2e"],
+        ],
+    )
+    def test_tuning_without_retry_is_a_usage_error(
+        self, flag: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Silently ignoring these would look like the cap was applied."""
+        monkeypatch.setattr("ddgl.cli.attach._attach", _unreachable)
+        result = CliRunner().invoke(main, ["attach", *flag])
+        assert result.exit_code == 2
+        assert "no effect without --retry" in result.output
+        assert flag[0] in result.output
+
+    def test_every_offending_flag_is_named(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("ddgl.cli.attach._attach", _unreachable)
+        result = CliRunner().invoke(
+            main, ["attach", "--retry-attempts", "5", "--retry-total", "7"]
+        )
+        assert result.exit_code == 2
+        assert "--retry-attempts" in result.output
+        assert "--retry-total" in result.output
+
+    def test_defaults_alone_are_not_treated_as_tuning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without --retry and without tuning, the defaults must not trip
+        the usage error."""
+        assert self._policy_from([], monkeypatch).enabled is False
+
+    def test_negative_values_are_rejected(self) -> None:
+        result = CliRunner().invoke(main, ["attach", "--retry", "--retry-attempts", "-1"])
+        assert result.exit_code == 2
+
+    def test_invalid_exclude_regex_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Caught at parse time rather than as a traceback on whichever
+        poll tick first had a candidate to match."""
+        monkeypatch.setattr("ddgl.cli.attach._attach", _unreachable)
+        result = CliRunner().invoke(main, ["attach", "--retry", "--retry-exclude", "("])
+        assert result.exit_code == 2
+        assert "not a valid regex" in result.output
