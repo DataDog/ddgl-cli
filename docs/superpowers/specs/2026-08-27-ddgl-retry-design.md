@@ -666,31 +666,33 @@ Small, standalone, no retry code. Merges before PR 2 starts.
       `RetryEvent`, `ResultEvent.retries`.
       *Verify:* JSONL round-trip carries `"kind": "retry"`. ✅
 
-- [ ] **2.8 `feat(core): auto-retry failed jobs in attach`**
+- [x] **2.8 `feat(core): auto-retry failed jobs in attach`**
       `_apply_retry_policy`, `_build_retry_events`, `AttemptTally` + `tally_attempts` (replacing `count_attempts`), the `posted_job_ids`/`total_issued` ledger, and the newest-record gate (§3.5).
-      *Verify:* the scenario matrix in §5.
+      *Verify:* the scenario matrix in §5. ✅ — 14 scenario tests, all three gates mutation-verified.
 
-- [ ] **2.9 `feat(render): surface retries in attach output`**
+- [x] **2.9 `feat(render): surface retries in attach output`**
       `[RETRY]` line, final-line count, live-line count.
 
-- [ ] **2.10 `feat(cli): add --retry flags to attach`**
+- [x] **2.10 `feat(cli): add --retry flags to attach`**
       `--retry`, `--retry-attempts`, `--retry-total`, `--retry-exclude`; usage error when a tuning flag appears without `--retry`.
 
 #### Phase 3 — TUI
 
-- [ ] **2.11 `refactor(core): thread fresh through get_pipeline and list_jobs`** (§3.10)
+- [x] **2.11 `refactor(core): thread fresh through get_pipeline and list_jobs`** (§3.10)
+      *Shipped also:* `client.iter_jobs` was missing `fresh` outright (only `get_pipeline`/`get_all_jobs` had it); a companion fix threaded `fresh` through `resolve_pipeline`'s `pipeline_id` branch, which had silently dropped it since before this plan.
 
-- [ ] **2.12 `feat(tui): add a ConfirmModal widget`**
+- [x] **2.12 `feat(tui): add a ConfirmModal widget`**
 
-- [ ] **2.13 `feat(tui)!: move refresh to ctrl+r and bind r to retry`**
+- [x] **2.13 `feat(tui)!: move refresh to ctrl+r and bind r to retry`**
       Both bindings, `action_retry_job`, the worker, and the `help.py` entry in one commit — splitting them would leave a revision with no refresh key.
 
-- [ ] **2.14 `feat(tui): retry from the job detail screen`**
+- [x] **2.14 `feat(tui): retry from the job detail screen`**
       `r` binding, job swap, `JobRetried` message.
+      *Note:* this commit and 2.13 never actually passed `fresh=True` from `_manual_refresh` despite 2.11 adding the capability for exactly this — caught while writing 2.15 and fixed in a standalone `fix(tui)` commit.
 
 #### Phase 4 — docs
 
-- [ ] **2.15 `docs: document retry`**
+- [x] **2.15 `docs: document retry`**
       README workflows + the `ctrl+r` keybinding change; `DEVELOPER.md` gets a `core/retry.py` section, the `RetryEvent` row, the restructured-attach-loop description, the POST-is-not-retried rationale, and the transport-retry vs job-retry disambiguation.
 
 ---
