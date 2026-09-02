@@ -17,10 +17,18 @@ from ddgl.model.attach import (
     PipelineEvent,
     PollEvent,
     ResultEvent,
+    RetryEvent,
     SnapshotEvent,
     SwitchedEvent,
 )
-from ddgl.render.attach import _live_markup, event_to_text, render_lines, render_live
+from ddgl.render.attach import (
+    _TAG_WIDTH,
+    _live_markup,
+    _tag,
+    event_to_text,
+    render_lines,
+    render_live,
+)
 
 # ---------------------------------------------------------------------------
 # event_to_text
@@ -331,3 +339,106 @@ class TestRenderLive:
         await render_live(_events(_SNAPSHOT, switched, _RESULT))
         out = capsys.readouterr().out
         assert "switching to #2" in out
+
+
+# ---------------------------------------------------------------------------
+# Retries
+# ---------------------------------------------------------------------------
+
+
+_RETRY = RetryEvent(
+    ts="2026-07-21T12:00:09+00:00",
+    pipeline_id=918342,
+    job_id=98765,
+    job_name="unit-tests-1",
+    job_stage="test",
+    new_job_id=98801,
+    attempt=2,
+)
+
+
+class TestRetryLine:
+    def test_names_the_old_job_the_new_id_and_the_attempt(self) -> None:
+        text = event_to_text(_RETRY)
+        assert "[RETRY]" in text
+        assert "unit-tests-1" in text
+        assert "#98801" in text
+        assert "attempt 2" in text
+
+    def test_tag_stays_within_the_tag_column(self) -> None:
+        """[RETRY] is the joint-widest tag; a wider one would shift every
+        other line's message and break the column alignment."""
+        assert len(_tag("RETRY")) == _TAG_WIDTH
+
+    async def test_shown_at_minimal_detail(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Rare and high-signal, so it survives filtering that drops job
+        transitions."""
+        await render_lines(_events(_RETRY, _RESULT), detail=DetailLevel.MINIMAL)
+        assert "[RETRY]" in capsys.readouterr().out
+
+    async def test_hidden_at_detail_none(self, capsys: pytest.CaptureFixture[str]) -> None:
+        await render_lines(_events(_RETRY, _RESULT), detail=DetailLevel.NONE)
+        assert "[RETRY]" not in capsys.readouterr().out
+
+
+class TestRetryCountInFinalLine:
+    def test_absent_when_nothing_was_retried(self) -> None:
+        event = ResultEvent(
+            ts="x", pipeline_id=1, status="success", reason="terminal",
+            jobs_total=2, jobs_done=2,
+        )
+        assert "retried" not in event_to_text(event)
+
+    def test_reported_when_retries_happened(self) -> None:
+        event = ResultEvent(
+            ts="x", pipeline_id=1, status="success", reason="terminal",
+            jobs_total=2, jobs_done=2, retries=2,
+        )
+        assert "Auto-retried 2 jobs." in event_to_text(event)
+
+    def test_singular_for_one_retry(self) -> None:
+        event = ResultEvent(
+            ts="x", pipeline_id=1, status="success", reason="terminal", retries=1,
+        )
+        assert "Auto-retried 1 job." in event_to_text(event)
+
+
+class TestRetryCountInLiveLine:
+    def test_absent_when_nothing_was_retried(self) -> None:
+        assert "retried" not in _live_markup(_SNAPSHOT, DetailLevel.NORMAL)
+
+    def test_sits_next_to_the_job_counts(self) -> None:
+        markup = _live_markup(_SNAPSHOT, DetailLevel.NORMAL, retries=2)
+        assert "2 retried" in markup
+
+    def test_shown_at_minimal_detail(self) -> None:
+        assert "2 retried" in _live_markup(_SNAPSHOT, DetailLevel.MINIMAL, retries=2)
+
+    def test_nothing_rendered_at_detail_none(self) -> None:
+        assert _live_markup(_SNAPSHOT, DetailLevel.NONE, retries=2) == ""
+
+
+class TestRenderLiveRetries:
+    async def test_prints_a_line_above_the_live_region(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The live line is overwritten each tick, so without this a
+        retried job would look like it restarted on its own."""
+        await render_live(_events(_SNAPSHOT, _RETRY, _RESULT))
+        out = capsys.readouterr().out
+        assert "unit-tests-1" in out
+        assert "#98801" in out
+
+    async def test_silent_at_detail_none(self, capsys: pytest.CaptureFixture[str]) -> None:
+        await render_live(_events(_SNAPSHOT, _RETRY, _RESULT), detail=DetailLevel.NONE)
+        assert "unit-tests-1" not in capsys.readouterr().out
+
+    async def test_final_renderable_reports_the_count(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = ResultEvent(
+            ts="x", pipeline_id=1, ref="main", status="success", reason="terminal",
+            jobs_total=2, jobs_done=2, retries=3,
+        )
+        await render_live(_events(_SNAPSHOT, result))
+        assert "3 retried" in capsys.readouterr().out
