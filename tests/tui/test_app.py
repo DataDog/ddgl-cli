@@ -38,7 +38,7 @@ class _FakeClient:
 
     # Needed by core/jobs.list_jobs → client.iter_jobs (must be async generator)
     async def iter_jobs(
-        self, pipeline_id: int, *, scope: Any = None
+        self, pipeline_id: int, *, scope: Any = None, fresh: bool = False
     ) -> AsyncIterator[Any]:
         from ddgl.model.page import Page
 

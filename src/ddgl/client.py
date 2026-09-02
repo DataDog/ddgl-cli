@@ -645,9 +645,13 @@ class GitLabClient:
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        fresh: bool = False,
         **params: Any,
     ) -> AsyncIterator[Page[Job]]:
         """Stream pages of jobs for a pipeline.
+
+        If *fresh* is True, bypasses the low-level API response cache for
+        each page fetched.
 
         Extra `**params` are forwarded verbatim as query parameters (see
         the class docstring).
@@ -657,10 +661,11 @@ class GitLabClient:
         params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
+        ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         async for page in self._paginate(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            ttl=CACHE_TTL_API_JOB_LIST,
+            ttl=ttl,
             **params,
         ):
             yield page

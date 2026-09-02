@@ -228,6 +228,20 @@ class TestListJobs:
         jobs = [j async for j in list_jobs(client, 100)]
         assert jobs == []
 
+    async def test_forwards_fresh_to_the_client(
+        self, client: GitLabClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_iter_jobs(pipeline_id: int, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            from ddgl.model.page import Page
+            yield Page(items=[], page=1, next_page=None, total_pages=1, total=0)
+
+        monkeypatch.setattr(client, "iter_jobs", fake_iter_jobs)
+        _ = [j async for j in list_jobs(client, 100, fresh=True)]
+        assert seen["fresh"] is True
+
 
 # ---------------------------------------------------------------------------
 # filter_jobs

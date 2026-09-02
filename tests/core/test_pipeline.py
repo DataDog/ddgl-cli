@@ -124,6 +124,19 @@ class TestGetPipeline:
         await get_pipeline(client, 11, cache=cache)
         assert cache[CacheNS.OBJECTS][("pipelines", _PROJECT_ID, 11)] is None
 
+    async def test_forwards_fresh_to_the_client(
+        self, client: GitLabClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_get_pipeline(pipeline_id: int, **kwargs: Any) -> Pipeline:
+            seen.update(kwargs)
+            return Pipeline.from_api(_pipeline_payload(pipeline_id))
+
+        monkeypatch.setattr(client, "get_pipeline", fake_get_pipeline)
+        await get_pipeline(client, 42, fresh=True)
+        assert seen["fresh"] is True
+
 
 # ---------------------------------------------------------------------------
 # get_pipelines

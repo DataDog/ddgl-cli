@@ -68,10 +68,13 @@ async def get_pipeline(
     pipeline_id: int,
     *,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> Pipeline:
     """Fetch a single pipeline by ID. One API call on cache miss.
 
-    Only SUCCESS pipelines are written to cache (other statuses can still change).
+    Only SUCCESS pipelines are written to cache (other statuses can still
+    change), so *fresh* — which bypasses the low-level API response cache —
+    only matters for a pipeline that hasn't reached SUCCESS yet.
     """
     project_id = client._config.project_id or ""
     if cache is not None:
@@ -81,7 +84,7 @@ async def get_pipeline(
             return msgspec.convert(cached, Pipeline, strict=False)
 
     logger.debug("fetching pipeline %d from API", pipeline_id)
-    pipeline = await client.get_pipeline(pipeline_id)
+    pipeline = await client.get_pipeline(pipeline_id, fresh=fresh)
     cache_terminal_pipeline(cache, project_id, pipeline)
     return pipeline
 

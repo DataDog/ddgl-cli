@@ -80,14 +80,16 @@ async def list_jobs(
     *,
     scope: JobStatus | None = None,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> AsyncIterator[Job]:
     """Stream jobs for a pipeline as an async generator.
 
-    scope=None fetches ALL jobs.
+    scope=None fetches ALL jobs. If *fresh* is True, bypasses the
+    low-level API response cache.
     Yields jobs as pages arrive; each terminal-state job is cached individually.
     """
     project_id = client._config.project_id or ""
-    async for page in client.iter_jobs(pipeline_id, scope=scope):
+    async for page in client.iter_jobs(pipeline_id, scope=scope, fresh=fresh):
         cache_terminal_jobs(cache, project_id, page.items)
         for job in page.items:
             yield job
