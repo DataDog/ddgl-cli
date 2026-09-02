@@ -35,6 +35,10 @@ class _FakeClient:
 
     def __init__(self, jobs: list[Job]) -> None:
         self._jobs = jobs
+        self.retried_job_ids: list[int] = []
+        self.retry_error: Exception | None = None
+        self._retry_new_job_id = 999
+        self.get_pipeline_calls = 0
 
     # Needed by core/jobs.list_jobs → client.iter_jobs (must be async generator)
     async def iter_jobs(
@@ -46,6 +50,22 @@ class _FakeClient:
             items=self._jobs, page=1, next_page=None,
             total_pages=1, total=len(self._jobs),
         )
+
+    async def get_pipeline(self, pipeline_id: int, **kwargs: Any) -> Pipeline:
+        self.get_pipeline_calls += 1
+        return make_pipeline(id=pipeline_id)
+
+    # Needed by PipelineListPanel.on_mount's initial fetch.
+    async def fetch_pipelines(self, **kwargs: Any) -> Any:
+        from ddgl.model.page import Page
+
+        return Page(items=[], page=1, next_page=None, total_pages=1, total=0)
+
+    async def retry_job(self, job_id: int) -> Job:
+        if self.retry_error is not None:
+            raise self.retry_error
+        self.retried_job_ids.append(job_id)
+        return make_job(id=self._retry_new_job_id, name="the-retried-job")
 
 
 # ---------------------------------------------------------------------------
@@ -252,3 +272,96 @@ async def test_status_filter_options_include_allowed_failure() -> None:
         await pilot.pause()
         status_btn = app.query_one("#status-filter", FilterButton)
         assert "allowed-failure" in status_btn._options
+
+
+# ---------------------------------------------------------------------------
+# Retry — r retries, ctrl+r refreshes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ctrl_r_still_refreshes() -> None:
+    p1 = make_pipeline(id=1)
+    app = _make_app(pipeline=p1)
+    client = app._client
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.query_one(JobListPanel).focus()
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert client.get_pipeline_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_r_with_non_retryable_job_warns_and_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = [make_job(id=1, status=JobStatus.SUCCESS)]
+    app = _make_app(jobs=jobs)
+    client = app._client
+    notified: list[str | None] = []
+    monkeypatch.setattr(
+        app, "notify",
+        lambda *a, severity=None, **kw: notified.append(severity),
+    )
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.query_one(JobListPanel).focus()
+        await pilot.press("r")
+        await pilot.pause()
+        assert client.retried_job_ids == []
+        assert notified == ["warning"]
+
+
+@pytest.mark.asyncio
+async def test_r_with_no_job_selected_warns_and_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _make_app(jobs=[])
+    client = app._client
+    notified: list[str | None] = []
+    monkeypatch.setattr(
+        app, "notify",
+        lambda *a, severity=None, **kw: notified.append(severity),
+    )
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.query_one(JobListPanel).focus()
+        await pilot.press("r")
+        await pilot.pause()
+        assert client.retried_job_ids == []
+        assert notified == ["warning"]
+
+
+@pytest.mark.asyncio
+async def test_r_with_retryable_job_confirms_then_retries_and_refreshes() -> None:
+    jobs = [make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)]
+    p1 = make_pipeline(id=1)
+    app = _make_app(pipeline=p1, jobs=jobs)
+    client = app._client
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.query_one(JobListPanel).focus()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert client.retried_job_ids == [1]
+        assert client.get_pipeline_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_r_with_retryable_job_cancelled_does_not_retry() -> None:
+    jobs = [make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)]
+    app = _make_app(jobs=jobs)
+    client = app._client
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.query_one(JobListPanel).focus()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert client.retried_job_ids == []

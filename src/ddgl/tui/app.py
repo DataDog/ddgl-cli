@@ -19,9 +19,11 @@ from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import list_jobs
 from ddgl.core.pipeline import get_pipeline
+from ddgl.core.retry import retry_job
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.screens.job_detail import JobDetailScreen
+from ddgl.tui.widgets.confirm import ConfirmModal
 from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
 from ddgl.tui.widgets.help import HelpModal
 from ddgl.tui.widgets.job_list import JobListPanel, SortMode, status_token
@@ -51,7 +53,8 @@ class PipelineViewer(App[None]):
         Binding("/", "focus_search", "Search"),
         Binding("escape", "blur_search", "Blur search", show=False),
         Binding("ctrl+k", "clear_search", "Clear search"),
-        Binding("r", "refresh", "Refresh"),
+        Binding("r", "retry_job", "Retry job"),
+        Binding("ctrl+r", "refresh", "Refresh"),
         Binding("o", "open_url", "Open URL"),
         Binding("p", "switch_pipeline", "Switch pipeline"),
         Binding("question_mark", "help", "Help", key_display="?"),
@@ -254,6 +257,32 @@ class PipelineViewer(App[None]):
             self.notify(f"Refresh failed: {e}", severity="error")
             return
         self.load_pipeline(fresh, keep_existing=True)
+
+    def action_retry_job(self) -> None:
+        job = self.query_one(JobListPanel).get_selected_job()
+        if job is None or not job.is_retryable:
+            self.notify("Select a failed or canceled job to retry.", severity="warning")
+            return
+
+        def _on_dismiss(confirmed: bool) -> None:
+            if confirmed:
+                self._retry_job(job)
+
+        self.push_screen(
+            ConfirmModal("Retry job?", f"{job.stage}/{job.name} — {job.status}"),
+            _on_dismiss,
+        )
+
+    @work(exclusive=False)
+    async def _retry_job(self, job: Job) -> None:
+        try:
+            new_job = await retry_job(self._client, job.id)
+        except Exception as e:
+            self.notify(f"Retry failed: {e}", severity="error")
+            return
+        self.notify(f"Retried {job.name} → job #{new_job.id}")
+        if self.pipeline is not None:
+            self._manual_refresh(self.pipeline)
 
     def action_focus_search(self) -> None:
         self.query_one(FuzzySearchInput).focus()

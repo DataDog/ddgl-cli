@@ -18,7 +18,8 @@ _HELP_CONTENT = """\
   [dim]Enter[/dim]               Open job detail
 
 [bold]Actions[/bold]
-  [dim]r[/dim]        Refresh pipeline
+  [dim]r[/dim]        Retry selected job
+  [dim]Ctrl+R[/dim]   Refresh pipeline
   [dim]o[/dim]        Open selected job or pipeline in browser
   [dim]p[/dim]        Switch pipeline or ref
   [dim]/[/dim]        Focus search bar
