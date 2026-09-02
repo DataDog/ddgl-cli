@@ -204,7 +204,7 @@ async def resolve_pipeline(
     walk far back and return an unrelated pipeline.
     """
     if pipeline_id is not None:
-        return await get_pipeline(client, pipeline_id, cache=cache)
+        return await get_pipeline(client, pipeline_id, cache=cache, fresh=fresh)
 
     if ref is None:
         ref = await get_current_branch()

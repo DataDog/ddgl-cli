@@ -493,6 +493,19 @@ class TestResolvePipeline:
         result = await resolve_pipeline(client, pipeline_id=99)
         assert result.id == 99
 
+    async def test_forwards_fresh_with_an_explicit_pipeline_id(
+        self, client: GitLabClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_get_pipeline(pipeline_id: int, **kwargs: Any) -> Pipeline:
+            seen.update(kwargs)
+            return Pipeline.from_api(_pipeline_payload(pipeline_id))
+
+        monkeypatch.setattr(client, "get_pipeline", fake_get_pipeline)
+        await resolve_pipeline(client, pipeline_id=99, fresh=True)
+        assert seen["fresh"] is True
+
     async def test_auto_detects_branch(
         self,
         client: GitLabClient,
