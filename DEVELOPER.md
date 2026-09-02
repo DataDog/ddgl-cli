@@ -209,15 +209,24 @@ All `iter_` and `get_all_` methods raise `PaginationLimitError` after `MAX_PAGES
 
 #### Retry
 
-`_get_response()` (the raw HTTP GET underneath `_get`/`_get_text`/`_get_page`, so every `get_`/`fetch_`/`iter_`/`get_all_` method benefits uniformly) retries a connection-level failure or a `RETRYABLE_STATUS_CODES` response up to `HTTP_RETRY_ATTEMPTS` (3) times, backing off `HTTP_RETRY_BACKOFF_INITIAL_SECONDS * HTTP_RETRY_BACKOFF_MULTIPLIER ** attempt` (`0.5s`, then `1.0s`) between attempts. A `429`'s `Retry-After` header, when present, is honored in place of the computed backoff. Retry happens *before* `_raise_for_status()` runs — it only ever sees the final response, so error *mapping* (`ConfigError`/`NotFoundError`/`GitLabAPIError`) is unaffected by retrying.
+`_request()` is the shared implementation underneath `_get_response()` and `_post_response()` (and so every `get_`/`fetch_`/`iter_`/`get_all_`/`retry_*` method), retrying a connection-level failure or a caller-chosen set of statuses up to `HTTP_RETRY_ATTEMPTS` (3) times, backing off `HTTP_RETRY_BACKOFF_INITIAL_SECONDS * HTTP_RETRY_BACKOFF_MULTIPLIER ** attempt` (`0.5s`, then `1.0s`) between attempts. A `429`'s `Retry-After` header, when present, is honored in place of the computed backoff. Retry happens *before* `_raise_for_status()` runs — it only ever sees the final response, so error *mapping* (`ConfigError`/`NotFoundError`/`GitLabAPIError`) is unaffected by retrying.
 
-These `HTTP_RETRY_*` constants are **transport** retry — resending an HTTP request that failed in flight. Unrelated to retrying a *CI job*, which is the `ddgl retry` feature.
+GET and POST get different policies, and the difference is idempotency, not verb:
+
+| | GET (`_get_response`) | POST (`_post_response`) |
+| --- | --- | --- |
+| Retryable statuses | `RETRYABLE_STATUS_CODES` (408/429/5xx) | `RATE_LIMITED_STATUS_CODES` (429 only) |
+| Transport errors (timeout, DNS, reset) | Retried | **Not** retried |
+
+A GET can always be safely re-sent. A POST like `POST /jobs/:id/retry` cannot in general: re-sending after a timeout or a 502 could mint two retried jobs, because there is no way to tell "GitLab never saw it" apart from "GitLab processed it and the response was lost on the way back". A `429` is the one status safe to retry either way — it means the request was *rejected*, not processed.
+
+These `HTTP_RETRY_*` constants are **transport** retry — resending an HTTP request that failed in flight, invisible to the caller either way. Unrelated to retrying a *CI job*, which is the `ddgl retry` feature (see `core/retry.py` under [Core](#core) below) — a job retry is a deliberate new POST that mints a new job with a new ID, not a resend of the same request.
 
 #### Low-level API caching
 
 `_get()` accepts a `ttl` parameter. If `ttl > 0` and a cache is open, the raw JSON response is stored in `CacheNS.API_RESPONSES` keyed by a hash of the path and query params. This is separate from the structured object cache managed by `core/`.
 
-`get_pipeline()` and `get_all_jobs()` additionally accept `fresh: bool = False`, which passes `ttl=0` instead of the default TTL for that one call — bypassing this low-level cache entirely (read and write). Used by `core/attach.py`'s poll loop: polling a running pipeline through the normal 30s/15s cached reads would make the poll interval meaningless.
+`get_pipeline()`, `get_all_jobs()`, and `iter_jobs()` additionally accept `fresh: bool = False`, which passes `ttl=0` instead of the default TTL for that one call — bypassing this low-level cache entirely (read and write). `core/attach.py`'s poll loop always passes it: polling a running pipeline through the normal 30s/15s cached reads would make the poll interval meaningless. `core.pipeline.get_pipeline()` and `core.jobs.list_jobs()` thread the same flag straight through to their client calls — purely additive, default off — so a caller outside the poll loop can ask for the same bypass; the TUI's `_manual_refresh` (bound to `ctrl+r`, and also run after a retry) is the one that does, since otherwise a refresh — or a just-retried job — could keep showing stale state for up to `CACHE_TTL_API_JOB_LIST` seconds.
 
 ---
 
@@ -308,6 +317,29 @@ async def stream_log(
 
 Cache-first: if the log is cached, yields lines from cache. Otherwise streams from the API and caches if the log turns out to be complete.
 
+#### `core/retry.py`
+
+```python
+async def retry_job(client: GitLabClient, job_id: int) -> Job
+async def retry_pipeline(client: GitLabClient, pipeline_id: int) -> Pipeline
+async def retry_jobs(client: GitLabClient, jobs: Sequence[Job]) -> list[RetryOutcome]
+```
+
+`retry_job`/`retry_pipeline` are thin wrappers over the client's POST endpoints — a job retry returns the new `pending` job GitLab creates (a new ID; the name carries across), a pipeline retry returns the pipeline, now `running`. `retry_jobs` fans a batch out concurrently (bounded by `core/_concurrency.py`'s `gather_bounded`) and never raises: a per-job failure lands in that job's `RetryOutcome.error` instead, so one rejected retry (e.g. a `403`) doesn't abort the rest of the batch.
+
+```python
+async def select_by_id(client, job_ids: Sequence[int], *, force=False, cache=None) -> RetrySelection
+async def select_in_pipeline(client, pipeline: Pipeline, *, failed_only=False, include_allowed_failures=False, stage=None, name_pattern=None, force=False, cache=None) -> RetrySelection
+```
+
+Selection for `ddgl retry`'s targeted mode. Both narrow to `Job.is_retryable` (failed or canceled) unless `force=True` widens that to whatever the filter matched. `select_in_pipeline` reuses `core/jobs.py`'s `filter_jobs`/`list_jobs` — the same split `jobs list` uses — so `retry --stage build` and `jobs list --stage build` select identical sets. `RetrySelection.matched` counts what the filter selected *before* the retryable gate, so a caller can distinguish "nothing matched" from "things matched but none were retryable".
+
+```python
+async def tally_attempts(client: GitLabClient, pipeline_id: int, names: set[str]) -> AttemptTally
+```
+
+Counts every recorded attempt of each given job name, via the one endpoint that reports superseded records (`include_retried=true` — GitLab's normal job list omits them, so from that list alone a retried job is indistinguishable from one that never was). `AttemptTally.is_newest(job)` says whether `job` is still the current record for its name — the gate `core/attach.py`'s auto-retry uses to avoid double-retrying a job whose replacement it hasn't seen yet (see below). Reflects the moment it's called; nothing here is cached between calls, so GitLab's own `retry:`-keyword attempts can't drift a budget computed from a stale count.
+
 #### `core/attach.py`
 
 ```python
@@ -322,18 +354,20 @@ async def attach(
     wait_for_start: bool = True,
     follow: bool = False,
     timeout: float | None = None,
+    retry_policy: RetryPolicy | None = None,
     cache: Cache | None = None,
-    estimator: DurationEstimator | None = None,
 ) -> AsyncIterator[AttachEvent]
 ```
 
-Powers `ddgl attach`: blocks on a CI pipeline, yielding `AttachEvent`s until it reaches a terminal state or `timeout` elapses. Stateless — no retry/resume concept. Every call resolves (or waits for) the pipeline, emits an early snapshot, fetches jobs and emits a full snapshot, then polls every `interval` seconds. A changed tick yields its pipeline/job transitions followed by one `poll` rollup; a quiet tick yields only the opt-in `heartbeat` rollup. Re-invoking after a stop (e.g. a calling harness enforced its own timeout) just runs this same sequence again against GitLab, which is the whole resumability story.
+Powers `ddgl attach`: blocks on a CI pipeline, yielding `AttachEvent`s until it reaches a terminal state or `timeout` elapses. Stateless — no resume concept of its own. Every call resolves (or waits for) the pipeline, emits an early snapshot, fetches jobs and emits a full snapshot, then polls every `interval` seconds, applying `retry_policy` (see below) at each tick. A changed tick yields its pipeline/job/retry events followed by one `poll` rollup; a quiet tick yields only the opt-in `heartbeat` rollup. Re-invoking after a stop (e.g. a calling harness enforced its own timeout) just runs this same sequence again against GitLab, which is the whole resumability story.
 
 The **early snapshot** fires immediately after resolving the pipeline — before fetching jobs, which GitLab has no count endpoint for and can take real time on a pipeline with hundreds of jobs even with parallel pagination (below). Without it, `attach` would sit silent for that entire fetch. Its `jobs_total`/`jobs_done`/`current_stage` are `None`/unset (see `AttachEvent`'s docstring); renderers must treat `jobs_total is None` as "still loading," not zero jobs.
 
 Polling reads bypass the client's response cache (`fresh=True` on `get_pipeline`/`get_all_jobs` — see [Client](#client)) so `interval` is the true detection latency, not `max(interval, cache_ttl)`. `get_all_jobs` also fetches its pages concurrently (see [Client](#client) → Pagination methods), which matters here: on a large pipeline the sequential-pagination job fetch used to take over a minute. Terminal jobs and `SUCCESS` pipelines are still written to the durable object cache from the poll loop, mirroring `core/jobs.py` and `core/pipeline.py`'s own rules, since polling bypasses their cache-write wrappers.
 
-`AttachEvent` (`model/attach.py`) is one `kind`-tagged `msgspec.Struct` (`snapshot` / `job` / `pipeline` / `poll` / `heartbeat` / `switched` / `result`) rather than a class hierarchy — renderers switch on `.kind`. Rollup fields (`pipeline_id`, `ref`, `current_stage`, `pipeline_elapsed`, `jobs_total`, `jobs_done`, `failed_jobs`, `eta_seconds`) are populated on every event that has a resolved pipeline via an internal `_context()` helper, not just snapshot/poll/heartbeat — a renderer should never need to track cross-event state, or hold a `Pipeline`/`Job` object, to answer "how many jobs are done right now." The early snapshot above is the one exception (no jobs loaded yet to compute a rollup from). If you add a new event construction site, get its fields from `**ctx` rather than setting them by hand — a past bug had `job`/`heartbeat` events silently falling through to `pipeline_id=None` because they were built without it.
+Each tick reads as a `PipelineState` (`model/attach.py` — a `Pipeline` plus its `jobs`, with `jobs_done`/`failed_job_names`/`current_stage` computed on it) fetched by `_get_pipeline_state`. The loop itself is a small set of named phases rather than one long function: `_build_tick_events` diffs the previous and current `PipelineState` into `AttachEvent`s (`_build_pipeline_event` + `_build_job_events` under the hood) via an `EventContext` computed once per tick (`EventContext.from_state`) and spread into every event, so a renderer never needs to track cross-event state to answer "how many jobs are done right now." `_check_for_new_pipeline` is the `--follow` check, run once per tick after the poll sleep. If you add a new event construction site, build it from `context.as_fields()` rather than setting rollup fields by hand — a past bug had `job`/`heartbeat` events silently falling through to `pipeline_id=None` because they were built without it.
+
+`AttachEvent` (`model/attach.py`) is one `kind`-tagged `msgspec.Struct` (`snapshot` / `job` / `pipeline` / `poll` / `heartbeat` / `switched` / `retry` / `result`) rather than a class hierarchy — renderers switch on `.kind`.
 
 `current_stage` is the OLDEST stage that still has an incomplete job (the one actually holding up progress), not the most-recently-started one — GitLab's jobs endpoint returns jobs newest-ID-first with no stage-sequence field, so "first in the list" is not a reliable proxy for "most advanced."
 
@@ -341,14 +375,19 @@ A `GitLabAPIError` while *resolving* the pipeline (before the poll loop starts) 
 
 `--detail` (which already-emitted event kinds a renderer shows, and — in Live mode — how much content is packed into the single status line) is deliberately **not** an engine concept — the engine always emits the full stream; filtering/scaling is entirely a `render/attach.py` concern (see [Format & Render](#format--render) below).
 
-##### ETA seam (`DurationEstimator`)
+##### Auto-retry (`RetryPolicy`)
 
-```python
-class DurationEstimator(Protocol):
-    def estimate_remaining(self, pipeline: Pipeline, jobs: list[Job]) -> timedelta | None: ...
-```
+`retry_policy` (`RetryPolicy` in `model/attach.py`; `enabled`, `attempts_per_job`, `total`, `exclude` — see the [`ddgl attach` flags](README.md#auto-retry-failed-jobs)) is off by default and, when set, is applied by `_apply_retry_policy` on every tick that has candidates. A job record is immutable once terminal, and no GitLab API field says whether a failed job has already been auto-retried, so the engine has to reconstruct that itself:
 
-There's no ETA field in the GitLab API. `attach()` calls an injected `estimator` (default `NullEstimator`, which always returns `None`) inside `_context()` — this has to happen in the engine, not a renderer, because it's the only place real `Pipeline`/`Job` domain objects exist; the result is exposed to renderers as `AttachEvent.eta_seconds`, keeping the estimator itself out of the render layer entirely. v1 ships no estimation logic; a future estimator (preferred: backed by Datadog CI Visibility historical durations, rather than querying GitLab pipeline history) plugs in here with no change to `attach()` or the renderers.
+1. `_candidates_before_tally` narrows to blocking failures the *engine itself* hasn't already retried this run (tracked in an in-memory `_RetryLedger`, not the object cache — a retry ledger has no reason to survive past one `attach` call), not name-excluded, and within the still-remaining global budget. Cheap, local checks — an empty result here means the tick needs no further request.
+2. Anything surviving that gets tallied via `core.retry.tally_attempts`, which hits the one endpoint that reports superseded job records. A candidate is only retried if `AttemptTally.is_newest` says it's still the current record for its name — the gate that stops the engine from double-retrying a job that something else (GitLab's own `retry:` keyword, a human clicking the web UI, a concurrent `ddgl retry`) already retried moments before this tick observed the failure. There is deliberately no fixed delay before retrying: a delay would be pure latency for the common case and no real protection against the race, since nothing bounds how long GitLab takes to process a retry.
+3. Survivors are retried via `core.retry.retry_jobs`; each outcome updates the ledger (`posted_job_ids`, `total_issued`) and becomes a `RetryEvent` via `_build_retry_events`. A rejected retry (e.g. `403`) is logged and otherwise ignored — there's no policy-disabling mechanism, since a rejection can be entirely explained by the benign race above.
+
+A tick where the pipeline looks finished but a retry was just accepted does *not* emit the final `result` yet — GitLab hasn't processed the retry, so the pipeline reads as terminal only for one more tick. `ResultEvent.retries` carries the run's total accepted-retry count through to the end, `0` when `--retry` wasn't used.
+
+##### ETA (`eta_seconds`)
+
+There's no ETA field in the GitLab API, so `EventContext.from_state` always sets `eta_seconds=None` — every event carries the field, but nothing populates it yet. A future estimator (preferred: backed by Datadog CI Visibility historical durations, rather than querying GitLab pipeline history) would compute it there, from the real `Pipeline`/`Job` objects `EventContext.from_state` already has, with no change needed to the renderers that already read `AttachEvent.eta_seconds`.
 
 ---
 
@@ -514,6 +553,8 @@ Layout:
 
 Jobs are loaded via a `@work(exclusive=True)` worker that streams from `core.jobs.list_jobs()` and appends to the table incrementally.
 
+`r` retries the job under the cursor (`action_retry_job`); `ctrl+r` refreshes (`action_refresh`) — they used to share `r`, split apart so retry could get a key of its own. `action_retry_job` no-ops with a warning `notify()` for no selection or a non-`is_retryable` job, otherwise opens a `ConfirmModal` and, on confirm, a worker calls `core.retry.retry_job` and then reuses the existing `_manual_refresh` worker so the job list picks up the new job without a second keypress. `on_job_detail_screen_job_retried` handles the equivalent message bubbled up from `JobDetailScreen` below, refreshing behind that still-open screen. Both refresh paths pass `fresh=True` (see [Client](#client) → Low-level API caching) — otherwise a refresh, manual or post-retry, could serve a response the API-level cache had already served for this pipeline moments earlier.
+
 #### `screens/job_detail.py` — JobDetailScreen
 
 Full-screen modal with:
@@ -524,6 +565,8 @@ Full-screen modal with:
   - **History** / **Tests** — placeholders
 
 Log rendering converts the `Trace` IR into `Rich.Text` objects. Sections are individually collapsible; `t` toggles all at once.
+
+`r` retries the currently displayed job, the same `ConfirmModal` flow as `PipelineViewer`. Unlike the main view, a successful retry doesn't close the screen: it swaps `self._job` to the new job in place, re-renders the meta panel and title, and clears and re-fetches the (now-empty, since the new job is `pending`) log tab — then posts a `JobRetried` message so `PipelineViewer` can refresh the job list behind this still-open screen.
 
 #### Search (`tui/search.py`)
 
@@ -541,6 +584,7 @@ Log rendering converts the `Trace` IR into `Rich.Text` objects. Sections are ind
 | `FilterButton`      | `filter_buttons.py` | Multi-select dropdown (status, stage)  |
 | `SortButton`        | `filter_buttons.py` | Cycle sort mode                        |
 | `HelpModal`         | `help.py`           | Keybindings overlay                    |
+| `ConfirmModal`      | `confirm.py`        | Generic yes/no confirmation            |
 
 ---
 
@@ -565,8 +609,8 @@ Separate from `format/`. Provides `render_pipeline_table`, `render_job_table`, `
 
 `render/attach.py` is a bit different: it consumes an `AsyncIterator[AttachEvent]` (see `core/attach.py` above) rather than a single already-fetched domain object, since it's rendering a live stream. Two entry points, both returning the final `result` event so the CLI can map it to an exit code:
 
-- `render_lines(events, as_json=..., detail=...)` — the default non-TTY output and `--json`'s JSONL are the *same* renderer; `as_json` is a boolean on the same consumption loop, not a separate function, since it's the same event stream just formatted differently, and (deliberately) bypasses `--detail` filtering entirely — JSONL always carries every event, full fidelity. Otherwise each event is passed through `_visible_at(event, detail)` before being formatted: `result` always shows; `none` shows nothing else; `minimal` additionally shows summary-shaped events (`snapshot`/`poll`/`heartbeat`); `normal` additionally shows `pipeline`/`switched` unconditionally (rare/low-noise, unlike `job`) plus `job` transitions that reach a terminal status (`success`/`failed`/`canceled`/`skipped`) — the created→running/running→pending blips that dominate on a large pipeline are the one thing gated by status at this level; `full` shows everything unfiltered. The engine, not this renderer, owns poll boundaries: after a changed tick it emits one `poll` event after all transitions, carrying the rollup (job counts, failure count, current stage); on a quiet tick it emits only the opt-in `heartbeat` event. This keeps every transition line concise without relying on renderer-side event tracking or formatting switches. Prints with `markup=False, highlight=False, soft_wrap=True` — literal `[TAG]` text must never be read as Rich markup, and a long line (a long job name, or a JSONL object) must never be word-wrapped across multiple physical lines.
-- `render_live(events, detail=...)` — a Rich `Live` single redrawing line for the human TTY case. Live mode has no discrete lines to filter, so `--detail` instead scales how much content `_live_markup` packs into that one line: `none` is the bare spinner with no text until the final state; `minimal` is id + ref + job counts + elapsed only; `normal` (default) adds current stage + ETA; `full` is the same as `normal` but names failed jobs instead of just counting them. A `switched` event is always printed as a one-off line above the `Live` region regardless of `--detail`, including at `none` — a human watching shouldn't be left wondering why the pipeline id silently changed.
+- `render_lines(events, as_json=..., detail=...)` — the default non-TTY output and `--json`'s JSONL are the *same* renderer; `as_json` is a boolean on the same consumption loop, not a separate function, since it's the same event stream just formatted differently, and (deliberately) bypasses `--detail` filtering entirely — JSONL always carries every event, full fidelity. Otherwise each event is passed through `_visible_at(event, detail)` before being formatted: `result` always shows; `none` shows nothing else; `minimal` additionally shows summary-shaped events (`snapshot`/`poll`/`heartbeat`) plus `retry` (not a summary, but rare and high-signal enough to show at the same level); `normal` additionally shows `pipeline`/`switched` unconditionally (rare/low-noise, unlike `job`) plus `job` transitions that reach a terminal status (`success`/`failed`/`canceled`/`skipped`) — the created→running/running→pending blips that dominate on a large pipeline are the one thing gated by status at this level; `full` shows everything unfiltered. The engine, not this renderer, owns poll boundaries: after a changed tick it emits one `poll` event after all transitions, carrying the rollup (job counts, failure count, current stage); on a quiet tick it emits only the opt-in `heartbeat` event. This keeps every transition line concise without relying on renderer-side event tracking or formatting switches. Prints with `markup=False, highlight=False, soft_wrap=True` — literal `[TAG]` text must never be read as Rich markup, and a long line (a long job name, or a JSONL object) must never be word-wrapped across multiple physical lines. The final `[FINAL]` line reports `Auto-retried N job(s).` when `ResultEvent.retries` is nonzero.
+- `render_live(events, detail=...)` — a Rich `Live` single redrawing line for the human TTY case. Live mode has no discrete lines to filter, so `--detail` instead scales how much content `_live_markup` packs into that one line: `none` is the bare spinner with no text until the final state; `minimal` is id + ref + job counts + elapsed only; `normal` (default) adds current stage + ETA; `full` is the same as `normal` but names failed jobs instead of just counting them. A `switched` event is always printed as a one-off line above the `Live` region regardless of `--detail`, including at `none` — a human watching shouldn't be left wondering why the pipeline id silently changed. A `retry` event prints a similar one-off `↻ retrying …` line, but — unlike `switched` — honors `--detail` (silent at `none`) and, either way, always increments a running count that the region's own job-counts segment appends as `, N retried`; that count is accumulated locally by `render_live` as retries arrive, since only the final `result` event carries the total.
 
 ---
 
