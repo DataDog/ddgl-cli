@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 _STATUS_COLORS: dict[str, str] = {
     "success": "green",
     "failed": "red",
-    "failed_allowed": "orange1",
+    "allowed-failure": "orange1",
     "running": "yellow",
     "canceled": "dim",
     "canceling": "dim",
@@ -42,7 +42,7 @@ def format_job_status(job: Job) -> str:
     allow_failure` — a fact only the domain object can answer.
     """
     if job.is_allowed_failure:
-        color = _STATUS_COLORS["failed_allowed"]
+        color = _STATUS_COLORS["allowed-failure"]
         return f"[{color}]●[/{color}] warning"
     return format_status(str(job.status))
 
