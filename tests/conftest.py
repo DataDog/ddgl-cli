@@ -31,7 +31,7 @@ def _no_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     specifically wants to verify retry TIMING can override this locally
     with its own monkeypatch.setattr call.
     """
-    monkeypatch.setattr("ddgl.client.RETRY_BACKOFF_INITIAL_SECONDS", 0.0)
+    monkeypatch.setattr("ddgl.client.HTTP_RETRY_BACKOFF_INITIAL_SECONDS", 0.0)
 
 
 @pytest.fixture()

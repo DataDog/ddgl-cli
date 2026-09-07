@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterable
 
@@ -11,6 +10,7 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB
+from ddgl.core._concurrency import gather_bounded
 
 logger = logging.getLogger("ddgl.core.logs")
 
@@ -66,8 +66,8 @@ async def get_logs(
         misses = ids
 
     if misses:
-        log_texts: list[str] = list(
-            await asyncio.gather(*[client.get_job_log(jid) for jid in misses])
+        log_texts: list[str] = await gather_bounded(
+            client.get_job_log(jid) for jid in misses
         )
         for jid, text in zip(misses, log_texts):
             result[jid] = text

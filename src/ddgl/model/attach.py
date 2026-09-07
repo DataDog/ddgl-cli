@@ -3,10 +3,20 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import msgspec
+
+from ddgl.constants import DEFAULT_JOB_RETRY_ATTEMPTS, DEFAULT_JOB_RETRY_TOTAL
+from ddgl.model.job import Job
+from ddgl.model.pipeline import Pipeline
+
+
+def now_iso() -> str:
+    """The current UTC time, as the ISO string every event's `ts` uses."""
+    return datetime.now(UTC).isoformat()
 
 
 class DetailLevel(StrEnum):
@@ -53,6 +63,110 @@ class DetailLevel(StrEnum):
 
 
 _DETAIL_RANK = {level: i for i, level in enumerate(DetailLevel)}
+
+
+class PipelineState(msgspec.Struct):
+    """A pipeline and the jobs belonging to it, as of one point in time.
+
+    What `ddgl attach` reads on each poll tick, and what it compares
+    against the previous tick to work out which events to emit.
+    """
+
+    pipeline: Pipeline
+    jobs: list[Job]
+
+    @property
+    def jobs_done(self) -> int:
+        return sum(1 for job in self.jobs if job.is_terminal)
+
+    @property
+    def failed_job_names(self) -> tuple[str, ...]:
+        """Names of jobs that failed in a way that fails the pipeline.
+
+        Excludes allowed failures, matching the verdict GitLab itself
+        reports for the pipeline (see `Job.is_blocking`).
+        """
+        return tuple(job.name for job in self.jobs if job.is_blocking)
+
+    @property
+    def current_stage(self) -> str | None:
+        """Best-effort 'what stage are we in' for the live view's headline.
+
+        The OLDEST stage that still has at least one not-yet-done job —
+        the stage actually holding up progress, not the most-recently-
+        started one. "Oldest" is approximated by each stage's minimum job
+        ID: GitLab returns jobs newest-ID-first (not in stage order —
+        there is no API field for stage sequence), but job IDs are
+        assigned in roughly creation order, and jobs are normally created
+        stage-by-stage at pipeline start. Falls back to the oldest stage
+        overall once everything is done, or None with no jobs.
+        """
+        if not self.jobs:
+            return None
+
+        min_id_by_stage: dict[str, int] = {}
+        incomplete_stages: set[str] = set()
+        for job in self.jobs:
+            min_id_by_stage[job.stage] = min(
+                min_id_by_stage.get(job.stage, job.id), job.id
+            )
+            if not job.is_terminal:
+                incomplete_stages.add(job.stage)
+
+        candidates = incomplete_stages or min_id_by_stage.keys()
+        return min(candidates, key=lambda stage: min_id_by_stage[stage])
+
+
+class EventContext(msgspec.Struct, frozen=True):
+    """The rollup fields carried by every `AttachEvent`.
+
+    Exactly `AttachEvent`'s own non-`ts` base fields, computed once per
+    tick and spread into every event emitted for it, so a renderer can
+    read them off any event without tracking state across the stream. The
+    two field sets must stay identical; a test enforces it.
+    """
+
+    pipeline_id: int | None = None
+    ref: str | None = None
+    current_stage: str | None = None
+    pipeline_elapsed: float | None = None
+    jobs_total: int | None = None
+    jobs_done: int | None = None
+    failed_jobs: tuple[str, ...] = ()
+    eta_seconds: float | None = None
+
+    @classmethod
+    def from_state(cls, state: PipelineState) -> EventContext:
+        """The rollup for every event emitted about `state`."""
+        elapsed = state.pipeline.elapsed
+        return cls(
+            pipeline_id=state.pipeline.id,
+            ref=state.pipeline.ref,
+            current_stage=state.current_stage,
+            pipeline_elapsed=elapsed.total_seconds() if elapsed is not None else None,
+            jobs_total=len(state.jobs),
+            jobs_done=state.jobs_done,
+            failed_jobs=state.failed_job_names,
+            eta_seconds=None,  # never estimated
+        )
+
+    def as_fields(self) -> dict[str, Any]:
+        """Keyword arguments for constructing an `AttachEvent`."""
+        return msgspec.structs.asdict(self)
+
+
+class RetryPolicy(msgspec.Struct, frozen=True):
+    """Auto-retry configuration for one `ddgl attach` run.
+
+    `attempts_per_job` caps retries of any single job name, counting
+    attempts GitLab made itself; `total` caps them across the whole run.
+    Either set to 0 means unlimited.
+    """
+
+    enabled: bool = False
+    attempts_per_job: int = DEFAULT_JOB_RETRY_ATTEMPTS  # 0 = unlimited
+    total: int = DEFAULT_JOB_RETRY_TOTAL                # 0 = unlimited
+    exclude: tuple[str, ...] = ()  # job-name regexes never auto-retried
 
 
 class AttachEvent(msgspec.Struct, kw_only=True, tag_field="kind"):
@@ -171,6 +285,30 @@ class SwitchedEvent(AttachEvent, kw_only=True, tag="switched"):
     """Human-readable description of the switch."""
 
 
+class RetryEvent(AttachEvent, kw_only=True, tag="retry"):
+    """A failed or canceled job was auto-retried."""
+
+    _min_detail: ClassVar[DetailLevel] = DetailLevel.MINIMAL  # rare + high-signal
+
+    job_id: int
+    """The OLD job's GitLab ID — the one that failed and was retried, not
+    the new one GitLab minted."""
+
+    job_name: str
+    """The job's name, stable across the retry (unlike its ID)."""
+
+    job_stage: str
+    """That job's own stage."""
+
+    new_job_id: int
+    """The ID of the job GitLab created for this attempt."""
+
+    attempt: int
+    """This job name's attempt number after the retry (2 for a job
+    retried once, whether that's its first auto-retry or it already had
+    a manual one)."""
+
+
 class ResultEvent(AttachEvent, kw_only=True, tag="result"):
     """The final event of an attach() run."""
 
@@ -187,3 +325,50 @@ class ResultEvent(AttachEvent, kw_only=True, tag="result"):
 
     reason: str
     """Why this result happened: "terminal" or "timeout"."""
+
+    retries: int = 0
+    """Jobs successfully auto-retried over the course of the run. 0 when
+    --retry wasn't used."""
+
+    @classmethod
+    def terminal(
+        cls, state: PipelineState, context: EventContext, *, retries: int = 0
+    ) -> ResultEvent:
+        """The result for a pipeline that reached a terminal status."""
+        elapsed = state.pipeline.elapsed
+        return cls(
+            ts=now_iso(),
+            status=str(state.pipeline.status),
+            duration=elapsed.total_seconds() if elapsed is not None else None,
+            reason="terminal",
+            retries=retries,
+            **context.as_fields(),
+        )
+
+    @classmethod
+    def timed_out(cls, last_event: AttachEvent | None) -> ResultEvent:
+        """The result for a run that hit its timeout, carrying whatever
+        state the last emitted event knew.
+
+        `last_event` is None when the timeout elapsed before any event was
+        emitted — i.e. while still waiting for a pipeline to exist — so
+        there is no pipeline to report.
+        """
+        if last_event is None:
+            return cls(ts=now_iso(), reason="timeout")
+        return cls(
+            ts=now_iso(),
+            pipeline_id=last_event.pipeline_id,
+            ref=last_event.ref,
+            current_stage=last_event.current_stage,
+            pipeline_elapsed=last_event.pipeline_elapsed,
+            # Not every event kind carries a status; those that don't leave
+            # the result's status None rather than inventing one.
+            status=getattr(last_event, "status", None),
+            duration=last_event.pipeline_elapsed,
+            jobs_total=last_event.jobs_total,
+            jobs_done=last_event.jobs_done,
+            failed_jobs=last_event.failed_jobs,
+            eta_seconds=last_event.eta_seconds,
+            reason="timeout",
+        )

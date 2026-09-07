@@ -9,6 +9,7 @@ Terminal-based GitLab CI client — browse pipelines, stream logs, and triage fa
 - **Branch-aware** — auto-detects your current git branch and resolves the latest pipeline with no arguments
 - **Interactive TUI** (`ddgl viz`) — full pipeline browser with job list, status/stage filters, fuzzy or regex search, and matrix job grouping
 - **Blocking wait** (`ddgl attach`) — block until a pipeline finishes, streaming progress; a live status line for humans, an append-only/JSONL event stream for scripts and coding agents
+- **Retry support** — retry failed jobs with `ddgl retry`, auto-retry them while `ddgl attach --retry` polls, or press `r` in the TUI
 - **Job detail view** — streaming log with collapsible sections, dependency graph (DAG), and keyboard navigation
 - **Smart log formatting** — ANSI colors preserved, sections folded, optional timestamps, syntax highlighting
 - **Scripting-friendly** — `--json` output on every command, pipe-friendly, `--no-cache` for force-refresh
@@ -95,6 +96,18 @@ ddgl jobs list --name "lint.*"      # regex filter on job name
 ddgl jobs get --failed              # full details for all failed jobs
 ```
 
+### Retry failed jobs
+
+```bash
+ddgl retry                          # retry every failed/canceled job in the latest pipeline
+ddgl retry --stage build            # only failed/canceled jobs in the "build" stage
+ddgl retry --job 12345 --job 12346  # specific jobs by ID
+ddgl retry --job 12345 --force      # retry even if that job already succeeded or is still running
+ddgl retry -y                       # skip the confirmation prompt
+```
+
+With no filter, `ddgl retry` calls GitLab's pipeline-level retry endpoint — the same button the web UI has, and GitLab picks the exact set. Any of `--job`/`-f`/`--stage`/`--name` narrows to matching jobs instead, each retried individually. Only failed or canceled jobs are retried unless `--force` widens that to whatever the filter matched. Always asks for confirmation first unless `-y`/`--yes` is given. Exit codes: `0` retried (or nothing to do), `1` GitLab rejected a retry, `2` usage/config/resolution error.
+
 ### Read job logs
 
 ```bash
@@ -163,7 +176,8 @@ status:failed stage:build lint    # failed jobs in "build" stage matching "lint"
 | `Ctrl+K` | Clear search                         |
 | `s`      | Cycle sort: Stage → A–Z → Start time |
 | `Space`  | Expand / collapse matrix job group   |
-| `r`      | Refresh pipeline and jobs            |
+| `r`      | Retry selected job                   |
+| `Ctrl+R` | Refresh pipeline and jobs            |
 | `p`      | Switch pipeline (focus sidebar)      |
 | `o`      | Open job or pipeline in browser      |
 | `?`      | Show help                            |
@@ -177,6 +191,7 @@ status:failed stage:build lint    # failed jobs in "build" stage matching "lint"
 | `n` / `N`           | Next / previous match                       |
 | `t`                 | Toggle all log sections (collapse / expand) |
 | `Ctrl+↑` / `Ctrl+↓` | Fast scroll                                 |
+| `r`                 | Retry this job                              |
 | `Escape` / `q`      | Close                                       |
 
 **Tabs**: Log · Deps (dependency graph) · History *(coming soon)* · Tests *(coming soon)*
@@ -224,6 +239,17 @@ At every level above `none`, a changed poll tick prints its transitions first, t
 ddgl attach && ./deploy.sh                  # only deploy on success
 ddgl attach --pipeline 98765 --timeout 300  # bounded wait; loop/re-invoke on exit 124
 ```
+
+### Auto-retry failed jobs
+
+```bash
+ddgl attach --retry                                # retry failures as they happen
+ddgl attach --retry --retry-attempts 0             # unlimited retries per job name
+ddgl attach --retry --retry-total 10               # cap the whole run at 10 retries total
+ddgl attach --retry --retry-exclude 'flaky-e2e.*'  # never auto-retry matching job names (repeatable)
+```
+
+Off by default. With `--retry`, any job already failed when you attach — or that fails while polling — is retried automatically, up to `--retry-attempts` (default 2) per job name and `--retry-total` (default 50) across the whole run; either set to `0` for unlimited. Passing `--retry-attempts`, `--retry-total`, or `--retry-exclude` without `--retry` is a usage error (exit 2) rather than a silent no-op. Each accepted retry prints a `[RETRY]` line, and the final line reports the total count.
 
 ## Global Options
 

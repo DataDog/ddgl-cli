@@ -19,15 +19,17 @@ from ddgl.constants import (
     CACHE_TTL_API_JOB_LIST,
     CACHE_TTL_API_PIPELINE,
     CACHE_TTL_API_PIPELINE_LIST,
+    HTTP_RETRY_ATTEMPTS,
+    HTTP_RETRY_BACKOFF_INITIAL_SECONDS,
+    HTTP_RETRY_BACKOFF_MULTIPLIER,
     MAX_CONCURRENT_PAGE_FETCHES,
     MAX_PAGES,
-    RETRY_ATTEMPTS,
-    RETRY_BACKOFF_INITIAL_SECONDS,
-    RETRY_BACKOFF_MULTIPLIER,
+    HttpMethod,
     JobStatus,
     PipelineScope,
 )
 from ddgl.exceptions import (
+    RATE_LIMITED_STATUS_CODES,
     RETRYABLE_STATUS_CODES,
     ConfigError,
     GitLabAPIError,
@@ -48,7 +50,7 @@ logger = logging.getLogger("ddgl.http")
 
 def _backoff_delay(attempt: int) -> float:
     """Exponential backoff delay before the given 0-indexed retry attempt."""
-    return RETRY_BACKOFF_INITIAL_SECONDS * (RETRY_BACKOFF_MULTIPLIER**attempt)
+    return HTTP_RETRY_BACKOFF_INITIAL_SECONDS * (HTTP_RETRY_BACKOFF_MULTIPLIER**attempt)
 
 
 def _retry_after_seconds(resp: httpx.Response) -> float | None:
@@ -68,7 +70,29 @@ def _retry_after_seconds(resp: httpx.Response) -> float | None:
 
 
 class GitLabClient:
-    """Async GitLab REST API client."""
+    """Async GitLab REST API client.
+
+    Method signatures follow one convention: the primary subject of the
+    call is positional (the resource id, or the `ref` being listed), and
+    every option is keyword-only. Options split three ways:
+
+    - **ddgl concerns** — `project_id` (a path component) and `fresh` (a
+      cache-control knob, never sent upstream). Always explicit.
+    - **Common GitLab query params** — `ref`, `per_page`, `scope`.
+      Explicit and typed, because they're used across many call sites and
+      benefit from discoverability.
+    - **Everything else** — collected into `**params` and forwarded
+      verbatim as query parameters, so a one-off param (`include_retried`,
+      and later `order_by`, `source`, `updated_after`, …) doesn't need a
+      signature change on every method in the family.
+
+    Because `**params` is forwarded blind, a misspelled name is silently
+    ignored rather than raising `TypeError`. Two rules keep that safe:
+    callers should not hand-write a raw param at the call site — wrap it
+    in a named, documented method instead (`get_job_attempts` is the
+    reference example) — and any param that acquires a second caller
+    should graduate to an explicit keyword argument.
+    """
 
     def __init__(self, config: Config, cache: Cache | None = None) -> None:
         self._config = config
@@ -104,45 +128,89 @@ class GitLabClient:
         raw = f"{path}?{'&'.join(f'{k}={v}' for k, v in sorted(params.items()))}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    async def _get_response(self, path: str, **params: Any) -> httpx.Response:
-        """GET with automatic retry on transient (retryable) failures.
+    async def _request(
+        self,
+        method: HttpMethod,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        retry_statuses: frozenset[int] = frozenset(),
+        retry_transport: bool = False,
+    ) -> httpx.Response:
+        """Issue one HTTP request, retrying per `retry_statuses`/`retry_transport`.
 
-        Retries a connection-level failure (timeout, DNS, reset — GitLab
-        never even responded) or a retryable HTTP status (408/429/5xx, see
-        RETRYABLE_STATUS_CODES) up to RETRY_ATTEMPTS times, honoring a 429's
-        `Retry-After` header when present.
+        Those two knobs aren't independently chosen per call in practice —
+        each of this method's two callers passes a fixed pair: see their
+        values below. They're still parameters of `_request` (rather than
+        switched on `method` inside this function) because *why* GET and
+        POST differ is idempotency, a property of the specific
+        endpoint/verb that only the caller knows: a GET can always be
+        safely re-sent. A POST cannot: re-sending `POST /jobs/:id/retry`
+        after a timeout or a 502 could mint two jobs, because there is no
+        way to distinguish "GitLab never saw it" from "GitLab processed it
+        and the response was lost on the way back".
 
-        Does NOT raise on a non-2xx response itself — callers still call
-        `_raise_for_status()` on the returned response, so the exact
-        exception mapping (ConfigError/NotFoundError/GitLabAPIError) stays
-        defined in exactly one place. This only decides whether to retry
-        before handing back whatever response (or connection error) it
-        ultimately has.
+        Args:
+            method: HTTP verb, forwarded to `self._http.request`.
+            path: Path relative to the client's `base_url`.
+            params: Query-string parameters. GET only, in practice.
+            json: JSON request body. POST only, in practice.
+            retry_statuses: HTTP status codes to treat as retryable. Empty
+                (the default) means "never retry on status". `_get_response`
+                passes `RETRYABLE_STATUS_CODES` (408/429/5xx); `_post_response`
+                passes `RATE_LIMITED_STATUS_CODES` ({429}) only — a 429 means
+                the request was *rejected* rather than processed, so
+                re-sending it is safe even for a non-idempotent verb.
+            retry_transport: Whether to retry an `httpx.TransportError`
+                (timeout, DNS failure, connection reset — GitLab never
+                responded at all). `_get_response` passes True.
+                `_post_response` passes **False**: "no response" is
+                precisely the ambiguous case where a re-send might
+                duplicate the side effect.
+
+        Retries up to `HTTP_RETRY_ATTEMPTS` times with exponential backoff
+        (`HTTP_RETRY_BACKOFF_INITIAL_SECONDS` *
+        `HTTP_RETRY_BACKOFF_MULTIPLIER` ** attempt), honoring a 429's
+        `Retry-After` header in place of the computed delay when one is
+        present and numeric.
+
+        Returns:
+            The final `httpx.Response`, whatever its status. Deliberately
+            does NOT raise on a non-2xx — callers still run
+            `_raise_for_status`, so the exception mapping
+            (ConfigError/NotFoundError/GitLabAPIError) stays defined in
+            exactly one place.
+
+        Raises:
+            httpx.TransportError: The request never got a response, and
+                either `retry_transport` is False or the attempts were
+                exhausted.
         """
         last_exc: httpx.TransportError | None = None
-        for attempt in range(RETRY_ATTEMPTS):
-            is_last_attempt = attempt == RETRY_ATTEMPTS - 1
+        for attempt in range(HTTP_RETRY_ATTEMPTS):
+            is_last_attempt = attempt == HTTP_RETRY_ATTEMPTS - 1
             try:
-                resp = await self._http.get(path, params=params)
+                resp = await self._http.request(method, path, params=params, json=json)
             except httpx.TransportError as exc:
                 last_exc = exc
-                if is_last_attempt:
+                if not retry_transport or is_last_attempt:
                     raise
                 delay = _backoff_delay(attempt)
                 logger.warning(
-                    "GET %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
-                    path, exc, delay, attempt + 2, RETRY_ATTEMPTS,
+                    "%s %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
+                    method, path, exc, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
                 )
                 await asyncio.sleep(delay)
                 continue
 
-            if resp.status_code not in RETRYABLE_STATUS_CODES or is_last_attempt:
+            if resp.status_code not in retry_statuses or is_last_attempt:
                 return resp
 
             delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
             logger.warning(
-                "GET %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
-                path, resp.status_code, delay, attempt + 2, RETRY_ATTEMPTS,
+                "%s %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
+                method, path, resp.status_code, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
             )
             await asyncio.sleep(delay)
 
@@ -151,8 +219,44 @@ class GitLabClient:
         assert last_exc is not None
         raise last_exc
 
+    async def _get_response(self, path: str, **params: Any) -> httpx.Response:
+        """GET with automatic retry on transient (retryable) failures.
+
+        Retries a connection-level failure (timeout, DNS, reset — GitLab
+        never even responded) or a retryable HTTP status (408/429/5xx, see
+        RETRYABLE_STATUS_CODES) up to HTTP_RETRY_ATTEMPTS times, honoring a
+        429's `Retry-After` header when present. See `_request` for the
+        full retry mechanics — this is a thin GET-flavored wrapper over it.
+
+        Does NOT raise on a non-2xx response itself — callers still call
+        `_raise_for_status()` on the returned response, so the exact
+        exception mapping (ConfigError/NotFoundError/GitLabAPIError) stays
+        defined in exactly one place. This only decides whether to retry
+        before handing back whatever response (or connection error) it
+        ultimately has.
+        """
+        return await self._request(
+            HttpMethod.GET, path, params=params,
+            retry_statuses=RETRYABLE_STATUS_CODES, retry_transport=True,
+        )
+
+    async def _post_response(self, path: str, json: dict[str, Any] | None = None) -> httpx.Response:
+        """POST with automatic retry on a 429 only.
+
+        Unlike GET, a POST isn't idempotent, so it can't be retried as
+        aggressively — see `_request`'s docstring for the full rationale.
+        """
+        return await self._request(
+            HttpMethod.POST, path, json=json,
+            retry_statuses=RATE_LIMITED_STATUS_CODES, retry_transport=False,
+        )
+
     def _raise_for_status(self, resp: httpx.Response) -> None:
         """Translate HTTP errors into typed exceptions.
+
+        The HTTP verb for `GitLabAPIError.method` is read off `resp.request`
+        rather than taken as a parameter — the response already carries it,
+        so there is nothing for a caller to get out of sync with.
 
         Raises:
             ConfigError: HTTP 404 when the project itself is not found.
@@ -173,7 +277,7 @@ class GitLabClient:
                     ) from exc
                 raise NotFoundError(path, "") from exc
             raise GitLabAPIError(
-                resp.status_code, "GET", path,
+                resp.status_code, HttpMethod(resp.request.method), path,
                 resp.text[:200] if resp.text else "",
             ) from exc
 
@@ -206,6 +310,21 @@ class GitLabClient:
             key = self._cache_key(path, params)
             self._cache[CacheNS.API_RESPONSES].set(key, json.dumps(data), ttl=ttl)
         return data
+
+    async def _post(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        """POST and parse the JSON response body.
+
+        Never cached — a POST is a mutation, not a fetch.
+
+        Raises:
+            NotFoundError: HTTP 404 — resource does not exist.
+            GitLabAPIError: any other HTTP error status.
+        """
+        logger.debug("POST %s", path)
+        resp = await self._post_response(path, json=json)
+        logger.debug("POST %s -> %d", path, resp.status_code)
+        self._raise_for_status(resp)
+        return resp.json()
 
     async def _get_text(self, path: str) -> str:
         """Fetch a plain-text response body.
@@ -359,16 +478,21 @@ class GitLabClient:
     async def fetch_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
-        *,
         fresh: bool = False,
+        **params: Any,
     ) -> Page[Pipeline]:
-        """Fetch a single page of pipelines."""
+        """Fetch a single page of pipelines.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Fetching pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -383,14 +507,20 @@ class GitLabClient:
     async def iter_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        **params: Any,
     ) -> AsyncIterator[Page[Pipeline]]:
-        """Stream pages of pipelines."""
+        """Stream pages of pipelines.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Streaming pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -406,14 +536,20 @@ class GitLabClient:
     async def get_all_pipelines(
         self,
         ref: str | None = None,
+        *,
         project_id: str | None = None,
         per_page: int = 20,
         scope: PipelineScope | None = None,
+        **params: Any,
     ) -> list[Pipeline]:
-        """Get all pipelines (exhausts pagination)."""
+        """Get all pipelines (exhausts pagination).
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Getting all pipelines (ref=%s)", ref or "all")
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if ref:
             params["ref"] = ref
         if scope is not None:
@@ -428,8 +564,8 @@ class GitLabClient:
     async def get_pipeline(
         self,
         pipeline_id: int,
-        project_id: str | None = None,
         *,
+        project_id: str | None = None,
         fresh: bool = False,
     ) -> Pipeline:
         """Get details of a single pipeline.
@@ -451,19 +587,48 @@ class GitLabClient:
             raise NotFoundError("pipeline", pipeline_id)
         return Pipeline.from_api(data)
 
+    async def retry_pipeline(
+        self,
+        pipeline_id: int,
+        *,
+        project_id: str | None = None,
+    ) -> Pipeline:
+        """Retry every failed and canceled job in a pipeline.
+
+        Returns only the `Pipeline` — GitLab does not report which jobs it
+        restarted (see `retry_job` for that per-job detail).
+
+        Raises:
+            NotFoundError: pipeline does not exist.
+            GitLabAPIError: other HTTP error (e.g. 403 insufficient token scope).
+        """
+        logger.info("Retrying pipeline %d", pipeline_id)
+        base = self._project_path(project_id)
+        try:
+            data = await self._post(f"{base}/pipelines/{pipeline_id}/retry")
+        except NotFoundError:
+            raise NotFoundError("pipeline", pipeline_id)
+        return Pipeline.from_api(data)
+
     # -- Jobs --
 
     async def fetch_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        **params: Any,
     ) -> Page[Job]:
-        """Fetch a single page of jobs for a pipeline."""
+        """Fetch a single page of jobs for a pipeline.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Fetching jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
         return await self._get_page(
@@ -476,20 +641,31 @@ class GitLabClient:
     async def iter_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
+        fresh: bool = False,
+        **params: Any,
     ) -> AsyncIterator[Page[Job]]:
-        """Stream pages of jobs for a pipeline."""
+        """Stream pages of jobs for a pipeline.
+
+        If *fresh* is True, bypasses the low-level API response cache for
+        each page fetched.
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring).
+        """
         logger.info("Streaming jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
+        ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
         async for page in self._paginate(
             f"{base}/pipelines/{pipeline_id}/jobs",
             Job.from_api,
-            ttl=CACHE_TTL_API_JOB_LIST,
+            ttl=ttl,
             **params,
         ):
             yield page
@@ -497,21 +673,26 @@ class GitLabClient:
     async def get_all_jobs(
         self,
         pipeline_id: int,
+        *,
         project_id: str | None = None,
         per_page: int = 100,
         scope: JobStatus | None = None,
-        *,
         fresh: bool = False,
+        **params: Any,
     ) -> list[Job]:
         """Get all jobs for a pipeline (exhausts pagination).
 
         If *fresh* is True, bypasses the low-level API response cache for
         each page fetched. Used by `ddgl attach` when polling running job
         status (see `get_pipeline`).
+
+        Extra `**params` are forwarded verbatim as query parameters (see
+        the class docstring) — e.g. `include_retried=True`, which
+        `get_job_attempts` wraps.
         """
         logger.info("Getting all jobs for pipeline %d", pipeline_id)
         base = self._project_path(project_id)
-        params: dict[str, Any] = {"per_page": per_page}
+        params["per_page"] = per_page
         if scope is not None:
             params["scope"] = scope
         ttl = 0 if fresh else CACHE_TTL_API_JOB_LIST
@@ -522,9 +703,33 @@ class GitLabClient:
             **params,
         )
 
+    async def get_job_attempts(
+        self,
+        pipeline_id: int,
+        *,
+        project_id: str | None = None,
+    ) -> list[Job]:
+        """Get every job record for a pipeline, including retried ones.
+
+        "Attempts" rather than "retries" to head off an off-by-one: a job
+        that has never been retried has 1 attempt, 0 retries.
+
+        Always `fresh=True` — this backs the retry ledger's per-job-name
+        attempt count, so a cached (stale, up to 15s old) count could let a
+        run exceed `--retry-attempts`. Bypassing the cache also sidesteps
+        a sharper correctness issue: `_get_page`'s cache-hit path always
+        reports a lone cached page as `has_next=False`, so a cached read
+        of a pipeline with more than one page of jobs would silently drop
+        every page past the first.
+        """
+        return await self.get_all_jobs(
+            pipeline_id, project_id=project_id, fresh=True, include_retried=True,
+        )
+
     async def get_job(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> Job:
         """Get details of a single job.
@@ -541,9 +746,35 @@ class GitLabClient:
             raise NotFoundError("job", job_id)
         return Job.from_api(data)
 
+    async def retry_job(
+        self,
+        job_id: int,
+        *,
+        project_id: str | None = None,
+    ) -> Job:
+        """Retry a single job.
+
+        GitLab mints a *new* job record under a different ID — the old
+        job's ID never appears again in the pipeline's job list. Anything
+        tracking retries across attempts (see `get_job_attempts`) must key
+        on the job's NAME, not its ID.
+
+        Raises:
+            NotFoundError: job does not exist.
+            GitLabAPIError: other HTTP error (e.g. 403 insufficient token scope).
+        """
+        logger.info("Retrying job %d", job_id)
+        base = self._project_path(project_id)
+        try:
+            data = await self._post(f"{base}/jobs/{job_id}/retry")
+        except NotFoundError:
+            raise NotFoundError("job", job_id)
+        return Job.from_api(data)
+
     async def get_job_log(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> str:
         """Get the raw log output of a job.
@@ -562,6 +793,7 @@ class GitLabClient:
     async def stream_job_log(
         self,
         job_id: int,
+        *,
         project_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream the raw log of a job line by line.
@@ -580,7 +812,7 @@ class GitLabClient:
                 if resp.status_code == 404:
                     raise NotFoundError("job", job_id) from exc
                 raise GitLabAPIError(
-                    resp.status_code, "GET", path,
+                    resp.status_code, HttpMethod.GET, path,
                     (await resp.aread()).decode()[:200],
                 ) from exc
             async for line in resp.aiter_lines():

@@ -20,6 +20,7 @@ from ddgl.model.attach import (
     PipelineEvent,
     PollEvent,
     ResultEvent,
+    RetryEvent,
     SnapshotEvent,
     SwitchedEvent,
 )
@@ -44,6 +45,11 @@ def _hhmmss(ts: str) -> str:
         return ts
 
 
+def _pluralize_jobs(count: int) -> str:
+    """"1 job" / "2 jobs"."""
+    return f"{count} job" if count == 1 else f"{count} jobs"
+
+
 def _final_text(event: ResultEvent) -> str:
     if event.reason == "timeout":
         if event.pipeline_id is None:
@@ -51,6 +57,8 @@ def _final_text(event: ResultEvent) -> str:
         return f"Timed out waiting for pipeline #{event.pipeline_id} (status: {event.status})."
     status = event.status.upper() if event.status else "UNKNOWN"
     text = f"Pipeline #{event.pipeline_id} {status}."
+    if event.retries:
+        text += f" Auto-retried {_pluralize_jobs(event.retries)}."
     if event.failed_jobs:
         text += f" Failed jobs: {', '.join(event.failed_jobs)}"
     return text
@@ -91,6 +99,11 @@ def event_to_text(event: AttachEvent, detail: DetailLevel = DetailLevel.NORMAL) 
         if detail == DetailLevel.FULL and event.message:
             line += f" — {event.message}"
         return line
+    if isinstance(event, RetryEvent):
+        return (
+            f"[{ts}]{_tag('RETRY')}{event.job_name} failed → retrying "
+            f"(#{event.new_job_id}, attempt {event.attempt})"
+        )
     if isinstance(event, PipelineEvent):
         return f"[{ts}]{_tag('PIPE')}{event.old_status}→{event.status}"
     if isinstance(event, PollEvent):
@@ -155,7 +168,7 @@ async def render_lines(
 # ---------------------------------------------------------------------------
 
 
-def _live_markup(event: AttachEvent, detail: DetailLevel) -> str:
+def _live_markup(event: AttachEvent, detail: DetailLevel, *, retries: int = 0) -> str:
     """Build the redrawing single-line status.
 
     Live mode has no discrete lines to show/hide, so --detail instead scales
@@ -186,6 +199,8 @@ def _live_markup(event: AttachEvent, detail: DetailLevel) -> str:
                 counts += f", failed: {', '.join(event.failed_jobs)}"
             else:
                 counts += f", {len(event.failed_jobs)} failed"
+        if retries:
+            counts += f", {retries} retried"
         bits.append(f"[dim]{counts}[/dim]")
     if event.pipeline_elapsed is not None:
         bits.append(f"[dim]{format_duration(event.pipeline_elapsed)} elapsed[/dim]")
@@ -210,6 +225,8 @@ def _final_renderable(event: ResultEvent) -> RenderableType:
     )
     if event.failed_jobs:
         line += f" · {len(event.failed_jobs)} failed"
+    if event.retries:
+        line += f" · {event.retries} retried"
     if event.duration is not None:
         line += f" · {format_duration(event.duration)}"
 
@@ -226,20 +243,34 @@ async def render_live(events: AsyncIterator[AttachEvent], detail: DetailLevel = 
     one-off line above the live region, at every --detail level including
     "none" — a human watching the live view should never be left wondering
     why the pipeline id silently changed, even if they've asked for minimal
-    ongoing content.
+    ongoing content. A "retry" event is printed the same way, for the same
+    reason — otherwise a job would appear to restart itself — but honours
+    --detail, so "none" stays silent until the final state.
 
     Returns the final `result` event so the caller can map it to an exit
     code — attach() always ends with one.
     """
     result: AttachEvent | None = None
+    # Only the final event carries a retry count, so the live line's count
+    # is accumulated here as retries arrive.
+    retries = 0
     with Live(console=console, refresh_per_second=8) as live:
         async for event in events:
             if isinstance(event, SwitchedEvent):
                 live.console.print(f"[yellow]⚠[/yellow]  {event.message}")
+            if isinstance(event, RetryEvent):
+                retries += 1
+                if _visible_at(event, detail):
+                    live.console.print(
+                        f"[cyan]↻[/cyan]  retrying {event.job_name} "
+                        f"(#{event.new_job_id}, attempt {event.attempt})"
+                    )
             if isinstance(event, ResultEvent):
                 result = event
                 live.update(_final_renderable(event))
                 break
-            live.update(Spinner("dots", text=Text.from_markup(_live_markup(event, detail))))
+            live.update(
+                Spinner("dots", text=Text.from_markup(_live_markup(event, detail, retries=retries)))
+            )
     assert result is not None, "attach() event stream ended without a result event"
     return result

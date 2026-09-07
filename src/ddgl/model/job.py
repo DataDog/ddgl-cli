@@ -7,7 +7,7 @@ from typing import Any
 
 import msgspec
 
-from ddgl.constants import JOB_RUNNING, JobStatus
+from ddgl.constants import JOB_RETRYABLE, JOB_RUNNING, JOB_TERMINAL, JobStatus
 
 
 class Job(msgspec.Struct):
@@ -17,6 +17,10 @@ class Job(msgspec.Struct):
     name: str
     stage: str
     status: JobStatus
+    pipeline_id: int
+    """The containing pipeline's ID, read from the job payload's nested
+    `pipeline` object. Required: every job endpoint GitLab exposes returns
+    it, so a missing one means the payload isn't a job."""
     ref: str = ""
     web_url: str = ""
     allow_failure: bool = False
@@ -42,6 +46,7 @@ class Job(msgspec.Struct):
             name=data["name"],
             stage=data["stage"],
             status=JobStatus(data["status"]),
+            pipeline_id=data["pipeline"]["id"],
             ref=data.get("ref", ""),
             web_url=data.get("web_url", ""),
             allow_failure=data.get("allow_failure", False),
@@ -60,6 +65,11 @@ class Job(msgspec.Struct):
     @property
     def is_running(self) -> bool:
         return self.status in JOB_RUNNING
+
+    @property
+    def is_terminal(self) -> bool:
+        """Reached a status it won't move out of — done, one way or another."""
+        return self.status in JOB_TERMINAL
 
     @property
     def has_failed(self) -> bool:
@@ -81,3 +91,14 @@ class Job(msgspec.Struct):
         of each re-deriving the same boolean.
         """
         return self.has_failed and not self.is_blocking
+
+    @property
+    def is_retryable(self) -> bool:
+        """Failed or canceled — the default candidate set for auto-retry
+        and `ddgl retry`'s targeted mode.
+
+        A deliberate narrowing of GitLab's actual rule, which also permits
+        retrying a *successful* job — `--force` (cli/retry.py) is the
+        escape hatch for that wider set.
+        """
+        return self.status in JOB_RETRYABLE

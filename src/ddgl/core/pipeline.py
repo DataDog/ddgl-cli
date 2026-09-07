@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Iterable
 
@@ -13,6 +12,7 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB, PipelineScope, PipelineStatus
+from ddgl.core._concurrency import gather_bounded
 from ddgl.exceptions import NoPipelineFoundError, ShellError
 from ddgl.git import get_current_branch, get_recent_shas, looks_like_sha
 from ddgl.model.pipeline import Pipeline
@@ -68,10 +68,13 @@ async def get_pipeline(
     pipeline_id: int,
     *,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> Pipeline:
     """Fetch a single pipeline by ID. One API call on cache miss.
 
-    Only SUCCESS pipelines are written to cache (other statuses can still change).
+    Only SUCCESS pipelines are written to cache (other statuses can still
+    change), so *fresh* — which bypasses the low-level API response cache —
+    only matters for a pipeline that hasn't reached SUCCESS yet.
     """
     project_id = client._config.project_id or ""
     if cache is not None:
@@ -81,7 +84,7 @@ async def get_pipeline(
             return msgspec.convert(cached, Pipeline, strict=False)
 
     logger.debug("fetching pipeline %d from API", pipeline_id)
-    pipeline = await client.get_pipeline(pipeline_id)
+    pipeline = await client.get_pipeline(pipeline_id, fresh=fresh)
     cache_terminal_pipeline(cache, project_id, pipeline)
     return pipeline
 
@@ -115,8 +118,8 @@ async def get_pipelines(
 
     misses = [pid for pid in ids if pid not in cached_map]
     if misses:
-        fresh = await asyncio.gather(
-            *[get_pipeline(client, pid, cache=cache) for pid in misses]
+        fresh = await gather_bounded(
+            get_pipeline(client, pid, cache=cache) for pid in misses
         )
         for p in fresh:
             cached_map[p.id] = p
@@ -201,7 +204,7 @@ async def resolve_pipeline(
     walk far back and return an unrelated pipeline.
     """
     if pipeline_id is not None:
-        return await get_pipeline(client, pipeline_id, cache=cache)
+        return await get_pipeline(client, pipeline_id, cache=cache, fresh=fresh)
 
     if ref is None:
         ref = await get_current_branch()

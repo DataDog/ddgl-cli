@@ -3,9 +3,15 @@
 
 from __future__ import annotations
 
+from ddgl.constants import HttpMethod
+
 # Shared with client.py's retry-on-transient-error logic, so the "what counts
 # as retryable" definition lives in exactly one place.
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
+# A 429 means the request was *rejected*, not processed — safe to retry even
+# for a non-idempotent verb (POST). Shared with client.py's _request.
+RATE_LIMITED_STATUS_CODES = frozenset({429})
 
 
 class ConfigError(Exception):
@@ -71,7 +77,7 @@ class GitLabAPIError(Exception):
     def __init__(
         self,
         status_code: int,
-        method: str,
+        method: HttpMethod,
         path: str,
         message: str = "",
     ) -> None:

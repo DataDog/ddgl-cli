@@ -60,7 +60,8 @@ The one genuinely new fetch is the `include_retried=true` job list — but that'
 | Retrying non-failed jobs | `--force` retries everything the filter matched, including successful jobs (§3.7) |
 | What attach auto-retries | Any blocking failure. No `failure_reason` allowlist — but a **name-based exclusion list** is designed in from the start |
 | Retry limits | Per-job-name cap **and** a global total: `--retry-attempts` / `--retry-total` |
-| GitLab's own `retry:` attempts | Counted, via a new `get_job_attempts` client method, looked up **once per job name** then tracked locally |
+| GitLab's own `retry:` attempts | Counted, via a new `get_job_attempts` client method, re-tallied on **every tick that has candidates** — never cached, so attempts GitLab adds later can't be missed (§3.5) |
+| Racing GitLab's own `retry:` | Skip any failed job that already has a newer record under the same name. Not a delay: job statuses are immutable and the payload never says a job *will* be auto-retried, so "has it already been retried?" is the only decidable question (§3.5) |
 | `allow_failure` jobs | Never auto-retried — and the underlying data-model fix ships as **its own PR, first** (§3.2) |
 | Result reporting | Exit code unchanged (0/1/2/124). New `retry` event kind + `ResultEvent.retries` count surfaced in the final line |
 | `attach` default | **No retry by default.** `--retry` opts in, and covers *both* jobs already failed when you attach *and* failures detected while polling |
@@ -243,23 +244,45 @@ Same `Job`-in principle as the styling helpers: `status_token` takes the `Job`, 
 ### 3.3 `core/retry.py` — stateless helpers only
 
 ```python
-async def retry_job(client, job_id, *, cache=None) -> Job
-async def retry_pipeline(client, pipeline_id, *, cache=None) -> Pipeline
+async def retry_job(client, job_id) -> Job
+async def retry_pipeline(client, pipeline_id) -> Pipeline
 async def retry_jobs(client, jobs: Sequence[Job]) -> list[RetryOutcome]
-async def count_attempts(client, pipeline_id, names: set[str]) -> dict[str, int]
+async def tally_attempts(client, pipeline_id, names: set[str]) -> AttemptTally
 
+# selection, used by cli/retry.py (§3.7)
+async def select_by_id(client, job_ids, *, force=False, cache=None) -> RetrySelection
+async def select_in_pipeline(client, pipeline, *, failed_only=False, ...) -> RetrySelection
+```
+
+The data types live in `model/retry.py`, not here: `render/` has to consume them to print the outcome table, and nothing else in `render/` imports from `core/`. This mirrors the split `attach` already uses — engine in `core/attach.py`, event types in `model/attach.py`.
+
+```python
 class RetryOutcome(msgspec.Struct, frozen=True):
     old_job_id: int
     job_name: str
     new_job: Job | None = None
     error: str | None = None
+
+class AttemptTally(msgspec.Struct, frozen=True):
+    counts: dict[str, int]      # attempts recorded per job name
+    newest_ids: dict[str, int]  # the most recent record's ID per job name
+
+    def count(self, name: str) -> int
+    def is_newest(self, job: Job) -> bool
 ```
 
-`retry_jobs` fans out concurrently and **never raises** — a per-job failure lands in that job's `RetryOutcome.error`, so a partial failure is reportable rather than fatal.
+`retry_jobs` fans out concurrently — bounded, via `core/_concurrency.py`'s `gather_bounded`, since a large pipeline can present hundreds of failed jobs at once — and **never raises**: a per-job failure lands in that job's `RetryOutcome.error`, so a partial failure is reportable rather than fatal.
 
-`count_attempts` wraps `client.get_job_attempts` and returns `{name: attempt_count}` for the requested names only.
+`tally_attempts` wraps `client.get_job_attempts` (`include_retried=true`), the only endpoint that reports superseded records. It returns both halves of what the retry policy needs:
 
-No classes, no run-scoped state. The state that `attach` needs lives in `attach` (§3.5).
+- **`counts`** — the per-job-name attempt total, including attempts GitLab made itself via `retry:`. This is the `--retry-attempts` budget.
+- **`newest_ids`** — which record is currently the live one for each name. `is_newest(job)` is how §3.5 avoids racing GitLab's own retry.
+
+Nothing here is cached or carried between calls, so a tally always reflects the instant it was taken.
+
+`retry_job`/`retry_pipeline` take no `cache` argument, unlike the rest of `core/`: a freshly retried job is always `pending` and a retried pipeline always `running`, so neither can ever satisfy the terminal-state gate that makes an object cacheable. They exist so CLI and TUI callers reach retry through `core/` like every other action rather than importing `client.py` directly.
+
+No run-scoped state here. The state that `attach` needs lives in `attach` (§3.5).
 
 Also add `Job.is_retryable` (`status in {FAILED, CANCELED}`) — a deliberate narrowing of GitLab's actual rule, which also permits retrying a *successful* job. `--force` (§3.7) is the escape hatch for the wider set.
 
@@ -282,24 +305,30 @@ class RetryPolicy(msgspec.Struct, frozen=True):
 
 Bolting retry onto `_attach_events` as an extra `if` with a `continue` would be exactly the fiddly special-casing you flagged. Instead, **restructure the loop first, as its own commit**, then add retry to the clean shape.
 
-The current body (`src/ddgl/core/attach.py:288-398`) sleeps at the *top*, which forces the pre-loop code (`src/ddgl/core/attach.py:273-284`) to duplicate the fetch, the caching, the context build and the terminal check. Moving the sleep to the *bottom* lets the initial snapshot become the loop's first iteration, deleting that duplication — and getting "retry jobs that were already failed when you attached" for free, with no second hook point.
+The pre-restructure body sleeps at the *top*, which forces the pre-loop code to duplicate the fetch, the caching, the context build and the terminal check. Making the loop *begin* already holding a tick lets the initial snapshot become its first iteration, deleting that duplication — and getting "retry jobs that were already failed when you attached" for free, with no second hook point.
+
+> [!NOTE]
+> **As built** (commits 2.6–2.7), names differ from the sketch below, which is kept for its rationale rather than as a literal signature list:
+> `_Observation` → `PipelineState` (in `model/attach.py`, with `jobs_done`/`failed_job_names`/`current_stage` as properties); `_observe` → `_get_pipeline_state`; `_transition_events` → `_build_tick_events` (splitting into `_build_pipeline_event` and `_build_job_events`); `_check_follow` → `_check_for_new_pipeline`; `_context` → `EventContext.from_state`; `_result_event`/`_timeout_event` → `ResultEvent.terminal`/`.timed_out`. Every helper is private; `attach` is the module's only public name.
 
 #### The extracted pieces, in detail
 
 ```python
-class _Observation(msgspec.Struct):
-    """One poll tick's complete view of the world."""
+class PipelineState(msgspec.Struct):
+    """A pipeline and the jobs belonging to it, at one point in time."""
     pipeline: Pipeline
     jobs: list[Job]
 ```
 
-**`async def _observe(client, pipeline_id, *, cache, project_id) -> _Observation`**
+**`async def _get_pipeline_state(client, pipeline_id, *, cache, project_id) -> PipelineState`**
 
-The I/O step. Does the two cache-bypassed fetches the loop body does today (`src/ddgl/core/attach.py:339-340`) and writes terminal jobs / SUCCESS pipelines to the durable object cache (`src/ddgl/core/attach.py:356-357`). Raises on API or transport error — it does *not* decide whether that's fatal. The `MAX_CONSECUTIVE_POLL_FAILURES` counter and its log-and-skip behaviour stay in the loop, verbatim from `src/ddgl/core/attach.py:341-354`, because that policy is about the *run*, not about one fetch.
+The I/O step: the two cache-bypassed fetches the loop body does inline today, plus the durable-cache writes for terminal jobs / SUCCESS pipelines. Raises on API or transport error — it does *not* decide whether that's fatal. The `MAX_CONSECUTIVE_POLL_FAILURES` counter and its log-and-skip behaviour stay in the loop, because that policy is about the *run*, not about one fetch.
 
-**`def _transition_events(prev, curr, *, ctx, heartbeat) -> list[AttachEvent]`**
+Not used for the first tick, nor for a `--follow` switch: in both cases the pipeline is already in hand (from resolving it, and from the listing that found it, respectively), so routing them through a function that always re-fetches would add a request per attach invocation and per switch that today's code doesn't make.
 
-The diffing step, and the main thing being lifted out of the loop — today it's the inline block at `src/ddgl/core/attach.py:362-391`. Given the previous observation and the current one, it returns the ordered list of events describing what changed:
+**`def _build_tick_events(prev, curr, *, context, heartbeat) -> list[AttachEvent]`**
+
+The diffing step, and the main thing being lifted out of the loop. Given the previous tick and the current one, it returns the ordered list of events describing what changed:
 
 | Condition | Event produced |
 | --- | --- |
@@ -314,59 +343,56 @@ Crucially it is a **pure function with no I/O**, so "which events does this tran
 
 **`async def _apply_retry_policy(client, curr, policy, ledger) -> list[RetryOutcome]`**
 
-The only impure retry step. Returns `[]` immediately when the policy is disabled, so the default (no-retry) path costs one boolean check. Otherwise it picks candidates from `curr.jobs`, consults and updates the ledger (§3.5), issues the POSTs via `core.retry.retry_jobs`, and returns the outcomes.
+The only impure retry step. Returns `[]` immediately when the policy is disabled, so the default (no-retry) path costs one boolean check. Otherwise it applies the candidate gate from §3.5 — including the one `tally_attempts` call, made only if candidates survive the local checks — issues the POSTs via `core.retry.retry_jobs`, updates the ledger, and returns the outcomes.
 
-**`def _retry_events(outcomes, ctx) -> list[AttachEvent]`**
+**`def _build_retry_events(outcomes, tally, context) -> list[RetryEvent]`**
 
-Pure. Maps each *successful* `RetryOutcome` to a `RetryEvent`. Failed outcomes produce no event — they're logged (and a 403 additionally disables the policy).
+Pure. Maps each *successful* `RetryOutcome` to a `RetryEvent`, taking `attempt` from the tally. Failed outcomes produce no event — they're logged, and change nothing about the policy.
 
-**`def _is_finished(curr, *, retries_issued) -> bool`**
+**Termination and retries**
 
-Pure, and the single place the retry-vs-terminal rule is expressed:
+`attach` must not stop on a pipeline it has just retried: GitLab still reports that pipeline as terminal because it hasn't processed the retry yet, and it is about to move back to `running`. So the stop condition is `curr.pipeline.is_finished and not retries_issued_this_tick`, gating on *successful* retries — a tick where every retry was rejected still terminates normally instead of hanging until `--timeout`.
 
-```python
-def _is_finished(curr: _Observation, *, retries_issued: int) -> bool:
-    """Whether attach should stop.
+This lives inline in the loop rather than in a named helper: one caller, one boolean expression.
 
-    A pipeline we just successfully retried is reported as terminal by
-    GitLab only because GitLab hasn't processed the retry yet — it is
-    about to move back to `running`. Gating on *successful* retries (not
-    merely attempted ones) means a run where every retry 403s still
-    terminates normally instead of hanging until --timeout.
-    """
-    return curr.pipeline.is_finished and retries_issued == 0
-```
+**`async def _check_for_new_pipeline(client, curr, *, cache, project_id) -> PipelineState | None`**
 
-**`async def _check_follow(client, curr, *, cache) -> Pipeline | None`**
-
-`--follow`: returns a newer pipeline for the ref, or `None`. **Never raises** — an error here just means "no follow this tick" and must not count toward the poll-failure budget, preserving today's behaviour at `src/ddgl/core/attach.py:296-309`.
+`--follow`: returns the *full state* of a newer pipeline for the ref, or `None`. **Never raises** — an error here just means "no follow this tick" and must not count toward the poll-failure budget. Returns state rather than a bare `Pipeline` so the switch needs no follow-up fetch (see `_get_pipeline_state` above).
 
 #### The resulting loop
 
 ```python
-prev: _Observation | None = None
+prev: PipelineState | None = None
+curr = PipelineState(pipeline=resolved, jobs=await client.get_all_jobs(...))
 while True:
-    curr = await _observe(...)                       # + the failure-budget try/except
-    for ev in _transition_events(prev, curr, ctx=ctx, heartbeat=heartbeat):
+    context = EventContext.from_state(curr)
+    for ev in _build_tick_events(prev, curr, context=context, heartbeat=heartbeat):
         yield ev
 
     outcomes = await _apply_retry_policy(client, curr, policy, ledger)
-    for ev in _retry_events(outcomes, ctx):
+    for ev in _build_retry_events(outcomes, tally, context):
         yield ev
 
-    if _is_finished(curr, retries_issued=_n_successes(outcomes)):
-        yield _result_event(curr, reason="terminal")
+    if curr.pipeline.is_finished and not _n_successes(outcomes):
+        yield ResultEvent.terminal(curr, context, retries=ledger.total_issued)
         return
 
     prev = curr
-    await asyncio.sleep(interval)
-
-    if follow and (newer := await _check_follow(client, curr, cache=cache)):
-        yield SwitchedEvent(...)
-        pipeline_id, prev = newer.id, None   # prev=None ⇒ re-snapshot, not a bogus diff
+    while True:                       # acquire the next tick
+        await asyncio.sleep(interval)
+        if follow and (switched := await _check_for_new_pipeline(...)):
+            yield SwitchedEvent(...)
+            prev, curr = None, switched   # prev=None ⇒ re-snapshot, not a bogus diff
+            break
+        try:
+            curr = await _get_pipeline_state(...)
+        except (GitLabAPIError, httpx.TransportError):
+            ...                       # failure budget; loop back to the sleep
+            continue
+        break
 ```
 
-Setting `prev = None` on a follow-switch is a genuine simplification: the next iteration naturally emits a fresh snapshot for the new pipeline, replacing the bespoke switch handling at `src/ddgl/core/attach.py:310-327`.
+The loop starting with `curr` already populated is what makes the first tick an ordinary iteration. Setting `prev = None` on a follow-switch is a genuine simplification: the next pass naturally emits a fresh snapshot for the new pipeline, replacing the bespoke switch handling. The inner acquisition loop is what keeps a failed tick from re-emitting the previous tick's events (a bare `continue` on the outer loop would re-diff the unchanged state and fire a spurious heartbeat).
 
 > [!IMPORTANT]
 > **Acceptance criterion for the restructure commit:** `tests/core/test_attach.py` passes **unchanged**. It must preserve `MAX_CONSECUTIVE_POLL_FAILURES`, the `--follow` check's independent (non-counting) failure handling, the early "attached, jobs not yet loaded" snapshot, and the `poll`-vs-`heartbeat` rollup semantics.
@@ -375,20 +401,51 @@ Setting `prev = None` on a follow-switch is a genuine simplification: the next i
 
 ---
 
-### 3.5 The retry ledger in `attach`
+### 3.5 Choosing what to retry in `attach`
 
-Two structures, local to one attach run, each answering a different question:
+#### Not racing GitLab's own `retry:`
+
+A job configured with `retry:` in its YAML is retried by GitLab itself, with no involvement from us. If `attach` also retries it, the pipeline runs that job twice for one failure.
+
+Two facts shape the fix:
+
+> [!IMPORTANT]
+> **A job record's status is immutable once terminal.** A record that failed is failed forever; GitLab never rewrites it to `running`. What a retry changes is *which records the job list returns*: the superseded record is marked retried and so **vanishes** from the default (`include_retried=false`) list, replaced by a new record with a new ID under the same name.
+>
+> **Nothing in the job payload says a job will be auto-retried.** The API exposes no `retry:`/`retries_max` field, so "is GitLab going to handle this one?" cannot be answered by inspecting the failed job.
+
+So neither waiting nor inspecting the job works. What *is* decidable is whether a retry has already happened:
+
+**A failed job is a candidate only if no record with the same name has a higher ID** — `AttemptTally.is_newest(job)`.
+
+That is a fact rather than a timing heuristic: no clock arithmetic, no dependence on GitLab's worker latency, and no added latency for the user. It covers GitLab's `retry:`, a concurrent `ddgl` run, and a human clicking Retry in the web UI, without distinguishing between them — in every case a newer record exists and there is nothing for us to do.
+
+> [!NOTE]
+> **A residual window remains, and is harmless.** Between a job failing and GitLab creating the replacement, no newer record exists, so a poll landing in that window still issues a retry. The window is GitLab's internal worker latency, and the outcome is either a `403` (the record became non-retryable first — logged, run continues) or one extra build. Both are cheaper than the alternatives: a fixed delay guesses at that latency, and for the most common failure (`script_failure`) it would be pure added latency, since the code under test is identical either way. `retry: { when: runner_system_failure }` is GitLab's own, better-targeted tool for "only retry infrastructure failures".
+
+#### The candidate gate
+
+Applied to each job in the tick, in this order — cheap and local checks first, so the API call is skipped entirely on a tick with no plausible candidates:
+
+1. `job.is_blocking` — failed, and not an allowed failure.
+2. `job.id not in posted_job_ids` — we haven't already retried this exact record.
+3. `not any(re.search(p, job.name) for p in policy.exclude)`.
+4. `total_issued < policy.total` (`0` = unlimited).
+5. **`tally.is_newest(job)`** — nothing has already retried it (above).
+6. `tally.count(job.name) - 1 < policy.attempts_per_job` (`0` = unlimited). Minus one because a job that has never been retried already has one attempt.
+
+Steps 5 and 6 need the tally, so `tally_attempts` is called **once per tick that has jobs surviving steps 1–4** — not once per job, and not at all on a tick with no failures.
+
+#### Run-scoped state
 
 | Structure | Question it answers | Why it exists |
 | --- | --- | --- |
-| `attempts: dict[str, int]` | "How many times has *this job name* been attempted, counting GitLab's own `retry:` and any earlier manual retries?" | The per-job budget. Keyed on **name** because IDs don't survive a retry. |
-| `posted_job_ids: set[int]` | "Have we already sent a retry for *this exact job record*?" | Idempotency. GitLab may still report the old failed record on the next tick before the new one appears — without this we'd double-retry. |
+| `posted_job_ids: set[int]` | "Have we already sent a retry for *this exact job record*?" | GitLab may not have processed our POST by the next tick, so the old failed record can still be the newest one for its name. Without this we would retry it again. |
+| `total_issued: int` | "How much of the global `--retry-total` budget is spent?" | The only counter that has to survive across ticks. |
 
-`attempts` is **seeded lazily and looked up at most once per job name**: the first time a name becomes a retry candidate, `count_attempts` fetches its real prior-attempt count from GitLab (`get_job_attempts`); from then on the entry is incremented locally as we issue retries. On a quiet tick with no failures, there is no lookup at all.
+Deliberately **not** run-scoped state: the per-name attempt count. Re-tallying every candidate tick costs one call — the same call `attach` already makes twice per tick for the pipeline and job list — and in exchange the count can never drift. Caching it per name would leave any attempt GitLab added afterwards uncounted, letting a run quietly exceed `--retry-attempts`.
 
-The budget check before issuing is then a plain dict read: `attempts[name] - 1 < policy.attempts_per_job`, plus the global `total_issued < policy.total`, plus `not any(re.search(p, name) for p in policy.exclude)`.
-
-A `403` from any retry logs a warning once and disables auto-retry for the rest of the run — a read-only token shouldn't kill an otherwise-working attach.
+A `403` on an individual retry is logged and the run continues. There is no policy-disabling behaviour: the most likely cause is the benign race above, and conflating that with a read-only token would switch the feature off mid-run for something that is working as intended.
 
 ---
 
@@ -551,24 +608,24 @@ The TUI's post-retry reload passes `fresh=True`. Purely additive, default-off �
 
 Small, standalone, no retry code. Merges before PR 2 starts.
 
-- [ ] **1.1 `feat(model): distinguish blocking from allowed job failures`**
+- [x] **1.1 `feat(model): distinguish blocking from allowed job failures`**
       `Job.is_blocking`; corrected `has_failed` docstring.
       *Verify:* `tests/test_models.py` covers the `allow_failure` × `status` matrix.
 
-- [ ] **1.2 `feat(core): exclude allowed failures from failure reporting`**
+- [x] **1.2 `feat(core): exclude allowed failures from failure reporting`**
       `attach._rollup` and `jobs.filter_jobs` switch to `is_blocking`.
       *Verify:* new tests assert an `allow_failure` job no longer appears in `failed_jobs` or under `failed_only`.
 
-- [ ] **1.3 `feat(cli): add --include-allowed-failures`**
+- [x] **1.3 `feat(cli): add --include-allowed-failures`**
       New option in `_options.py`, threaded through `jobs list` / `jobs get` / `logs`.
 
-- [ ] **1.4 `feat(render): give allowed failures their own colour`**
+- [x] **1.4 `feat(render): give allowed failures their own colour`**
       `render/_styles.py` + `render/job.py`; the status→style lookups become job-aware (§3.2).
 
-- [ ] **1.5 `feat(tui): give allowed failures their own glyph and colour`**
+- [x] **1.5 `feat(tui): give allowed failures their own glyph and colour`**
       `tui/widgets/status.py` + `job_list.py`, both moving to `Job`-taking lookups.
 
-- [ ] **1.6 `feat(tui): filter on allowed failures`**
+- [x] **1.6 `feat(tui): filter on allowed failures`**
       `status_token(job)` helper; `status:allowed-failure` search token; dropdown entry (`src/ddgl/tui/app.py:74`); status-rank row in `job_list.py`.
       *Verify:* `tests/tui/test_widgets/test_job_list.py` and a new case in the search tests — `status:failed` excludes allowed failures, `status:allowed-failure` selects exactly them.
 
@@ -576,61 +633,66 @@ Small, standalone, no retry code. Merges before PR 2 starts.
 
 #### Phase 0 — client foundations
 
-- [ ] **2.1 `chore(constants): rename RETRY_* to HTTP_RETRY_*, add HttpMethod`**
+- [x] **2.1 `chore(constants): rename RETRY_* to HTTP_RETRY_*, add HttpMethod`**
       Pure rename plus the new enum. No behaviour change.
 
-- [ ] **2.2 `refactor(client): extract a shared retry-aware request helper`**
+- [x] **2.2 `refactor(client): extract a shared retry-aware request helper`**
       `_request(method, ...)` with the full docstring from §3.1; `_get_response` becomes a thin call into it; `_raise_for_status(resp, method: HttpMethod)`; `GitLabAPIError.method` re-typed.
       *Verify:* `tests/test_client.py` passes **unchanged**.
 
-- [ ] **2.3 `feat(client): add POST support and the retry endpoints`**
+- [x] **2.3 `feat(client): add POST support and the retry endpoints`**
       `_post_response`/`_post`, `retry_job`, `retry_pipeline`, `get_all_jobs(include_retried=)`, `get_job_attempts`.
       *Verify:* respx tests for the happy path, `403`/`404` mapping, `include_retried` propagation, `429`+`Retry-After` **is** retried, and **no re-POST on 5xx or transport error**.
 
 #### Phase 1 — core + CLI
 
-- [ ] **2.4 `feat(core): add the retry module`**
+- [x] **2.4 `feat(core): add the retry module`**
       `core/retry.py`; `Job.is_retryable` + `JOB_RETRYABLE`; `RetryPolicy` in `model/attach.py`; `DEFAULT_JOB_RETRY_*` constants.
+      *Shipped also:* `RetryOutcome` lives in `model/retry.py`, not `core/` (§3.3); `retry_jobs` bounded by `core/_concurrency.py`'s `gather_bounded`.
 
-- [ ] **2.5 `feat(cli): add the ddgl retry command`**
+- [x] **2.5 `feat(cli): add the ddgl retry command`**
       `cli/retry.py` + `render/retry.py`, registered in `cli/__init__.py`.
       *Verify:* `tests/cli/test_retry.py` — mode selection, `--job` overriding other filters, `--force`, the non-TTY-without-`-y` error, exit codes, `--json` shape.
+      *Shipped also:* job selection lives in `core/retry.py` (`select_by_id`/`select_in_pipeline` → `RetrySelection`) and JSON emission in `render/retry.py`, so the CLI only parses flags and delegates; `Job.pipeline_id` added so `--job` can name its pipeline.
 
 #### Phase 2 — attach
 
-- [ ] **2.6 `refactor(core): restructure the attach poll loop into named phases`**
-      `_Observation`, `_observe`, `_transition_events`, `_check_follow`, `_is_finished`; sleep moves to the loop's tail; the pre-loop snapshot duplication is deleted.
-      *Verify:* `tests/core/test_attach.py` passes **unchanged** (§3.4).
+- [x] **2.6 `refactor(core): restructure the attach poll loop into named phases`**
+      `PipelineState`, `_get_pipeline_state`, `_build_tick_events`, `_check_for_new_pipeline`; the loop begins already holding a tick, so the pre-loop snapshot duplication is deleted.
+      *Verify:* `tests/core/test_attach.py` passes **unchanged** (§3.4). ✅ — all 26 pre-existing tests untouched.
+      *Note:* `_is_finished` was written as specced and then removed in the same phase — its `retries_issued` argument was a constant `0` with no caller until 2.8 (§3.4).
 
-- [ ] **2.7 `feat(model): add the attach retry event`**
+- [x] **2.7 `feat(model): add the attach retry event`**
       `RetryEvent`, `ResultEvent.retries`.
-      *Verify:* JSONL round-trip carries `"kind": "retry"`.
+      *Verify:* JSONL round-trip carries `"kind": "retry"`. ✅
 
-- [ ] **2.8 `feat(core): auto-retry failed jobs in attach`**
-      `_apply_retry_policy`, `_retry_events`, the two ledger structures, `_is_finished`'s `retries_issued` argument.
-      *Verify:* the scenario matrix in §5.
+- [x] **2.8 `feat(core): auto-retry failed jobs in attach`**
+      `_apply_retry_policy`, `_build_retry_events`, `AttemptTally` + `tally_attempts` (replacing `count_attempts`), the `posted_job_ids`/`total_issued` ledger, and the newest-record gate (§3.5).
+      *Verify:* the scenario matrix in §5. ✅ — 14 scenario tests, all three gates mutation-verified.
 
-- [ ] **2.9 `feat(render): surface retries in attach output`**
+- [x] **2.9 `feat(render): surface retries in attach output`**
       `[RETRY]` line, final-line count, live-line count.
 
-- [ ] **2.10 `feat(cli): add --retry flags to attach`**
+- [x] **2.10 `feat(cli): add --retry flags to attach`**
       `--retry`, `--retry-attempts`, `--retry-total`, `--retry-exclude`; usage error when a tuning flag appears without `--retry`.
 
 #### Phase 3 — TUI
 
-- [ ] **2.11 `refactor(core): thread fresh through get_pipeline and list_jobs`** (§3.10)
+- [x] **2.11 `refactor(core): thread fresh through get_pipeline and list_jobs`** (§3.10)
+      *Shipped also:* `client.iter_jobs` was missing `fresh` outright (only `get_pipeline`/`get_all_jobs` had it); a companion fix threaded `fresh` through `resolve_pipeline`'s `pipeline_id` branch, which had silently dropped it since before this plan.
 
-- [ ] **2.12 `feat(tui): add a ConfirmModal widget`**
+- [x] **2.12 `feat(tui): add a ConfirmModal widget`**
 
-- [ ] **2.13 `feat(tui)!: move refresh to ctrl+r and bind r to retry`**
+- [x] **2.13 `feat(tui)!: move refresh to ctrl+r and bind r to retry`**
       Both bindings, `action_retry_job`, the worker, and the `help.py` entry in one commit — splitting them would leave a revision with no refresh key.
 
-- [ ] **2.14 `feat(tui): retry from the job detail screen`**
+- [x] **2.14 `feat(tui): retry from the job detail screen`**
       `r` binding, job swap, `JobRetried` message.
+      *Note:* this commit and 2.13 never actually passed `fresh=True` from `_manual_refresh` despite 2.11 adding the capability for exactly this — caught while writing 2.15 and fixed in a standalone `fix(tui)` commit.
 
 #### Phase 4 — docs
 
-- [ ] **2.15 `docs: document retry`**
+- [x] **2.15 `docs: document retry`**
       README workflows + the `ctrl+r` keybinding change; `DEVELOPER.md` gets a `core/retry.py` section, the `RetryEvent` row, the restructured-attach-loop description, the POST-is-not-retried rationale, and the transport-retry vs job-retry disambiguation.
 
 ---
@@ -647,29 +709,32 @@ Tests mirror the source tree, one file per module, hermetic (local stubs — per
 | `tests/core/test_jobs.py` | `filter_jobs(failed_only=)` now excludes allowed failures |
 | `tests/render/test_job.py` | Allowed failures render in the warning style |
 | `tests/test_client.py` | The `_request` policy table; POST happy path; `403`/`404`; **no retry on 5xx/transport**; `429`+`Retry-After` *is* retried; `include_retried`; `get_job_attempts` |
-| `tests/core/test_retry.py` | `retry_jobs` partial failure → populated `RetryOutcome.error`; `count_attempts` counting |
+| `tests/core/test_retry.py` | `retry_jobs` partial failure → populated `RetryOutcome.error`; `tally_attempts` counts and newest-ID tracking; `select_*` gating |
 | `tests/render/test_retry.py` | Table + JSON output |
 | `tests/render/test_attach.py` | `[RETRY]` line, retry counts in final/live lines, per-`--detail` visibility |
 | `tests/tui/test_widgets/test_confirm.py` | Confirm/cancel dismissal values |
 
 ### `tests/core/test_attach.py` — the scenario matrix
 
-The pure helpers (`_transition_events`, `_is_finished`, `_retry_events`) get direct table-driven tests; the rest go through the engine with respx.
+The pure helpers (`_build_tick_events`, `_build_retry_events`) get direct table-driven tests; the rest go through the engine with respx.
 
 | Scenario | Expected |
 | --- | --- |
 | Job fails mid-run, `--retry` on | One POST, one `RetryEvent`, **no `result` event that tick** |
 | Pipeline already `failed` at attach time | Retried on the first loop iteration; no immediate `result` |
 | Same job still failed next tick (GitLab lag) | **No second POST** — `posted_job_ids` guard |
-| Job name already has 3 records via `get_job_attempts` | Skipped at `--retry-attempts 2` |
-| Same job name fails twice more in one run | **Only one** `get_job_attempts` call — the ledger is seeded once |
+| **A newer record exists for the job's name** | **No POST** — something already retried it (§3.5) |
+| Job name already has 3 records in the tally | Skipped at `--retry-attempts 2` |
+| Same job name fails on two separate ticks | **One `get_job_attempts` call per tick** — the tally is never cached, so a count GitLab changed in between is picked up |
 | Global `--retry-total` exhausted | Later candidates skipped |
 | Job name matches `--retry-exclude` | Never retried, no lookup |
 | `allow_failure: true` job fails | Never auto-retried |
-| Every retry returns `403` | Warn once, auto-retry disabled, attach still reaches a normal `result` |
+| A retry returns `403` | Logged; **auto-retry stays enabled**, other candidates still retried, attach reaches a normal `result` |
+| Every retry returns `403` | `ResultEvent.retries == 0`, normal `result` rather than hanging to `--timeout` |
 | `--retry` off | **Zero POSTs** — assert the respx route was never called |
 | Retries happened, pipeline ends `success` | Exit `0`, `ResultEvent.retries == N` |
 | No failed jobs on a tick | **No `get_job_attempts` fetch** (cost guard) |
+| Only excluded/over-budget candidates on a tick | **No `get_job_attempts` fetch** — local gates run first |
 
 ### Integration / TUI
 
@@ -703,3 +768,9 @@ The pure helpers (`_transition_events`, `_is_finished`, `_retry_events`) get dir
 1. **`--retry-total 50`** — right default for a 700-job pipeline, or unlimited by default?
 2. **`ctrl+r` for refresh** — or would you rather refresh went to `F5`?
 3. **Spec location** — `AGENTS.md` says `plans/`, but the attach feature used `docs/superpowers/specs/`. I'll write this design to `docs/superpowers/specs/2026-08-27-ddgl-retry-design.md` to match precedent unless you'd rather it went to `plans/`.
+
+### Resolved during implementation
+
+- **Racing GitLab's own `retry:`** — the original design counted GitLab's attempts toward the budget but never addressed the double-retry risk, and its "a `403` disables auto-retry for the run" rule would have misfired on exactly that race (an already-retried job is non-retryable, so it answers `403`). Resolved by the newest-record gate and by dropping the disable rule outright — §3.5. A fixed delay was considered and rejected there.
+- **Attempt-count caching** — the original "looked up at most once per job name" let GitLab's later `retry:` attempts go uncounted, so a run could exceed `--retry-attempts`. Now re-tallied per candidate tick; the count is no longer run-scoped state — §3.5.
+- **Read-only token handling** — the `403`-disables-the-policy mechanism is gone entirely. Not worth the state machine, and it conflated an auth problem with a benign race.

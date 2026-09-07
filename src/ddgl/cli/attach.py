@@ -6,15 +6,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 
 import httpx
 import rich_click as click
+from click.core import ParameterSource
 
 from ddgl.cache import Cache
 from ddgl.cli._options import CACHE_DIR, pipeline_resolution_options
 from ddgl.client import GitLabClient
 from ddgl.config import load_config
+from ddgl.constants import DEFAULT_JOB_RETRY_ATTEMPTS, DEFAULT_JOB_RETRY_TOTAL
 from ddgl.core.attach import attach
 from ddgl.exceptions import (
     ConfigError,
@@ -22,11 +25,61 @@ from ddgl.exceptions import (
     NoPipelineFoundError,
     NotFoundError,
 )
-from ddgl.model.attach import AttachEvent, DetailLevel
+from ddgl.model.attach import AttachEvent, DetailLevel, RetryPolicy
 from ddgl.render._console import console
 from ddgl.render.attach import render_lines, render_live
 
 _DETAIL_CHOICES = tuple(level.value for level in DetailLevel)
+
+_RETRY_TUNING_PARAMS = ("retry_attempts", "retry_total", "retry_exclude")
+
+
+def _explicit_tuning_flags(ctx: click.Context) -> list[str]:
+    """Names of the retry tuning flags the invocation actually set.
+
+    Distinguishing these from their defaults is what lets `--retry-total 5`
+    without `--retry` be reported rather than silently ignored.
+    """
+    defaults = (ParameterSource.DEFAULT, ParameterSource.DEFAULT_MAP)
+    return [
+        f"--{name.replace('_', '-')}"
+        for name in _RETRY_TUNING_PARAMS
+        if ctx.get_parameter_source(name) not in defaults
+    ]
+
+
+def _retry_policy(
+    ctx: click.Context,
+    *,
+    retry: bool,
+    attempts: int,
+    total: int,
+    exclude: tuple[str, ...],
+) -> RetryPolicy:
+    """Build the policy from the flags, or exit 2 if they don't make sense.
+
+    Rejects tuning without `--retry`, and an unparseable `--retry-exclude`
+    pattern — which would otherwise surface as a traceback mid-run, on
+    whichever poll tick first had a candidate to match it against.
+    """
+    if not retry and (tuning := _explicit_tuning_flags(ctx)):
+        click.echo(
+            f"Error: {', '.join(tuning)}{' has' if len(tuning) == 1 else ' have'}"
+            " no effect without --retry.",
+            err=True,
+        )
+        sys.exit(2)
+
+    for pattern in exclude:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            click.echo(f"Error: --retry-exclude {pattern!r} is not a valid regex: {exc}", err=True)
+            sys.exit(2)
+
+    return RetryPolicy(
+        enabled=retry, attempts_per_job=attempts, total=total, exclude=exclude,
+    )
 
 
 @click.command()
@@ -59,6 +112,30 @@ _DETAIL_CHOICES = tuple(level.value for level in DetailLevel)
     "--timeout", default=None, type=float,
     help="Max seconds to block. On elapse while still running, exit 124.",
 )
+@click.option(
+    "--retry", is_flag=True, default=False,
+    help=(
+        "Auto-retry failed jobs — both those already failed when attaching and "
+        "any that fail while polling."
+    ),
+)
+@click.option(
+    "--retry-attempts", type=click.IntRange(min=0),
+    default=DEFAULT_JOB_RETRY_ATTEMPTS, show_default=True,
+    help=(
+        "Retries allowed per job name, counting GitLab's own `retry:` attempts. "
+        "`0` for unlimited. Requires `--retry`."
+    ),
+)
+@click.option(
+    "--retry-total", type=click.IntRange(min=0),
+    default=DEFAULT_JOB_RETRY_TOTAL, show_default=True,
+    help="Retries allowed across the whole run. `0` for unlimited. Requires `--retry`.",
+)
+@click.option(
+    "--retry-exclude", multiple=True, metavar="REGEX",
+    help="Never auto-retry jobs whose name matches (repeatable). Requires `--retry`.",
+)
 @click.option("--json", "output_json", is_flag=True, default=False, help="Force JSONL output, even in a TTY.")
 @click.option("--plain", is_flag=True, default=False, help="Force append-only line output (override TTY auto-detect).")
 @click.option("--live", "force_live", is_flag=True, default=False, help="Force the redrawing TTY view (override non-TTY auto-detect).")
@@ -74,6 +151,10 @@ def attach_cmd(
     no_wait: bool,
     follow: bool,
     timeout: float | None,
+    retry: bool,
+    retry_attempts: int,
+    retry_total: int,
+    retry_exclude: tuple[str, ...],
     output_json: bool,
     plain: bool,
     force_live: bool,
@@ -87,11 +168,15 @@ def attach_cmd(
         click.echo("Error: --plain and --live are mutually exclusive.", err=True)
         sys.exit(2)
 
+    policy = _retry_policy(
+        ctx, retry=retry, attempts=retry_attempts, total=retry_total, exclude=retry_exclude,
+    )
+
     no_cache = (ctx.obj or {}).get("no_cache", False)
     exit_code = asyncio.run(_attach(
         ref=ref, pipeline_id=pipeline_id, depth=depth, interval=interval,
         heartbeat=heartbeat, detail=detail, wait_for_start=not no_wait,
-        follow=follow, timeout=timeout, output_json=output_json,
+        follow=follow, timeout=timeout, retry_policy=policy, output_json=output_json,
         plain=plain, force_live=force_live, no_cache=no_cache,
     ))
     sys.exit(exit_code)
@@ -126,6 +211,7 @@ async def _attach(
     wait_for_start: bool,
     follow: bool,
     timeout: float | None,
+    retry_policy: RetryPolicy,
     output_json: bool,
     plain: bool,
     force_live: bool,
@@ -142,7 +228,7 @@ async def _attach(
                     client,
                     ref=ref, pipeline_id=pipeline_id, depth=depth, interval=interval,
                     heartbeat=heartbeat, wait_for_start=wait_for_start, follow=follow,
-                    timeout=timeout, cache=cache,
+                    timeout=timeout, retry_policy=retry_policy, cache=cache,
                 )
                 if use_live:
                     result = await render_live(events, detail=detail_level)

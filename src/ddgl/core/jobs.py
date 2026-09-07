@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
@@ -13,13 +12,10 @@ from ddgl.cache.cache import Cache
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import CACHE_TTL_FINISHED_JOB, JobStatus
+from ddgl.core._concurrency import gather_bounded
 from ddgl.model.job import Job
 
 logger = logging.getLogger("ddgl.core.jobs")
-
-JOB_TERMINAL = frozenset(
-    {JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELED, JobStatus.SKIPPED}
-)
 
 
 def cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: Iterable[Job]) -> None:
@@ -27,7 +23,7 @@ def cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: Iterable[Job
     if cache is None:
         return
     for job in jobs:
-        if job.status in JOB_TERMINAL:
+        if job.is_terminal:
             cache[CacheNS.OBJECTS].set(
                 ("jobs", project_id, job.id), job, ttl=CACHE_TTL_FINISHED_JOB
             )
@@ -60,9 +56,7 @@ async def get_jobs(
 
     misses = [jid for jid in ids if jid not in cached_map]
     if misses:
-        fresh: list[Job] = list(
-            await asyncio.gather(*[client.get_job(jid) for jid in misses])
-        )
+        fresh: list[Job] = await gather_bounded(client.get_job(jid) for jid in misses)
         cache_terminal_jobs(cache, project_id, fresh)
         for j in fresh:
             cached_map[j.id] = j
@@ -86,14 +80,16 @@ async def list_jobs(
     *,
     scope: JobStatus | None = None,
     cache: Cache | None = None,
+    fresh: bool = False,
 ) -> AsyncIterator[Job]:
     """Stream jobs for a pipeline as an async generator.
 
-    scope=None fetches ALL jobs.
+    scope=None fetches ALL jobs. If *fresh* is True, bypasses the
+    low-level API response cache.
     Yields jobs as pages arrive; each terminal-state job is cached individually.
     """
     project_id = client._config.project_id or ""
-    async for page in client.iter_jobs(pipeline_id, scope=scope):
+    async for page in client.iter_jobs(pipeline_id, scope=scope, fresh=fresh):
         cache_terminal_jobs(cache, project_id, page.items)
         for job in page.items:
             yield job

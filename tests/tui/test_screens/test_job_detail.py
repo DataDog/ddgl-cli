@@ -1,13 +1,16 @@
 # Unless explicitly stated otherwise all files in this repository are licensed under the Apache-2.0 License.
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
-"""Tests for ddgl/tui/screens/job_detail.py — pure-function tests only."""
+"""Tests for ddgl/tui/screens/job_detail.py."""
 from __future__ import annotations
 
+import pytest
 from rich.text import Text
+from textual.app import App, ComposeResult
 
 from ddgl.constants import JobStatus
 from ddgl.tui.screens.job_detail import (
+    JobDetailScreen,
     _fmt_duration,
     _render_meta,
     _set_collapsed,
@@ -347,3 +350,137 @@ def test_walk_trace_after_set_collapsed_false_shows_children() -> None:
     result = _walk_trace(_trace(sec))
     assert len(result) == 2
     assert any("visible" in t.plain for t in result)
+
+
+# ---------------------------------------------------------------------------
+# Retry — r retries from the job detail screen
+# ---------------------------------------------------------------------------
+
+
+class _FakeConfig:
+    project_id: str = ""
+
+
+class _FakeClient:
+    """Minimal stub covering what JobDetailScreen fetches on mount, plus retry."""
+
+    _config = _FakeConfig()
+
+    def __init__(self, job) -> None:
+        self._job = job
+        self.retried_job_ids: list[int] = []
+        self.retry_error: Exception | None = None
+
+    async def get_job(self, job_id: int) -> object:
+        return self._job
+
+    async def get_job_log(self, job_id: int) -> str:
+        return ""
+
+    async def retry_job(self, job_id: int) -> object:
+        if self.retry_error is not None:
+            raise self.retry_error
+        self.retried_job_ids.append(job_id)
+        return make_job(
+            id=999, name=self._job.name, stage=self._job.stage,
+            status=JobStatus.PENDING, pipeline_id=self._job.pipeline_id,
+        )
+
+
+class _ScreenHostApp(App[None]):
+    def __init__(self, job) -> None:
+        super().__init__()
+        self.client = _FakeClient(job)
+        self._job = job
+
+    def compose(self) -> ComposeResult:
+        return iter(())
+
+    def show(self) -> None:
+        self.push_screen(JobDetailScreen(self._job, self.client))
+
+
+async def test_r_with_non_retryable_job_warns_and_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = make_job(id=1, status=JobStatus.SUCCESS)
+    app = _ScreenHostApp(job)
+    notified: list[str | None] = []
+    monkeypatch.setattr(
+        app, "notify", lambda *a, severity=None, **kw: notified.append(severity)
+    )
+    async with app.run_test(headless=True) as pilot:
+        app.show()
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.client.retried_job_ids == []
+        assert notified == ["warning"]
+
+
+async def test_r_with_retryable_job_confirms_then_retries() -> None:
+    job = make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)
+    app = _ScreenHostApp(job)
+    async with app.run_test(headless=True) as pilot:
+        app.show()
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert app.client.retried_job_ids == [1]
+
+
+async def test_retry_swaps_the_job_and_rerenders_meta() -> None:
+    job = make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)
+    app = _ScreenHostApp(job)
+    async with app.run_test(headless=True) as pilot:
+        app.show()
+        await pilot.pause()
+        screen = app.screen
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert screen._job.id == 999
+        assert screen._job.status == JobStatus.PENDING
+        meta = screen.query_one("#job-meta")
+        assert "build" in meta.render().plain
+
+
+async def test_retry_posts_job_retried_message() -> None:
+    job = make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)
+    received: list[JobDetailScreen.JobRetried] = []
+
+    class _App(_ScreenHostApp):
+        def on_job_detail_screen_job_retried(
+            self, message: JobDetailScreen.JobRetried
+        ) -> None:
+            received.append(message)
+
+    app = _App(job)
+    async with app.run_test(headless=True) as pilot:
+        app.show()
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert len(received) == 1
+        assert received[0].job.id == 999
+
+
+async def test_r_with_retryable_job_cancelled_does_not_retry() -> None:
+    job = make_job(id=1, name="build", stage="test", status=JobStatus.FAILED)
+    app = _ScreenHostApp(job)
+    async with app.run_test(headless=True) as pilot:
+        app.show()
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.client.retried_job_ids == []

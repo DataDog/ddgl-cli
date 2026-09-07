@@ -15,14 +15,18 @@ from httpx import Response
 from ddgl.cache.cache_config import CacheNS
 from ddgl.client import GitLabClient
 from ddgl.constants import JobStatus, PipelineStatus
-from ddgl.core.attach import _current_stage, attach
+from ddgl.core.attach import _build_tick_events, attach
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
     AttachEvent,
+    EventContext,
     HeartbeatEvent,
     JobEvent,
+    PipelineState,
     PollEvent,
     ResultEvent,
+    RetryEvent,
+    RetryPolicy,
     SnapshotEvent,
     SwitchedEvent,
 )
@@ -34,55 +38,68 @@ from ._stubs import TEST_CONFIG, FakeCache
 _PROJECT_ID = TEST_CONFIG.project_id
 _ENCODED_PROJECT = _PROJECT_ID.replace("/", "%2F")
 
-# ---------------------------------------------------------------------------
-# _current_stage — "oldest stage still holding incomplete jobs"
-# ---------------------------------------------------------------------------
-
-
 def _job(job_id: int, stage: str, status: JobStatus) -> Job:
-    return Job(id=job_id, name=f"job-{job_id}", stage=stage, status=status)
+    return Job(
+        id=job_id, name=f"job-{job_id}", stage=stage, status=status, pipeline_id=1
+    )
 
 
-class TestCurrentStage:
-    def test_empty_returns_none(self) -> None:
-        assert _current_stage([]) is None
+def _pipeline(pipeline_id: int, status: PipelineStatus, ref: str = "main") -> Pipeline:
+    return Pipeline(id=pipeline_id, ref=ref, status=status)
 
-    def test_single_stage(self) -> None:
-        jobs = [_job(1, "build", JobStatus.RUNNING), _job(2, "build", JobStatus.CREATED)]
-        assert _current_stage(jobs) == "build"
 
-    def test_returns_oldest_incomplete_stage_not_most_advanced(self) -> None:
-        """Regression: must pick the EARLIEST (lowest min job ID) stage that
-        still has incomplete work — the bottleneck — not whichever stage
-        happens to have the highest-ID (most recently created/advanced) job.
+_EMPTY_CTX = EventContext(pipeline_id=1, ref="main", jobs_total=0, jobs_done=0)
 
-        Deliberately constructed so a naive 'first not-done job in list
-        order' (the old, buggy behavior) would pick the wrong stage: GitLab
-        returns jobs newest-ID-first, so a highest-ID-first list places the
-        most-advanced stage's job before the oldest stage's job.
-        """
-        jobs = [
-            _job(30, "deploy", JobStatus.RUNNING),   # newest, most-advanced stage — still incomplete
-            _job(20, "test", JobStatus.SUCCESS),      # test stage: done
-            _job(10, "build", JobStatus.RUNNING),     # oldest stage — still incomplete: this is the answer
-        ]
-        assert _current_stage(jobs) == "build"
 
-    def test_ignores_stage_with_no_incomplete_jobs(self) -> None:
-        jobs = [
-            _job(10, "build", JobStatus.SUCCESS),   # done — not a candidate
-            _job(20, "test", JobStatus.RUNNING),    # oldest remaining incomplete stage
-            _job(30, "deploy", JobStatus.CREATED),
-        ]
-        assert _current_stage(jobs) == "test"
+class TestTransitionEvents:
+    """Pure diff → events: no I/O, no engine, just the table from the
+    module's own docstring/design (§3.4 of the retry design doc)."""
 
-    def test_all_done_falls_back_to_oldest_stage_overall(self) -> None:
-        jobs = [
-            _job(30, "deploy", JobStatus.SUCCESS),
-            _job(10, "build", JobStatus.SUCCESS),
-            _job(20, "test", JobStatus.SUCCESS),
-        ]
-        assert _current_stage(jobs) == "build"
+    def test_prev_none_yields_a_single_snapshot(self) -> None:
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = _build_tick_events(None, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["snapshot"]
+
+    def test_pipeline_status_change_yields_pipeline_then_poll(self) -> None:
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.SUCCESS), jobs=[])
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["pipeline", "poll"]
+
+    def test_job_status_change_yields_job_then_poll(self) -> None:
+        job_before = _job(10, "build", JobStatus.RUNNING)
+        job_after = _job(10, "build", JobStatus.SUCCESS)
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_before])
+        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_after])
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        assert [_kind(e) for e in events] == ["job", "poll"]
+        job_event = events[0]
+        assert isinstance(job_event, JobEvent)
+        assert job_event.old_status == "running"
+        assert job_event.status == "success"
+
+    def test_a_job_not_in_prev_yields_job_with_no_old_status(self) -> None:
+        """A retried job surfaces this way: it vanishes from GitLab's job
+        list under its old ID and reappears under a new one."""
+        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        curr = PipelineState(
+            pipeline=_pipeline(1, PipelineStatus.RUNNING),
+            jobs=[_job(99, "build", JobStatus.PENDING)],
+        )
+        events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
+        job_event = next(e for e in events if isinstance(e, JobEvent))
+        assert job_event.old_status is None
+        assert job_event.job_id == 99
+
+    def test_nothing_changed_yields_nothing_by_default(self) -> None:
+        obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = _build_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=False)
+        assert events == []
+
+    def test_nothing_changed_yields_heartbeat_when_enabled(self) -> None:
+        obs = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[])
+        events = _build_tick_events(obs, obs, context=_EMPTY_CTX, heartbeat=True)
+        assert [_kind(e) for e in events] == ["heartbeat"]
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +138,7 @@ def _job_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": job_id, "name": name, "stage": stage, "status": status, "ref": "main",
+        "pipeline": {"id": 100},
         "duration": 30.0 if status in ("success", "failed") else None,
         "allow_failure": allow_failure,
     }
@@ -366,7 +384,12 @@ class TestAttachFollow:
 
         async def get_all_jobs(pipeline_id: int, **kwargs: Any) -> Any:
             if pipeline_id == 2:
-                return [Job(id=20, name="a", stage="test", status=JobStatus.SUCCESS)]
+                return [
+                    Job(
+                        id=20, name="a", stage="test",
+                        status=JobStatus.SUCCESS, pipeline_id=2,
+                    )
+                ]
             return await real_get_all_jobs(cached_client, pipeline_id, **kwargs)
 
         async def get_pipeline(pipeline_id: int, **kwargs: Any) -> Pipeline:
@@ -657,3 +680,322 @@ class TestAttachPollResilience:
         assert "switched" not in [_kind(e) for e in events]
         assert events[-1].pipeline_id == 1
         assert events[-1].status == "success"
+
+
+# ---------------------------------------------------------------------------
+# --retry: the auto-retry policy (§3.5 of the retry design)
+# ---------------------------------------------------------------------------
+
+
+def _posts(mock_api: respx.MockRouter) -> list[str]:
+    """Paths of every POST the engine issued."""
+    return [c.request.url.path for c in mock_api.calls if c.request.method == "POST"]
+
+
+class _RetryScenario:
+    """Routes for a pipeline whose jobs can be auto-retried.
+
+    The poll and the attempt tally hit the same jobs path, told apart by
+    `include_retried`, so one route serves both. Both the job pages and
+    the pipeline statuses repeat their last entry once exhausted, so a
+    test only lists the ticks it cares about.
+    """
+
+    def __init__(self, mock_api: respx.MockRouter) -> None:
+        self.mock_api = mock_api
+        self.poll_pages: list[list[dict[str, Any]]] = [[]]
+        self.attempts: list[dict[str, Any]] = []
+        self.statuses: list[str] = ["failed"]
+        self.polls = 0
+        self._status_reads = 0
+
+    def _jobs(self, request: Any, **kwargs: Any) -> Response:
+        if request.url.params.get("include_retried") == "true":
+            return Response(200, json=self.attempts)
+        page = self.poll_pages[min(self.polls, len(self.poll_pages) - 1)]
+        self.polls += 1
+        return Response(200, json=page)
+
+    def _pipeline(self, request: Any, **kwargs: Any) -> Response:
+        # statuses[0] is served by the resolve (list) call, so the per-tick
+        # reads start at statuses[1].
+        index = min(self._status_reads + 1, len(self.statuses) - 1)
+        self._status_reads += 1
+        return Response(200, json=_pipeline_payload(1, self.statuses[index]))
+
+    def install(self) -> None:
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
+            side_effect=lambda request, **kw: Response(
+                200, json=[_pipeline_payload(1, self.statuses[0])]
+            )
+        )
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
+            side_effect=self._jobs
+        )
+        self.mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
+            side_effect=self._pipeline
+        )
+
+    def accepts_retry(self, job_id: int, *, new_id: int, name: str = "a") -> respx.Route:
+        return self.mock_api.post(
+            f"/projects/{_ENCODED_PROJECT}/jobs/{job_id}/retry"
+        ).mock(return_value=Response(200, json=_job_payload(new_id, "pending", name)))
+
+    def rejects_retry(self, job_id: int) -> respx.Route:
+        return self.mock_api.post(
+            f"/projects/{_ENCODED_PROJECT}/jobs/{job_id}/retry"
+        ).mock(return_value=Response(403, json={"message": "403 Forbidden"}))
+
+
+@pytest.fixture()
+def retry_api() -> Iterator[respx.MockRouter]:
+    """A router for the retry scenarios.
+
+    Unlike `mock_api`, it doesn't require every route to be called: a
+    scenario wires the full set a retry run *could* need, and a test that
+    ends on the first tick legitimately never reaches some of them.
+    """
+    with respx.mock(base_url=TEST_CONFIG.api_url, assert_all_called=False) as router:
+        yield router
+
+
+@pytest.fixture()
+async def retry_client(retry_api: respx.MockRouter) -> GitLabClient:
+    async with GitLabClient(TEST_CONFIG) as c:
+        yield c
+
+
+@pytest.fixture()
+def scenario(retry_api: respx.MockRouter) -> _RetryScenario:
+    return _RetryScenario(retry_api)
+
+
+_RETRY_ON = RetryPolicy(enabled=True)
+
+
+class TestAttachRetry:
+    async def test_failed_job_is_retried_and_reported(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        route = scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert route.call_count == 1
+        retry = next(e for e in events if isinstance(e, RetryEvent))
+        assert (retry.job_id, retry.new_job_id, retry.job_name) == (10, 11, "a")
+        assert retry.attempt == 2  # the original run, plus this retry
+
+    async def test_a_retried_tick_does_not_end_the_run(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """The pipeline is already `failed` on the first tick, so without
+        the retry gate attach would report a result there and stop. The
+        run has to poll again to see what the retry did.
+
+        Only the API call count can show this: the second tick sees the
+        same (mocked) state, so it emits no events of its own.
+        """
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert any(isinstance(e, RetryEvent) for e in events)
+        assert scenario.polls >= 2
+
+    async def test_no_second_post_for_the_same_record(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """GitLab may still be reporting the old record on the next tick."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        route = scenario.accepts_retry(10, new_id=11)
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert route.call_count == 1
+
+    async def test_job_with_a_newer_record_is_not_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """Something already retried it — GitLab's own `retry:`, another
+        ddgl run, or a human in the web UI."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"),
+            _job_payload(99, "running", "a"),  # the newer attempt
+        ]
+        scenario.install()
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert _posts(retry_api) == []
+        assert not [e for e in events if isinstance(e, RetryEvent)]
+        assert events[-1].reason == "terminal"  # nothing retried, so it ends
+
+    async def test_attempts_budget_is_respected(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(30, "failed", "a")]]
+        # Three records for this name: the original plus two retries.
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"),
+            _job_payload(20, "failed", "a"),
+            _job_payload(30, "failed", "a"),
+        ]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, attempts_per_job=2),
+        )
+
+        assert _posts(retry_api) == []
+
+    async def test_total_budget_caps_the_run(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11, name="a")
+        scenario.accepts_retry(20, new_id=21, name="b")
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, total=1), timeout=0.2,
+        )
+
+        assert len(_posts(retry_api)) == 1
+
+    async def test_excluded_names_are_never_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
+        scenario.attempts = [_job_payload(10, "failed", "flaky-e2e")]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
+        )
+
+        assert _posts(retry_api) == []
+
+    async def test_allowed_failures_are_never_retried(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.statuses = ["success"]  # an allowed failure doesn't fail it
+        scenario.poll_pages = [[_job_payload(10, "failed", "a", allow_failure=True)]]
+        scenario.attempts = [_job_payload(10, "failed", "a", allow_failure=True)]
+        scenario.install()
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert _posts(retry_api) == []
+
+    async def test_a_rejected_retry_does_not_stop_the_others(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.poll_pages = [[
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]]
+        scenario.attempts = [
+            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+        ]
+        scenario.install()
+        rejected = scenario.rejects_retry(10)
+        accepted = scenario.accepts_retry(20, new_id=21, name="b")
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+
+        assert rejected.called
+        assert accepted.call_count == 1
+        # Only the accepted retry produced an event.
+        assert [e.job_id for e in events if isinstance(e, RetryEvent)] == [20]
+
+    async def test_all_retries_rejected_still_terminates(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        """Gating on accepted retries, not attempted ones — otherwise this
+        run would hang until --timeout."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.rejects_retry(10)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert events[-1].reason == "terminal"
+        assert events[-1].retries == 0
+
+    async def test_result_counts_the_retries(
+        self, retry_client: GitLabClient, scenario: _RetryScenario
+    ) -> None:
+        scenario.statuses = ["failed", "success"]
+        scenario.poll_pages = [
+            [_job_payload(10, "failed", "a")],
+            [_job_payload(11, "success", "a")],
+        ]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+        scenario.accepts_retry(10, new_id=11)
+
+        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert events[-1].reason == "terminal"
+        assert events[-1].status == "success"
+        assert events[-1].retries == 1
+
+    async def test_disabled_by_default(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
+        scenario.attempts = [_job_payload(10, "failed", "a")]
+        scenario.install()
+
+        events = await _collect(retry_client, ref="main")
+
+        assert _posts(retry_api) == []
+        assert events[-1].retries == 0
+
+    async def test_no_tally_fetch_without_candidates(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """A tick with nothing failing must not pay for the extra call."""
+        scenario.statuses = ["success"]
+        scenario.poll_pages = [[_job_payload(10, "success", "a")]]
+        scenario.install()
+
+        await _collect(retry_client, ref="main", retry_policy=_RETRY_ON)
+
+        assert not any(
+            c.request.url.params.get("include_retried") for c in retry_api.calls
+        )
+
+    async def test_no_tally_fetch_when_every_candidate_is_excluded(
+        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+    ) -> None:
+        """The local gates run first, so an excluded job costs no call."""
+        scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
+        scenario.install()
+
+        await _collect(
+            retry_client, ref="main",
+            retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
+        )
+
+        assert not any(
+            c.request.url.params.get("include_retried") for c in retry_api.calls
+        )

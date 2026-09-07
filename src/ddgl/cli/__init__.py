@@ -15,6 +15,7 @@ from ddgl.cli.format import format_cmd
 from ddgl.cli.jobs import jobs
 from ddgl.cli.logs import logs
 from ddgl.cli.pipelines import pipelines
+from ddgl.cli.retry import retry_cmd
 from ddgl.cli.viz import viz
 from ddgl.render._console import err_console
 
@@ -70,4 +71,5 @@ main.add_command(logs)
 main.add_command(viz)
 main.add_command(format_cmd, name="format")
 main.add_command(attach_cmd, name="attach")
+main.add_command(retry_cmd, name="retry")
 main.add_command(config_group, name="config")

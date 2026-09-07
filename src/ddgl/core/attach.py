@@ -5,25 +5,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+import re
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING
 
 import httpx
+import msgspec
 
 from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
-from ddgl.core.jobs import JOB_TERMINAL, cache_terminal_jobs
+from ddgl.core.jobs import cache_terminal_jobs
 from ddgl.core.pipeline import cache_terminal_pipeline, list_pipelines, resolve_pipeline
+from ddgl.core.retry import retry_jobs, tally_attempts
 from ddgl.exceptions import GitLabAPIError, NoPipelineFoundError
 from ddgl.model.attach import (
     AttachEvent,
+    EventContext,
     HeartbeatEvent,
     JobEvent,
     PipelineEvent,
+    PipelineState,
     PollEvent,
     ResultEvent,
+    RetryEvent,
+    RetryPolicy,
     SnapshotEvent,
     SwitchedEvent,
+    now_iso,
 )
 
 if TYPE_CHECKING:
@@ -31,6 +38,7 @@ if TYPE_CHECKING:
     from ddgl.client import GitLabClient
     from ddgl.model.job import Job
     from ddgl.model.pipeline import Pipeline
+    from ddgl.model.retry import AttemptTally, RetryOutcome
 
 logger = logging.getLogger("ddgl.core.attach")
 
@@ -44,95 +52,270 @@ logger = logging.getLogger("ddgl.core.attach")
 # (e.g. a harness killed the call at its own timeout) just runs this same
 # sequence again — that's the whole resumability story.
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
+
+def _build_pipeline_event(
+    prev: Pipeline, curr: Pipeline, context: EventContext
+) -> PipelineEvent | None:
+    """A PipelineEvent if the pipeline changed status, else None."""
+    if curr.status == prev.status:
+        return None
+    return PipelineEvent(
+        ts=now_iso(),
+        old_status=str(prev.status),
+        status=str(curr.status),
+        **context.as_fields(),
+    )
 
 
-def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
-    """Return (jobs_total, jobs_done, failed_job_names) for a job list."""
-    total = len(jobs)
-    done = sum(1 for j in jobs if j.status in JOB_TERMINAL)
-    failed = tuple(j.name for j in jobs if j.is_blocking)
-    return total, done, failed
+def _build_job_events(
+    prev: list[Job], curr: list[Job], context: EventContext
+) -> list[JobEvent]:
+    """A JobEvent per job whose status changed, in `curr` order.
 
-
-def _current_stage(jobs: list[Job]) -> str | None:
-    """Best-effort 'what stage are we in' for the live view's headline.
-
-    The OLDEST stage that still has at least one not-yet-done job — the
-    stage actually holding up progress, not the most-recently-started one.
-    "Oldest" is approximated by each stage's minimum job ID: GitLab returns
-    jobs newest-ID-first (not in stage order — there is no API field for
-    stage sequence), but job IDs are assigned in roughly creation order, and
-    jobs are normally created stage-by-stage at pipeline start. Falls back
-    to the oldest stage overall once everything is done, or None for an
-    empty job list.
+    A job absent from `prev` gets `old_status=None`. That covers a job
+    appearing mid-run, and is also how a retried job surfaces: GitLab
+    excludes retried records from the job list, so the old attempt
+    disappears and a new ID takes its place under the same name.
     """
-    if not jobs:
+    old_status_by_id = {job.id: job.status for job in prev}
+    events = []
+    for job in curr:
+        old = old_status_by_id.get(job.id)
+        if old == job.status:
+            continue
+        events.append(
+            JobEvent(
+                ts=now_iso(),
+                job_id=job.id,
+                job_name=job.name,
+                job_stage=job.stage,
+                old_status=str(old) if old is not None else None,
+                status=str(job.status),
+                duration=job.duration,
+                message=job.failure_reason if job.has_failed else None,
+                **context.as_fields(),
+            )
+        )
+    return events
+
+
+def _build_tick_events(
+    prev: PipelineState | None,
+    curr: PipelineState,
+    *,
+    context: EventContext,
+    heartbeat: bool,
+) -> list[AttachEvent]:
+    """The events describing what changed between two ticks.
+
+    With no previous tick — the first one, or the first after switching
+    pipelines — everything is new, so this is a lone SnapshotEvent rather
+    than a diff.
+
+    Otherwise: the pipeline's status change (if any), then one event per
+    job that changed status, then a single trailing PollEvent. A tick where
+    nothing changed emits a HeartbeatEvent if `heartbeat` is set, and
+    nothing at all if it isn't.
+    """
+    if prev is None:
+        return [SnapshotEvent(ts=now_iso(), status=str(curr.pipeline.status), **context.as_fields())]
+
+    events: list[AttachEvent] = []
+    pipeline_event = _build_pipeline_event(prev.pipeline, curr.pipeline, context)
+    if pipeline_event is not None:
+        events.append(pipeline_event)
+    events.extend(_build_job_events(prev.jobs, curr.jobs, context))
+
+    if events:
+        events.append(PollEvent(ts=now_iso(), **context.as_fields()))
+    elif heartbeat:
+        events.append(HeartbeatEvent(ts=now_iso(), **context.as_fields()))
+    return events
+
+
+class _RetryLedger(msgspec.Struct):
+    """What one attach run has to remember about the retries it issued."""
+
+    posted_job_ids: set[int] = msgspec.field(default_factory=set)
+    """Records already retried. GitLab may not have processed a POST by the
+    next tick, leaving the old failed record still the newest one for its
+    name."""
+
+    total_issued: int = 0
+    """Accepted retries so far, counted against `RetryPolicy.total`."""
+
+
+def _candidates_before_tally(
+    state: PipelineState, policy: RetryPolicy, ledger: _RetryLedger
+) -> list[Job]:
+    """Failed jobs that could still be retried, judged on what this tick
+    already knows: blocking, not already retried by this run, not
+    name-excluded, and within the global budget.
+
+    The remaining checks — newest record for the name, and per-name budget
+    — need an attempt tally, which costs a request. An empty result means
+    this tick needs no tally.
+    """
+    if policy.total and ledger.total_issued >= policy.total:
+        return []
+    return [
+        job for job in state.jobs
+        if job.is_blocking
+        and job.id not in ledger.posted_job_ids
+        and not any(re.search(pattern, job.name) for pattern in policy.exclude)
+    ]
+
+
+def _within_budget(job: Job, tally: AttemptTally, policy: RetryPolicy) -> bool:
+    """Whether `job` has attempts left under `RetryPolicy.attempts_per_job`.
+
+    A job that has never been retried already has one attempt, so the
+    comparison is against attempts *beyond* the first.
+    """
+    if not policy.attempts_per_job:
+        return True
+    return tally.count(job.name) - 1 < policy.attempts_per_job
+
+
+async def _apply_retry_policy(
+    client: GitLabClient,
+    state: PipelineState,
+    policy: RetryPolicy,
+    ledger: _RetryLedger,
+) -> tuple[list[RetryOutcome], AttemptTally | None]:
+    """Retry the failed jobs this tick allows, returning what happened and
+    the tally the decision used.
+
+    The tally is None when no job got as far as needing one.
+    """
+    if not policy.enabled:
+        return [], None
+
+    candidates = _candidates_before_tally(state, policy, ledger)
+    if not candidates:
+        return [], None
+
+    tally = await tally_attempts(client, state.pipeline.id, {j.name for j in candidates})
+
+    selected: list[Job] = []
+    for job in candidates:
+        if policy.total and ledger.total_issued + len(selected) >= policy.total:
+            logger.info("attach: retry budget of %d reached", policy.total)
+            break
+        if not tally.is_newest(job):
+            logger.info(
+                "attach: %s already has a newer attempt, not retrying job %d",
+                job.name, job.id,
+            )
+            continue
+        if not _within_budget(job, tally, policy):
+            logger.info(
+                "attach: %s has used its %d retries, not retrying job %d",
+                job.name, policy.attempts_per_job, job.id,
+            )
+            continue
+        selected.append(job)
+
+    if not selected:
+        return [], tally
+
+    outcomes = await retry_jobs(client, selected)
+    for outcome in outcomes:
+        ledger.posted_job_ids.add(outcome.old_job_id)
+        if outcome.new_job is not None:
+            ledger.total_issued += 1
+    return outcomes, tally
+
+
+def _build_retry_events(
+    outcomes: Sequence[RetryOutcome], tally: AttemptTally | None, context: EventContext
+) -> list[RetryEvent]:
+    """One event per retry GitLab accepted.
+
+    Rejected retries produce no event; `retry_jobs` has already logged
+    them, and there is no new job to point at.
+    """
+    events = []
+    for outcome in outcomes:
+        new_job = outcome.new_job
+        if new_job is None:
+            continue
+        events.append(
+            RetryEvent(
+                ts=now_iso(),
+                job_id=outcome.old_job_id,
+                job_name=outcome.job_name,
+                job_stage=new_job.stage,
+                new_job_id=new_job.id,
+                attempt=(tally.count(outcome.job_name) if tally else 0) + 1,
+                **context.as_fields(),
+            )
+        )
+    return events
+
+
+async def _get_pipeline_state(
+    client: GitLabClient, pipeline_id: int, *, cache: Cache | None, project_id: str
+) -> PipelineState:
+    """Fetch a pipeline's current status and its full job list.
+
+    Both reads bypass the API response cache: its TTLs (30s for a
+    pipeline, 15s for a job list) are tuned for browsing and would
+    otherwise put a floor under the poll interval, so a 10s poll would
+    keep re-reading the same stale tick.
+
+    Terminal jobs and a SUCCESS pipeline are written to the durable object
+    cache on the way through.
+
+    Raises GitLabAPIError or httpx.TransportError; whether one bad fetch
+    should end the run is the caller's decision, not this function's.
+    """
+    pipeline = await client.get_pipeline(pipeline_id, fresh=True)
+    jobs = await client.get_all_jobs(pipeline_id, fresh=True)
+    cache_terminal_pipeline(cache, project_id, pipeline)
+    cache_terminal_jobs(cache, project_id, jobs)
+    return PipelineState(pipeline=pipeline, jobs=jobs)
+
+
+async def _check_for_new_pipeline(
+    client: GitLabClient, current: PipelineState, *, cache: Cache | None, project_id: str
+) -> PipelineState | None:
+    """The state of a pipeline newer than `current`'s for the same ref, or
+    None if there isn't one.
+
+    Never raises: a failure here means "no switch this tick", leaving the
+    caller's own poll of the current pipeline unaffected.
+
+    The newer pipeline's status comes from the listing that found it, so
+    unlike `_get_pipeline_state` this issues no second request for it.
+    """
+    try:
+        candidates = await list_pipelines(
+            client, current.pipeline.ref, count=5, cache=cache, fresh=True
+        )
+    except (GitLabAPIError, httpx.TransportError) as exc:
+        logger.warning("attach: follow-check failed (%s), will retry next tick", exc)
         return None
 
-    min_id_by_stage: dict[str, int] = {}
-    incomplete_stages: set[str] = set()
-    for job in jobs:
-        min_id_by_stage[job.stage] = min(min_id_by_stage.get(job.stage, job.id), job.id)
-        if job.status not in JOB_TERMINAL:
-            incomplete_stages.add(job.stage)
+    newest = max(candidates, key=lambda p: p.id, default=None)
+    if newest is None or newest.id <= current.pipeline.id:
+        return None
 
-    candidates = incomplete_stages or min_id_by_stage.keys()
-    return min(candidates, key=lambda s: min_id_by_stage[s])
+    try:
+        jobs = await client.get_all_jobs(newest.id, fresh=True)
+    except (GitLabAPIError, httpx.TransportError) as exc:
+        logger.warning(
+            "attach: found newer pipeline %d but failed to fetch its jobs (%s); "
+            "staying on #%d, will retry next tick", newest.id, exc, current.pipeline.id,
+        )
+        return None
 
-
-def _context(pipeline: Pipeline, jobs: list[Job]) -> dict[str, object]:
-    """Rollup fields attached to every event (see AttachEvent's docstring).
-
-    `eta_seconds` is always None — v1 ships no ETA estimation (see
-    AttachEvent.eta_seconds' docstring).
-    """
-    total, done, failed = _rollup(jobs)
-    elapsed = pipeline.elapsed
-    return {
-        "pipeline_id": pipeline.id,
-        "ref": pipeline.ref,
-        "current_stage": _current_stage(jobs),
-        "pipeline_elapsed": elapsed.total_seconds() if elapsed is not None else None,
-        "jobs_total": total,
-        "jobs_done": done,
-        "failed_jobs": failed,
-        "eta_seconds": None,
-    }
-
-
-def _result_event(pipeline: Pipeline, jobs: list[Job], *, reason: str) -> AttachEvent:
-    elapsed = pipeline.elapsed
-    return ResultEvent(
-        ts=_now(),
-        status=str(pipeline.status),
-        duration=elapsed.total_seconds() if elapsed is not None else None,
-        reason=reason,
-        **_context(pipeline, jobs),  # includes pipeline_id
+    logger.info(
+        "attach: following newer pipeline %d (was %d)", newest.id, current.pipeline.id
     )
-
-
-def _timeout_event(last_event: AttachEvent | None) -> AttachEvent:
-    """Return a timeout result using the most recent known pipeline state.
-    """
-    if last_event is None:
-        return ResultEvent(ts=_now(), reason="timeout")
-    return ResultEvent(
-        ts=_now(),
-        pipeline_id=last_event.pipeline_id,
-        ref=last_event.ref,
-        current_stage=last_event.current_stage,
-        pipeline_elapsed=last_event.pipeline_elapsed,
-        # Some event types don't have the status, add a default
-        status=getattr(last_event, "status", None),
-        duration=last_event.pipeline_elapsed,
-        jobs_total=last_event.jobs_total,
-        jobs_done=last_event.jobs_done,
-        failed_jobs=last_event.failed_jobs,
-        eta_seconds=last_event.eta_seconds,
-        reason="timeout",
-    )
+    cache_terminal_jobs(cache, project_id, jobs)
+    cache_terminal_pipeline(cache, project_id, newest)
+    return PipelineState(pipeline=newest, jobs=jobs)
 
 
 async def _resolve_or_wait(
@@ -147,40 +330,22 @@ async def _resolve_or_wait(
 ) -> Pipeline:
     """Resolve the target pipeline, waiting for one to appear if needed.
 
-    Propagates NoPipelineFoundError immediately when `wait_for_start` is
-    False, and propagates any other exception (NotFoundError, ConfigError)
-    always — those represent a real failure to start, not something to wait
-    out. When `wait_for_start` is True, waits indefinitely for a pipeline to
-    appear; `attach()`'s `asyncio.timeout` is what bounds this wait, the
-    same as it bounds every other await in the poll loop below.
-    """
-    try:
-        return await resolve_pipeline(
-            client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
-        )
-    except NoPipelineFoundError:
-        if not wait_for_start:
-            raise
+    Raises NoPipelineFoundError immediately when `wait_for_start` is False.
+    Any other exception (NotFoundError, ConfigError) always propagates —
+    those are a real failure to start, not something waiting will fix.
 
+    With `wait_for_start`, waits indefinitely; `attach()`'s
+    `asyncio.timeout` is what bounds the wait.
+    """
     while True:
-        await asyncio.sleep(interval)
         try:
             return await resolve_pipeline(
                 client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
             )
         except NoPipelineFoundError:
-            continue
-
-
-async def _find_newer_pipeline(
-    client: GitLabClient, ref: str, current_id: int, *, cache: Cache | None
-) -> Pipeline | None:
-    """Return a pipeline for `ref` newer than `current_id`, or None."""
-    candidates = await list_pipelines(client, ref, count=5, cache=cache, fresh=True)
-    if not candidates:
-        return None
-    newest = max(candidates, key=lambda p: p.id)
-    return newest if newest.id > current_id else None
+            if not wait_for_start:
+                raise
+        await asyncio.sleep(interval)
 
 
 async def attach(
@@ -194,13 +359,18 @@ async def attach(
     wait_for_start: bool = True,
     follow: bool = False,
     timeout: float | None = None,
+    retry_policy: RetryPolicy | None = None,
     cache: Cache | None = None,
 ) -> AsyncIterator[AttachEvent]:
-    """Block on a CI pipeline, yielding AttachEvents until terminal/timeout."""
+    """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
+
+    Wraps `_poll_pipeline` to enforce `timeout` and, on expiry, to close the
+    stream with a timeout ResultEvent built from the last event seen.
+    """
     last_event: AttachEvent | None = None
     try:
         async with asyncio.timeout(timeout):
-            async for event in _attach_events(
+            async for event in _poll_pipeline(
                 client,
                 ref=ref,
                 pipeline_id=pipeline_id,
@@ -209,15 +379,16 @@ async def attach(
                 heartbeat=heartbeat,
                 wait_for_start=wait_for_start,
                 follow=follow,
+                retry_policy=retry_policy,
                 cache=cache,
             ):
                 last_event = event
                 yield event
     except TimeoutError:
-        yield _timeout_event(last_event)
+        yield ResultEvent.timed_out(last_event)
 
 
-async def _attach_events(
+async def _poll_pipeline(
     client: GitLabClient,
     *,
     ref: str | None,
@@ -227,24 +398,23 @@ async def _attach_events(
     heartbeat: bool,
     wait_for_start: bool,
     follow: bool,
+    retry_policy: RetryPolicy | None,
     cache: Cache | None,
 ) -> AsyncIterator[AttachEvent]:
-    """Block on a CI pipeline, yielding AttachEvents until terminal/timeout.
+    """Yield the event stream for one attach run, ending at the pipeline's
+    terminal state.
 
     Yields events only — never prints, never chooses an exit code. See
     render/attach.py for presentation and cli/attach.py for the exit-code
     mapping.
 
-    Flow: resolve (or wait for) the pipeline -> emit a full snapshot -> poll
-    every `interval` seconds (cache-bypassed) -> emit a `pipeline`/`job` event
-    per transition followed by one `poll` rollup, a `heartbeat` on quiet ticks
-    (if enabled), a `switched` event on follow-rebind -> emit a final `result`
-    event and return once the pipeline is terminal or `timeout` elapses.
+    Resolves (or waits for) the pipeline, emits an early snapshot, then
+    loops: emit this tick's events, stop if the pipeline is finished,
+    otherwise sleep and read the next tick. `--follow` replaces the tick
+    with a newer pipeline's when one appears.
 
-    There is no manual deadline-tracking anywhere in this function — every
-    await here is bounded by `attach()`'s `asyncio.timeout`, which cancels
-    us (converted to TimeoutError, caught in `attach()`) if `timeout`
-    elapses. That's the sole timeout mechanism the engine relies on.
+    Nothing here tracks a deadline: every await is bounded by `attach()`'s
+    `asyncio.timeout`, which is the engine's sole timeout mechanism.
     """
     project_id = client._config.project_id or ""
     pipeline = await _resolve_or_wait(
@@ -252,18 +422,16 @@ async def _attach_events(
         wait_for_start=wait_for_start, interval=interval, cache=cache,
     )
 
-    # Emit an early snapshot immediately — before the job list fetch below,
-    # which can take a long time on a pipeline with hundreds of jobs (even
-    # with parallel pagination) — so a human sees "attached" right away
-    # instead of a frozen terminal. Job counts are unknown at this point:
-    # GitLab has no job-count endpoint (see
-    # docs/superpowers/specs/2026-07-21-attach-delta-polling-future-work.md),
-    # so jobs_total/jobs_done/current_stage stay at their None/() defaults
-    # until the second snapshot below.
+    # Emitted before the job fetch below, which on a pipeline with hundreds
+    # of jobs takes long enough (even with parallel pagination) to look like
+    # a frozen terminal. Job counts are unknown at this point — GitLab has no
+    # job-count endpoint (see
+    # docs/superpowers/specs/2026-07-21-attach-delta-polling-future-work.md)
+    # — so those fields keep their defaults until the first full tick.
     logger.info("attach: attached to pipeline %d (%s)", pipeline.id, pipeline.status)
     elapsed = pipeline.elapsed
     yield SnapshotEvent(
-        ts=_now(),
+        ts=now_iso(),
         pipeline_id=pipeline.id,
         ref=pipeline.ref,
         status=str(pipeline.status),
@@ -272,127 +440,84 @@ async def _attach_events(
 
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     cache_terminal_jobs(cache, project_id, jobs)
-
-    ctx = _context(pipeline, jobs)
     logger.info(
-        "attach: loaded %d jobs for pipeline %d (%s)", ctx["jobs_total"], pipeline.id, pipeline.status
+        "attach: loaded %d jobs for pipeline %d (%s)", len(jobs), pipeline.id, pipeline.status
     )
-    yield SnapshotEvent(ts=_now(), status=str(pipeline.status), **ctx)  # ctx includes pipeline_id
 
-    if pipeline.is_finished:
-        yield _result_event(pipeline, jobs, reason="terminal")
-        return
-
+    # The resolved pipeline and its jobs are the first tick, so the loop
+    # starts already holding one: re-reading them through
+    # _get_pipeline_state() would repeat a fetch just made.
+    policy = retry_policy or RetryPolicy()
+    ledger = _RetryLedger()
+    prev: PipelineState | None = None
+    curr = PipelineState(pipeline=pipeline, jobs=jobs)
     consecutive_failures = 0
 
     while True:
-        await asyncio.sleep(interval)
+        context = EventContext.from_state(curr)
+        for event in _build_tick_events(prev, curr, context=context, heartbeat=heartbeat):
+            yield event
 
-        if follow:
-            # Opportunistic: a failure here just means "no follow this tick"
-            # (the client already retried transient errors internally). It
-            # never counts toward giving up — the main poll below still gets
-            # its own independent attempt at the current pipeline regardless.
-            try:
-                newer = await _find_newer_pipeline(client, pipeline.ref, pipeline.id, cache=cache)
-            except (GitLabAPIError, httpx.TransportError) as exc:
-                logger.warning("attach: follow-check failed (%s), will retry next tick", exc)
-                newer = None
-            if newer is not None:
-                try:
-                    newer_jobs = await client.get_all_jobs(newer.id, fresh=True)
-                except (GitLabAPIError, httpx.TransportError) as exc:
-                    logger.warning(
-                        "attach: found newer pipeline %d but failed to fetch its jobs (%s); "
-                        "staying on #%d, will retry next tick", newer.id, exc, pipeline.id,
-                    )
-                    newer = None
-            if newer is not None:
-                logger.info("attach: following newer pipeline %d (was %d)", newer.id, pipeline.id)
-                cache_terminal_jobs(cache, project_id, newer_jobs)
-                cache_terminal_pipeline(cache, project_id, newer)
-                yield SwitchedEvent(
-                    ts=_now(),
-                    message=f"newer pipeline #{newer.id} found for ref {newer.ref!r}; "
-                            f"switching from #{pipeline.id}",
-                    **_context(newer, newer_jobs),  # includes pipeline_id (= newer.id)
-                )
-                pipeline, jobs = newer, newer_jobs
-                if pipeline.is_finished:
-                    # The pipeline we just switched to may already be done
-                    # (e.g. a fast re-push). Don't wait for another tick.
-                    yield _result_event(pipeline, jobs, reason="terminal")
-                    return
-                yield PollEvent(ts=_now(), **_context(pipeline, jobs))
-                continue
+        outcomes, tally = await _apply_retry_policy(client, curr, policy, ledger)
+        for event in _build_retry_events(outcomes, tally, context):
+            yield event
 
-        # The main poll fetch: pipeline status + full job list for THIS
-        # tick. The client already retries transient (408/429/5xx) failures
-        # internally (see client.py's _get_response) — reaching here means
-        # those retries were exhausted, or the error wasn't transient at all
-        # (e.g. a genuine 4xx). Either way, one bad tick must not kill a
-        # long-running attach: skip it and try again next interval, up to
-        # MAX_CONSECUTIVE_POLL_FAILURES before finally giving up. This is
-        # exactly the "500 mid-poll on a pipeline with hundreds of jobs"
-        # scenario attach hits in practice on large, long-running pipelines.
-        try:
-            fresh_pipeline = await client.get_pipeline(pipeline.id, fresh=True)
-            fresh_jobs = await client.get_all_jobs(pipeline.id, fresh=True)
-        except (GitLabAPIError, httpx.TransportError) as exc:
-            consecutive_failures += 1
-            if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES:
-                logger.warning(
-                    "attach: poll failed %d times in a row (%s), giving up",
-                    consecutive_failures, exc,
-                )
-                raise
-            logger.warning(
-                "attach: poll tick failed (%s), skipping — retrying in %.0fs (failure %d/%d)",
-                exc, interval, consecutive_failures, MAX_CONSECUTIVE_POLL_FAILURES,
+        # A pipeline we just retried reads as terminal only because GitLab
+        # hasn't processed the retry yet; it is about to run again. Gating
+        # on accepted retries means a tick where every one was rejected
+        # still finishes normally instead of waiting for --timeout.
+        retried_now = sum(1 for o in outcomes if o.new_job is not None)
+        if curr.pipeline.is_finished and not retried_now:
+            logger.info(
+                "attach: pipeline %d reached terminal status %s",
+                curr.pipeline.id, curr.pipeline.status,
             )
-            continue
-        consecutive_failures = 0
-
-        cache_terminal_pipeline(cache, project_id, fresh_pipeline)
-        cache_terminal_jobs(cache, project_id, fresh_jobs)
-
-        ctx = _context(fresh_pipeline, fresh_jobs)
-        changed = False
-
-        if fresh_pipeline.status != pipeline.status:
-            yield PipelineEvent(
-                ts=_now(),
-                old_status=str(pipeline.status),
-                status=str(fresh_pipeline.status),
-                **ctx,  # includes pipeline_id (= fresh_pipeline.id)
-            )
-            changed = True
-
-        old_status_by_id = {j.id: j.status for j in jobs}
-        for job in fresh_jobs:
-            prev = old_status_by_id.get(job.id)
-            if prev != job.status:
-                yield JobEvent(
-                    ts=_now(),
-                    job_id=job.id,
-                    job_name=job.name,
-                    job_stage=job.stage,
-                    old_status=str(prev) if prev is not None else None,
-                    status=str(job.status),
-                    duration=job.duration,
-                    message=job.failure_reason if job.has_failed else None,
-                    **ctx,
-                )
-                changed = True
-
-        if changed:
-            yield PollEvent(ts=_now(), **ctx)
-        elif heartbeat:
-            yield HeartbeatEvent(ts=_now(), **ctx)
-
-        pipeline, jobs = fresh_pipeline, fresh_jobs
-
-        if pipeline.is_finished:
-            logger.info("attach: pipeline %d reached terminal status %s", pipeline.id, pipeline.status)
-            yield _result_event(pipeline, jobs, reason="terminal")
+            yield ResultEvent.terminal(curr, context, retries=ledger.total_issued)
             return
+
+        # Acquire the next tick. A failed read is skipped rather than fatal:
+        # the client already retried transient (408/429/5xx) errors, so
+        # reaching here means those were exhausted or the error was never
+        # transient — but one bad tick must not kill a long attach, which is
+        # the "500 mid-poll on a huge pipeline" case seen in practice. Give
+        # up only after MAX_CONSECUTIVE_POLL_FAILURES in a row.
+        prev = curr
+        while True:
+            await asyncio.sleep(interval)
+
+            if follow:
+                switched = await _check_for_new_pipeline(
+                    client, curr, cache=cache, project_id=project_id
+                )
+                if switched is not None:
+                    yield SwitchedEvent(
+                        ts=now_iso(),
+                        message=f"newer pipeline #{switched.pipeline.id} found for ref "
+                                f"{switched.pipeline.ref!r}; switching from #{curr.pipeline.id}",
+                        **EventContext.from_state(switched).as_fields(),
+                    )
+                    # No previous tick for a pipeline we've never seen, so
+                    # the next pass snapshots it instead of diffing it
+                    # against the old pipeline's unrelated jobs.
+                    prev, curr = None, switched
+                    break
+
+            try:
+                curr = await _get_pipeline_state(
+                    client, curr.pipeline.id, cache=cache, project_id=project_id
+                )
+            except (GitLabAPIError, httpx.TransportError) as exc:
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES:
+                    logger.warning(
+                        "attach: poll failed %d times in a row (%s), giving up",
+                        consecutive_failures, exc,
+                    )
+                    raise
+                logger.warning(
+                    "attach: poll tick failed (%s), skipping — retrying in %.0fs (failure %d/%d)",
+                    exc, interval, consecutive_failures, MAX_CONSECUTIVE_POLL_FAILURES,
+                )
+                continue
+            consecutive_failures = 0
+            break
