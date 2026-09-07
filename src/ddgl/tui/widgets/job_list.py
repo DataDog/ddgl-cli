@@ -17,7 +17,13 @@ from textual.widgets import DataTable
 from ddgl.model.job import Job
 from ddgl.tui.gradient import gradient_text
 from ddgl.tui.widgets.search_bar import FilterSpec, job_text_matches
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import (
+    job_status_color,
+    job_status_icon,
+    job_status_label,
+    status_color,
+    status_icon,
+)
 
 # ---------------------------------------------------------------------------
 # Sort modes
@@ -104,22 +110,37 @@ def matrix_base_name(name: str) -> str:
     return name
 
 
+def status_token(job: Job) -> str:
+    """Return the pseudo-status used for filtering, sorting and grouping a job.
+
+    "Allowed failure" isn't a status GitLab reports — it's `status ==
+    failed AND allow_failure` — so it folds into its own `"allowed-failure"`
+    token here. Every place in this module that needs a job's "effective"
+    status for these purposes matches against this, never `job.status`
+    directly, so the pseudo-status exists in exactly one place.
+    """
+    if job.is_allowed_failure:
+        return "allowed-failure"
+    return str(job.status)
+
+
 _STATUS_PRIORITY: dict[str, int] = {
     "failed": 0,
-    "canceled": 1,
-    "canceling": 2,
-    "running": 3,
-    "pending": 4,
-    "manual": 5,
-    "skipped": 6,
-    "success": 7,
-    "created": 8,
+    "allowed-failure": 1,
+    "canceled": 2,
+    "canceling": 3,
+    "running": 4,
+    "pending": 5,
+    "manual": 6,
+    "skipped": 7,
+    "success": 8,
+    "created": 9,
 }
 
 
 def _worst_status(jobs: list[Job]) -> str:
     return min(
-        (str(j.status) for j in jobs),
+        (status_token(j) for j in jobs),
         key=lambda s: _STATUS_PRIORITY.get(s, 99),
     )
 
@@ -132,9 +153,11 @@ def _group_min_started_at(jobs: list[Job]) -> str | None:
 
 def _status_summary(jobs: list[Job]) -> Text:
     """Compact coloured count-per-status: '✗1 ✓2'."""
-    counts = Counter(str(j.status) for j in jobs)
+    counts = Counter(status_token(j) for j in jobs)
     line = Text()
-    for status in ("failed", "canceled", "running", "pending", "skipped", "success"):
+    for status in (
+        "failed", "allowed-failure", "canceled", "running", "pending", "skipped", "success",
+    ):
         n = counts.get(status, 0)
         if n:
             line.append(f"{status_icon(status)}{n} ", style=status_color(status))
@@ -180,7 +203,7 @@ def _apply_filter(jobs: list[Job], spec: FilterSpec) -> list[Job]:
     """Return jobs that pass all three filter predicates in *spec*."""
     result = jobs
     if spec.statuses:
-        result = [j for j in result if str(j.status).lower() in spec.statuses]
+        result = [j for j in result if status_token(j).lower() in spec.statuses]
     if spec.stages:
         result = [j for j in result if j.stage.lower() in spec.stages]
     if spec.text:
@@ -463,7 +486,9 @@ class JobListPanel(DataTable):
     def _add_job_row(
         self, job: Job, *, indent: bool = False, is_last: bool = False
     ) -> None:
-        color = status_color(job.status)
+        color = job_status_color(job)
+        icon = job_status_icon(job)
+        label = job_status_label(job)
         key = str(job.id)
 
         if indent:
@@ -471,13 +496,13 @@ class JobListPanel(DataTable):
             connector = "└─ " if is_last else "├─ "
             status_cell = Text()
             status_cell.append(connector, style=f"dim {color}")
-            status_cell.append(f"{status_icon(job.status)} {job.status}", style=color)
+            status_cell.append(f"{icon} {label}", style=color)
             stage_cell = Text(f"  {_truncate(job.stage, 18)}", style=color)
             started_cell = Text(f"  {_fmt_started_at(job.started_at)}", style=color)
             duration_cell = Text(f"  {_fmt_duration(job.duration)}", style=color)
             name_cell = Text(job.name, style=color)
         else:
-            status_cell = Text(f"{status_icon(job.status)} {job.status}", style=color)
+            status_cell = Text(f"{icon} {label}", style=color)
             stage_cell = Text(_truncate(job.stage, 20), style=color)
             started_cell = Text(_fmt_started_at(job.started_at), style=color)
             duration_cell = Text(_fmt_duration(job.duration), style=color)

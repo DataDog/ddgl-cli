@@ -52,7 +52,7 @@ def _rollup(jobs: list[Job]) -> tuple[int, int, tuple[str, ...]]:
     """Return (jobs_total, jobs_done, failed_job_names) for a job list."""
     total = len(jobs)
     done = sum(1 for j in jobs if j.status in JOB_TERMINAL)
-    failed = tuple(j.name for j in jobs if j.has_failed)
+    failed = tuple(j.name for j in jobs if j.is_blocking)
     return total, done, failed
 
 

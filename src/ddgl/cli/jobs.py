@@ -48,6 +48,7 @@ def jobs_list(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     output_json: bool,
@@ -57,7 +58,10 @@ def jobs_list(
     no_cache = (ctx.obj or {}).get("no_cache", False)
     try:
         pipeline, result = asyncio.run(
-            _jobs_list(ref, pipeline_id, depth, failed_only, stage, name_pattern, quiet=output_json, no_cache=no_cache)
+            _jobs_list(
+                ref, pipeline_id, depth, failed_only, include_allowed_failures,
+                stage, name_pattern, quiet=output_json, no_cache=no_cache,
+            )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -87,6 +91,7 @@ async def _jobs_list(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     *,
@@ -106,7 +111,13 @@ async def _jobs_list(
                     j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
                 ]
 
-    result = filter_jobs(all_jobs, failed_only=failed_only, name_pattern=name_pattern, stage=stage)
+    result = filter_jobs(
+        all_jobs,
+        failed_only=failed_only,
+        include_allowed_failures=include_allowed_failures,
+        name_pattern=name_pattern,
+        stage=stage,
+    )
     return pipeline, result
 
 
@@ -125,6 +136,7 @@ def jobs_get(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
@@ -148,7 +160,10 @@ def jobs_get(
 
     try:
         matched = asyncio.run(
-            _jobs_get(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache)
+            _jobs_get(
+                ref, pipeline_id, depth, failed_only, include_allowed_failures,
+                stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache,
+            )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -180,6 +195,7 @@ async def _jobs_get(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
@@ -204,6 +220,7 @@ async def _jobs_get(
                     j async for j in filter_jobs(
                         list_jobs(client, pipeline.id, scope=scope, cache=cache),
                         failed_only=failed_only,
+                        include_allowed_failures=include_allowed_failures,
                         name_pattern=name_pattern,
                         stage=stage,
                     )

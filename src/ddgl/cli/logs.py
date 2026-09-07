@@ -54,6 +54,7 @@ def logs(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
@@ -83,7 +84,10 @@ def logs(
 
     try:
         results = asyncio.run(
-            _fetch_logs(ref, pipeline_id, depth, failed_only, stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache)
+            _fetch_logs(
+                ref, pipeline_id, depth, failed_only, include_allowed_failures,
+                stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache,
+            )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
@@ -133,6 +137,7 @@ async def _fetch_logs(
     pipeline_id: int | None,
     depth: int,
     failed_only: bool,
+    include_allowed_failures: bool,
     stage: str | None,
     name_pattern: str | None,
     job_id: int | None,
@@ -163,6 +168,7 @@ async def _fetch_logs(
                 async for job in filter_jobs(
                     list_jobs(client, pipeline.id, scope=scope, cache=cache),
                     failed_only=failed_only,
+                    include_allowed_failures=include_allowed_failures,
                     name_pattern=name_pattern,
                     stage=stage,
                 ):

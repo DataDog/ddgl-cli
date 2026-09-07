@@ -15,7 +15,7 @@ from ddgl.client import GitLabClient
 from ddgl.core.jobs import list_jobs
 from ddgl.core.pipeline import list_pipelines
 from ddgl.model.job import Job
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import job_status_color, job_status_icon, job_status_label
 
 from .job_list import _fmt_duration
 
@@ -74,6 +74,11 @@ def _fmt_date(iso: str) -> str:
         return iso[:10]
 
 
+def _status_cell(job: Job) -> Text:
+    """Coloured status cell for a history row: icon + label."""
+    return Text(f"{job_status_icon(job)} {job_status_label(job)}", style=job_status_color(job))
+
+
 # ---------------------------------------------------------------------------
 # Widget
 # ---------------------------------------------------------------------------
@@ -129,13 +134,10 @@ class JobHistoryPanel(Static):
         table.add_column("Date", key="date", width=8)
 
         for entry in entries:
-            color = status_color(entry.job.status)
+            color = job_status_color(entry.job)
             table.add_row(
                 Text(f"#{entry.pipeline_id}", style="dim"),
-                Text(
-                    f"{status_icon(entry.job.status)} {entry.job.status}",
-                    style=color,
-                ),
+                _status_cell(entry.job),
                 Text(_fmt_duration(entry.job.duration), style=color),
                 Text(_fmt_date(entry.pipeline_created_at)),
                 key=str(entry.pipeline_id),

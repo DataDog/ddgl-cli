@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ddgl.model.job import Job
 
 _STATUS_COLORS: dict[str, str] = {
     "success": "green",
     "failed": "red",
+    "allowed-failure": "orange1",
     "running": "yellow",
     "canceled": "dim",
     "canceling": "dim",
@@ -27,6 +32,19 @@ def format_status(status: str) -> str:
     color = _STATUS_COLORS.get(status, "")
     dot = f"[{color}]●[/{color}]" if color else "●"
     return f"{dot} {status}"
+
+
+def format_job_status(job: Job) -> str:
+    """Return '● <status>' for a job, styling an allowed failure as a warning.
+
+    Takes the `Job` rather than a bare status string because "allowed
+    failure" isn't a status GitLab reports — it's `status == failed AND
+    allow_failure` — a fact only the domain object can answer.
+    """
+    if job.is_allowed_failure:
+        color = _STATUS_COLORS["allowed-failure"]
+        return f"[{color}]●[/{color}] warning"
+    return format_status(str(job.status))
 
 
 def format_duration(seconds: float | int | None) -> str:

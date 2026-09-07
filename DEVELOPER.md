@@ -127,7 +127,8 @@ Key computed properties on `Pipeline`:
 - `elapsed` — `timedelta` from `created_at` to `finished_at` (or now if still running)
 
 Key computed properties on `Job`:
-- `has_failed` — `status == JobStatus.FAILED`
+- `has_failed` — `status == JobStatus.FAILED`, regardless of `allow_failure`
+- `is_blocking` — `has_failed and not allow_failure`; failed in a way that actually fails the pipeline. A job with `allow_failure: true` that failed has `has_failed=True` but `is_blocking=False` — use this whenever "failed" is meant to exclude allowed failures (failure rollups, `-f/--failed`, etc.)
 - `is_running` — status in `JOB_RUNNING`
 
 #### `Page[T]`
@@ -255,12 +256,13 @@ Streams jobs via the API. Caches each terminal job as it passes through.
 def filter_jobs(
     jobs: Iterable[Job] | AsyncIterable[Job],
     failed_only: bool = False,
+    include_allowed_failures: bool = False,
     name_pattern: str | None = None,
     stage: str | None = None,
 ) -> list[Job] | AsyncIterator[Job]
 ```
 
-Overloaded: returns a `list` for sync input, `AsyncIterator` for async input. Filters compose with AND. `name_pattern` is a compiled regex.
+Overloaded: returns a `list` for sync input, `AsyncIterator` for async input. Filters compose with AND. `name_pattern` is a compiled regex. `failed_only` gates on `Job.is_blocking` (excludes allowed failures); `include_allowed_failures` restores the pre-`is_blocking` behaviour of also matching jobs with `allow_failure` set (CLI: `--include-allowed-failures`).
 
 #### `core/logs.py`
 

@@ -12,7 +12,7 @@ from textual.widgets import Static
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.gradient import gradient_text
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import job_status_key, status_color, status_icon
 
 
 def _fmt_elapsed(pipeline: Pipeline) -> str:
@@ -67,11 +67,12 @@ def _render(p: Pipeline, jobs: list[Job]) -> Text:
 
 
 def _render_job_stats(jobs: list[Job]) -> Text:
-    counts = Counter(str(j.status) for j in jobs)
+    counts = Counter(job_status_key(j) for j in jobs)
     line = Text()
     for status, sep in [
         ("success", "   "),
         ("failed", "   "),
+        ("allowed-failure", "   "),
         ("running", "   "),
         ("skipped", ""),
     ]:
@@ -81,7 +82,7 @@ def _render_job_stats(jobs: list[Job]) -> Text:
                 f"{status_icon(status)} {n}{sep}", style=status_color(status)
             )
     # Any remaining statuses not in the short list
-    shown = {"success", "failed", "running", "skipped"}
+    shown = {"success", "failed", "allowed-failure", "running", "skipped"}
     for status, n in counts.items():
         if status not in shown and n:
             line.append(

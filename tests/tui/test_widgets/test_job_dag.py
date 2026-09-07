@@ -4,7 +4,8 @@
 """Tests for ddgl/tui/widgets/job_dag.py — pure-function tests only."""
 from __future__ import annotations
 
-from ddgl.tui.widgets.job_dag import build_dag
+from ddgl.constants import JobStatus
+from ddgl.tui.widgets.job_dag import _job_label, build_dag
 
 from .._stubs import make_job
 
@@ -55,3 +56,24 @@ def test_current_not_in_own_downstream() -> None:
     current = make_job(id=1, name="build", needs=("build",))
     dag = build_dag(current, [current])
     assert dag.downstream == []
+
+
+# ---------------------------------------------------------------------------
+# _job_label
+# ---------------------------------------------------------------------------
+
+
+def test_job_label_allowed_failure_shows_warning() -> None:
+    job = make_job(id=1, name="flaky", status=JobStatus.FAILED, allow_failure=True)
+    text = _job_label(job)
+    assert "⚠" in text.plain
+    assert "warning" in text.plain
+    assert text.spans[0].style == "#C17D10"
+
+
+def test_job_label_blocking_failure_unchanged() -> None:
+    job = make_job(id=1, name="unit", status=JobStatus.FAILED, allow_failure=False)
+    text = _job_label(job)
+    assert "✗" in text.plain
+    assert "failed" in text.plain
+    assert text.spans[0].style == "#DD2B0E"

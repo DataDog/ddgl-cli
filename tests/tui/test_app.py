@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
+from ddgl.constants import JobStatus
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
 from ddgl.tui.app import PipelineViewer
+from ddgl.tui.widgets.filter_buttons import FilterButton
 from ddgl.tui.widgets.job_list import JobListPanel
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 
@@ -128,3 +130,125 @@ async def test_sort_mode_cycles_on_s_key() -> None:
         job_list.focus()
         await pilot.press("s")
         assert job_list.sort_mode == initial.next()
+
+
+@pytest.mark.asyncio
+async def test_allowed_failure_visible_by_default() -> None:
+    """The default status dropdown selection must include "allowed-failure"
+    so jobs with allow_failure set don't silently vanish now that they no
+    longer match the "failed" pseudo-status by default."""
+    jobs = [make_job(id=1, status=JobStatus.FAILED, allow_failure=True)]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        job_list = app.query_one(JobListPanel)
+        assert job_list.jobs[0].id == 1
+        # Not filtered out by the default status dropdown selection.
+        assert "allowed-failure" in app._dropdown_statuses
+
+
+@pytest.mark.asyncio
+async def test_typing_status_token_narrows_immediately() -> None:
+    """Regression: typing status:X in the search box must fully replace the
+    effective status filter right away, without needing to also open and
+    confirm the status dropdown.
+
+    Previously `_dropdown_statuses` (used by `_update_job_filter`) was only
+    updated when the dropdown modal was confirmed — typing a status: token
+    only updated the button's own display state, so the applied filter kept
+    unioning the freshly typed token with a stale `_dropdown_statuses`
+    snapshot (the untouched defaults), which silently widened the result
+    back out instead of narrowing it.
+    """
+    jobs = [
+        make_job(id=1, name="unit", status=JobStatus.FAILED),
+        make_job(id=2, name="e2e", status=JobStatus.SUCCESS),
+        make_job(id=3, name="deploy", status=JobStatus.RUNNING),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.action_focus_search()
+        await pilot.pause()
+        for ch in "status:failed":
+            await pilot.press(ch)
+        await pilot.pause(0.2)
+        job_list = app.query_one(JobListPanel)
+        assert job_list.filter_spec.statuses == {"failed"}
+        assert len(job_list.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_plain_text_search_preserves_default_status_filter() -> None:
+    """Regression guard for the fix above: typing plain free text (no
+    status:/stage: token) must NOT reset the status filter to "show
+    everything" — it should leave the current status filtering (default or
+    previously chosen) untouched."""
+    jobs = [
+        make_job(id=1, name="unit-tests", status=JobStatus.FAILED),
+        make_job(id=2, name="unit-skip", status=JobStatus.SKIPPED),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        app.action_focus_search()
+        await pilot.pause()
+        for ch in "unit":
+            await pilot.press(ch)
+        await pilot.pause(0.2)
+        job_list = app.query_one(JobListPanel)
+        # "skipped" isn't in the default dropdown selection — must stay excluded.
+        assert "skipped" not in job_list.filter_spec.statuses
+        assert len(job_list.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_clearing_status_token_restores_dropdown_filter() -> None:
+    """Regression: typing a status: token then clearing it must fall back
+    to the dropdown's actual selection, not get stuck on the last typed
+    value.
+
+    An earlier fix made `on_fuzzy_search_input_search_changed` overwrite
+    `_dropdown_statuses` directly whenever a status: token was typed. That
+    overwrite persisted even after the token was deleted (the empty-token
+    guard skipped re-syncing), permanently discarding whatever the dropdown
+    had actually been set to. Dropdown state must stay independent of
+    typed tokens; `_update_job_filter()` gives typed tokens precedence
+    only while they're present.
+    """
+    jobs = [
+        make_job(id=1, name="unit-tests", status=JobStatus.FAILED),
+        make_job(id=2, name="unit-skip", status=JobStatus.SKIPPED),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        default_statuses = set(app._dropdown_statuses)
+        job_list = app.query_one(JobListPanel)
+
+        app.action_focus_search()
+        await pilot.pause()
+        for ch in "status:failed":
+            await pilot.press(ch)
+        await pilot.pause(0.2)
+        assert job_list.filter_spec.statuses == {"failed"}
+        # Dropdown state itself must be untouched by typing.
+        assert app._dropdown_statuses == default_statuses
+
+        search = app.query_one("#search")
+        search.clear()
+        await pilot.pause(0.2)
+        assert job_list.filter_spec.statuses == default_statuses
+
+
+@pytest.mark.asyncio
+async def test_status_filter_options_include_allowed_failure() -> None:
+    jobs = [
+        make_job(id=1, status=JobStatus.FAILED, allow_failure=True),
+        make_job(id=2, status=JobStatus.SUCCESS),
+    ]
+    app = _make_app(jobs=jobs)
+    async with app.run_test(headless=True) as pilot:
+        await pilot.pause()
+        status_btn = app.query_one("#status-filter", FilterButton)
+        assert "allowed-failure" in status_btn._options

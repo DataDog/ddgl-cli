@@ -14,7 +14,7 @@ from ddgl.cache.cache import Cache
 from ddgl.client import GitLabClient
 from ddgl.core.jobs import get_jobs
 from ddgl.model.job import Job
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import job_status_color, job_status_icon, job_status_label
 
 from .job_list import _fmt_duration
 
@@ -49,11 +49,11 @@ def build_dag(current: Job, all_jobs: list[Job]) -> DAGResult:
 
 def _job_label(job: Job) -> Text:
     """Coloured label for a tree node: icon + name + (status, duration)."""
-    color = status_color(job.status)
+    color = job_status_color(job)
     t = Text()
-    t.append(f"{status_icon(job.status)} ", style=color)
+    t.append(f"{job_status_icon(job)} ", style=color)
     t.append(job.name, style=f"bold {color}")
-    t.append(f"  ({job.status}, {_fmt_duration(job.duration)})", style="dim")
+    t.append(f"  ({job_status_label(job)}, {_fmt_duration(job.duration)})", style="dim")
     return t
 
 

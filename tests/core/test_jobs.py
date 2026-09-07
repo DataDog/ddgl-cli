@@ -49,6 +49,7 @@ def _job_payload(
     status: str = "success",
     name: str = "test-job",
     stage: str = "test",
+    allow_failure: bool = False,
 ) -> dict[str, Any]:
     return {
         "id": job_id,
@@ -57,7 +58,7 @@ def _job_payload(
         "status": status,
         "ref": "main",
         "web_url": f"https://gitlab.example.com/grp/proj/-/jobs/{job_id}",
-        "allow_failure": False,
+        "allow_failure": allow_failure,
         "failure_reason": None,
         "duration": 30.0,
         "created_at": "2024-01-01T00:00:00.000Z",
@@ -274,3 +275,21 @@ class TestFilterJobs:
         jobs = self._make_jobs()
         result = filter_jobs(iter(jobs), failed_only=True)
         assert len(result) == 2
+
+    def test_failed_only_excludes_allowed_failures(self) -> None:
+        jobs = self._make_jobs() + [
+            Job.from_api(
+                _job_payload(5, status="failed", name="flaky-test", stage="test", allow_failure=True)
+            )
+        ]
+        result = filter_jobs(jobs, failed_only=True)
+        assert [j.id for j in result] == [1, 3]
+
+    def test_failed_only_with_include_allowed_failures_restores_old_behaviour(self) -> None:
+        jobs = self._make_jobs() + [
+            Job.from_api(
+                _job_payload(5, status="failed", name="flaky-test", stage="test", allow_failure=True)
+            )
+        ]
+        result = filter_jobs(jobs, failed_only=True, include_allowed_failures=True)
+        assert [j.id for j in result] == [1, 3, 5]

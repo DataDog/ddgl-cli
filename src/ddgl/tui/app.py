@@ -24,7 +24,7 @@ from ddgl.model.pipeline import Pipeline
 from ddgl.tui.screens.job_detail import JobDetailScreen
 from ddgl.tui.widgets.filter_buttons import FilterButton, SortButton
 from ddgl.tui.widgets.help import HelpModal
-from ddgl.tui.widgets.job_list import JobListPanel, SortMode
+from ddgl.tui.widgets.job_list import JobListPanel, SortMode, status_token
 from ddgl.tui.widgets.pipeline_info import PipelineInfoPanel
 from ddgl.tui.widgets.pipeline_list import PipelineListPanel
 from ddgl.tui.widgets.search_bar import FilterSpec, FuzzySearchInput, parse_query
@@ -71,7 +71,7 @@ class PipelineViewer(App[None]):
         self._cache = cache
         # Filter state: text tokens from search box + explicit dropdown selections.
         self._text_filter = FilterSpec()
-        self._dropdown_statuses: set[str] = {"running", "failed", "success"}
+        self._dropdown_statuses: set[str] = {"running", "failed", "allowed-failure", "success"}
         self._dropdown_stages: set[str] = set()
         # Refresh state.
         self._refresh_timer: Timer | None = None
@@ -142,7 +142,15 @@ class PipelineViewer(App[None]):
     ) -> None:
         self._text_filter = parse_query(message.query)
         self._text_filter.regex = message.regex
-        # Sync dropdown button labels to reflect tokens typed in the search box.
+        # Sync the dropdown buttons' own *display* state to reflect tokens
+        # typed in the search box — but never `_dropdown_statuses`/
+        # `_dropdown_stages` themselves. Those stay independent, driven
+        # only by the dropdown modal (`on_filter_button_filters_changed`).
+        # `_update_job_filter()` gives typed tokens precedence when
+        # present, so this button-label sync is purely cosmetic; keeping
+        # `_dropdown_*` untouched here means clearing a typed token falls
+        # back to whatever the dropdown was actually set to, rather than
+        # a value overwritten (and stuck) from the last thing you typed.
         self.query_one("#status-filter", FilterButton).set_selected(
             self._text_filter.statuses
         )
@@ -161,10 +169,13 @@ class PipelineViewer(App[None]):
         self._update_job_filter()
 
     def _update_job_filter(self) -> None:
+        # A typed status:/stage: token takes over as the authoritative
+        # filter for that dimension; only fall back to the dropdown's
+        # selection when nothing was typed.
         spec = FilterSpec(
             text=self._text_filter.text,
-            statuses=self._text_filter.statuses | self._dropdown_statuses,
-            stages=self._text_filter.stages | self._dropdown_stages,
+            statuses=self._text_filter.statuses or self._dropdown_statuses,
+            stages=self._text_filter.stages or self._dropdown_stages,
             regex=self._text_filter.regex,
         )
         self.query_one(JobListPanel).filter_spec = spec
@@ -190,7 +201,7 @@ class PipelineViewer(App[None]):
         job_list.jobs = jobs
 
         # Populate filter button options from the loaded job list.
-        statuses = sorted({str(j.status) for j in jobs})
+        statuses = sorted({status_token(j) for j in jobs})
         stages = sorted({j.stage for j in jobs})
         status_btn = self.query_one("#status-filter", FilterButton)
         status_btn.update_options(statuses)

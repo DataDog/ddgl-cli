@@ -30,7 +30,7 @@ from ddgl.tui.gradient import gradient_text
 from ddgl.tui.search import apply_search
 from ddgl.tui.widgets.job_dag import JobDAGPanel
 from ddgl.tui.widgets.search_bar import FuzzySearchInput
-from ddgl.tui.widgets.status import status_color, status_icon
+from ddgl.tui.widgets.status import job_status_color, job_status_icon, job_status_label
 
 # ---------------------------------------------------------------------------
 # Pure helpers (testable without a running app)
@@ -46,13 +46,13 @@ def _fmt_duration(seconds: float | None) -> str:
 
 def _render_meta(job: Job) -> Text:
     """Build the Rich Text block for the left-hand metadata panel."""
-    color = status_color(job.status)
+    color = job_status_color(job)
     t = Text()
     t.append(f"{job.name}\n\n", style="bold")
     t.append("Stage\n", style="dim")
     t.append(f"{job.stage}\n\n")
     t.append("Status\n", style="dim")
-    t.append(f"{status_icon(job.status)} {job.status}\n\n", style=color)
+    t.append(f"{job_status_icon(job)} {job_status_label(job)}\n\n", style=color)
     t.append("Duration\n", style="dim")
     t.append(f"{_fmt_duration(job.duration)}\n")
     if job.runner_description:
