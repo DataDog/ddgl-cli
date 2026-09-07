@@ -28,7 +28,7 @@ dependencies = [
     "msgspec>=0.19",
     "tomli_w>=1.2.0",
     "platformdirs>=4.0",
-    "rich>=13.0",
+    "rich>=15.0.0",
     "rich-click>=1.8",
     "textual>=1.0",
 ]
