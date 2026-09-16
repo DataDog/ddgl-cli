@@ -14,6 +14,13 @@ concurrency:
   # Superseded pull request pushes are worth cancelling; main is not.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # `uv run` provisions the environment from uv.lock on first use, so no
+  # explicit sync step is needed. UV_LOCKED makes it refuse to run at all if
+  # uv.lock has drifted from pyproject.toml, which is the check an explicit
+  # `uv sync --locked` would otherwise provide.
+  UV_LOCKED: "1"
+
 jobs:
   # lint, test and build are mutually independent and intentionally carry no
   # `needs:`, so all six runners start at once. Each job's `if:` blocks fork
@@ -28,8 +35,15 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up uv and dependencies
-        uses: ./.github/actions/setup
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          # lint, build and the ubuntu/3.12 test leg run concurrently on the
+          # same OS and Python, so they derive an identical cache key and race
+          # to save it. Scoping per job keeps each save uncontended.
+          cache-suffix: ${{ github.job }}
 
       # Called directly rather than through pre-commit: --output-format=github
       # turns findings into inline annotations on the diff, and these
@@ -68,10 +82,12 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up uv and dependencies
-        uses: ./.github/actions/setup
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Run tests
         run: uv run pytest -v --cov --cov-report=
@@ -109,8 +125,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up uv and dependencies
-        uses: ./.github/actions/setup
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Download coverage data from every matrix leg
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -148,8 +168,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Set up uv and dependencies
-        uses: ./.github/actions/setup
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-suffix: ${{ github.job }}
 
       - name: Build wheel and sdist
         run: uv build
