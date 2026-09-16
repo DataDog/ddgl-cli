@@ -40,6 +40,20 @@ jobs:
       - name: ruff format
         run: uv run ruff format --check --diff .
 
+      - name: Restore the pre-commit cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # Only the file-hygiene hooks: the ruff hooks are covered above with
+      # better output, and they rewrite files rather than reporting. Also
+      # catches anything committed with --no-verify.
+      - name: Run the file-hygiene hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: ruff-check,ruff-format
+
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
