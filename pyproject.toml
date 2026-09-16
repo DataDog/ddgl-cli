@@ -63,6 +63,9 @@ include = ["src/", "LICENSE", "README.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Release tooling under scripts/ is not shipped in the wheel, so it is not
+# importable as part of the package.
+pythonpath = ["scripts"]
 
 [tool.coverage.run]
 source = ["src/ddgl"]
