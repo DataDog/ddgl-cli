@@ -1,5 +1,7 @@
 # ddgl
 
+[![CI](https://github.com/DataDog/ddgl-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/DataDog/ddgl-cli/actions/workflows/ci.yml)
+
 Terminal-based GitLab CI client — browse pipelines, stream logs, and triage failures from your terminal.
 
 <!-- TODO: screenshot / asciinema of `ddgl viz` -->
@@ -284,8 +286,12 @@ ddgl jobs list --help
 
 ```bash
 uv sync
+uv run pre-commit install --install-hooks   # once per clone
 uv run pytest -v
-uv run ruff check --fix
 ```
+
+The hooks format and lint on commit, and run the tests your change affects.
+The first commit after a clone runs the whole suite once (~35s) to build
+testmon's database; later commits take a second or two.
 
 See [DEVELOPER.md](DEVELOPER.md) for the overall architecture and contributor guidelines.
