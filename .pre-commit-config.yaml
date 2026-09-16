@@ -1,0 +1,43 @@
+# Install with: uv run pre-commit install --install-hooks
+# CI skips the local hooks by id, so keep ci.yml's SKIP list in step with them.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # Local, not astral-sh/ruff-pre-commit, so only one ruff version exists: the
+  # one in uv.lock, which dependabot already tracks.
+  - repo: local
+    hooks:
+      # Entry and require_serial mirror upstream ruff-pre-commit: ruff already
+      # multi-threads, so sharding files across processes only adds overhead.
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # A green run is a signal, not a proof: testmon only selects tests that
+      # already execute the changed code. CI runs the full suite.
+      - id: testmon
+        name: pytest (tests affected by this change)
+        entry: uv run pytest --testmon -q
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/|pyproject\.toml$|uv\.lock$)
+        # Concurrent pytest processes would corrupt the shared .testmondata.
+        require_serial: true

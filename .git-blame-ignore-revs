@@ -3,5 +3,5 @@
 # GitHub honours this file automatically. To use it locally, run:
 #     git config blame.ignoreRevsFile .git-blame-ignore-revs
 
-# chore: apply ruff format across the codebase
-a1798454710f041fe0923f25954a8e53f5fc9d73
+# chore: apply ruff format across the codebase (#19)
+648c036186a0ee4f79deeb88299f13443c61538c

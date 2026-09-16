@@ -24,9 +24,51 @@ Reference for contributors: architecture, design principles, and layer-by-layer 
 
 ```bash
 uv sync
+uv run pre-commit install --install-hooks   # once per clone
 uv run pytest -v
-uv run ruff check --fix
 ```
+
+### Hooks
+
+`pre-commit` runs three things on commit:
+
+| Hook | What it does |
+| --- | --- |
+| `ruff check --fix` | Lints and applies safe autofixes |
+| `ruff format` | Formats. `ruff check` does **not** format — it is a separate command |
+| `pytest --testmon` | Runs only the tests affected by the change |
+
+The first commit after a clone runs the entire suite once (~35s) to build
+testmon's `.testmondata`. After that a no-op commit costs ~0.3s and a typical
+source edit a few seconds.
+
+> **A green `testmon` run is a signal, not a proof.** It can only select tests
+> that already execute the changed code. Editing a thinly covered module, or
+> changing a constant that is only read at import time, selects *no tests* and
+> still reports success. CI runs the full suite on every supported OS and
+> Python version; that is the real gate.
+
+To run everything yourself:
+
+```bash
+uv run pytest -v          # full suite
+uv run pytest --cov       # full suite with a coverage report
+```
+
+### Coverage
+
+CI measures **branch** coverage — not just whether a line ran, but whether both
+outcomes of each conditional were taken — and fails below **80%**. It is
+currently ~85%.
+
+Coverage is collected on all four CI matrix legs and combined, because
+`shell.py`, `git.py` and the platformdirs lookups execute different code per
+OS. Coverage is not enabled by default locally, so it neither slows the hooks
+nor interferes with testmon.
+
+The floor exists to stop backsliding. It does not show the tests are good:
+85% branch coverage says nothing about whether the assertions are meaningful,
+so treat it as a floor rather than a target.
 
 ---
 

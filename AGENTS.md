@@ -8,7 +8,9 @@
 
 ## Tooling
 
-- Fix lint issues with `uv run ruff check --fix` rather than editing manually.
+- Fix lint issues with `uv run ruff check --fix && uv run ruff format` rather than editing manually. `ruff check` does not format; the formatter is a separate command.
+- The pre-commit hooks do both automatically, plus run the tests affected by the change. Install them once with `uv run pre-commit install --install-hooks`.
+- A green `testmon` hook is not proof the change is tested: it can only select tests that already execute the changed code, so edits to thinly covered modules and changes to import-time constants select nothing. CI runs the full suite.
 
 ## Architecture
 

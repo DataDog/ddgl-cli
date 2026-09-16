@@ -42,8 +42,11 @@ ddgl = "ddgl.cli:main"
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.6.2",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-testmon>=2.2.0",
     "respx>=0.22",
     "ruff>=0.8",
 ]
@@ -60,6 +63,23 @@ include = ["src/", "LICENSE", "README.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/ddgl"]
+branch = true
+# Each CI matrix leg writes its own .coverage.<suffix> for `coverage combine`.
+parallel = true
+
+[tool.coverage.paths]
+# Linux and macOS runners check out to different absolute paths. Without this
+# remapping, `coverage combine` treats the same module as two separate files
+# and reports roughly half the real coverage.
+source = ["src/ddgl", "*/src/ddgl", "*/site-packages/ddgl"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 src = ["src"]
