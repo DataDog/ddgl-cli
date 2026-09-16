@@ -17,6 +17,11 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         enable-cache: true
+        # lint, build and the ubuntu/3.12 test leg run concurrently on the
+        # same OS and Python, so they derive an identical cache key and race
+        # to save it, and the losers log a "failed to reserve cache" warning.
+        # Scoping the key per job keeps each one's save uncontended.
+        cache-suffix: ${{ github.job }}
 
     # --locked fails when uv.lock is out of sync with pyproject.toml, so a
     # dependency change that forgets to refresh the lockfile is caught here.
