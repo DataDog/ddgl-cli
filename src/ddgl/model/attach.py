@@ -165,7 +165,7 @@ class RetryPolicy(msgspec.Struct, frozen=True):
 
     enabled: bool = False
     attempts_per_job: int = DEFAULT_JOB_RETRY_ATTEMPTS  # 0 = unlimited
-    total: int = DEFAULT_JOB_RETRY_TOTAL                # 0 = unlimited
+    total: int = DEFAULT_JOB_RETRY_TOTAL  # 0 = unlimited
     exclude: tuple[str, ...] = ()  # job-name regexes never auto-retried
 
 
@@ -249,7 +249,11 @@ class JobEvent(AttachEvent, kw_only=True, tag="job"):
         # Job transitions are where nearly all the noise lives on a large
         # pipeline (hundreds of created→running/running→pending blips), so
         # only ones reaching a terminal status show below --detail full.
-        return DetailLevel.NORMAL if self.status in _TERMINAL_JOB_STATUSES else DetailLevel.FULL
+        return (
+            DetailLevel.NORMAL
+            if self.status in _TERMINAL_JOB_STATUSES
+            else DetailLevel.FULL
+        )
 
 
 class PipelineEvent(AttachEvent, kw_only=True, tag="pipeline"):

@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/core/logs.py."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

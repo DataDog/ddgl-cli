@@ -25,9 +25,7 @@ class ShellError(Exception):
         self.cmd = cmd
         self.returncode = returncode
         self.stderr = stderr
-        super().__init__(
-            f"Command {cmd} failed (rc={returncode}): {stderr}"
-        )
+        super().__init__(f"Command {cmd} failed (rc={returncode}): {stderr}")
 
 
 class PaginationLimitError(Exception):
@@ -37,9 +35,7 @@ class PaginationLimitError(Exception):
         self.max_pages = max_pages
         self.total_pages = total_pages
         total = f"/{total_pages}" if total_pages else ""
-        super().__init__(
-            f"Pagination limit reached: fetched {max_pages}{total} pages"
-        )
+        super().__init__(f"Pagination limit reached: fetched {max_pages}{total} pages")
 
 
 class NoPipelineFoundError(Exception):
@@ -48,9 +44,7 @@ class NoPipelineFoundError(Exception):
     def __init__(self, ref: str, depth: int) -> None:
         self.ref = ref
         self.depth = depth
-        super().__init__(
-            f"No pipeline found in the last {depth} commits on '{ref}'."
-        )
+        super().__init__(f"No pipeline found in the last {depth} commits on '{ref}'.")
 
 
 class NotFoundError(Exception):
@@ -85,9 +79,7 @@ class GitLabAPIError(Exception):
         self.method = method
         self.path = path
         detail = f": {message}" if message else ""
-        super().__init__(
-            f"{method} {path} -> {status_code}{detail}"
-        )
+        super().__init__(f"{method} {path} -> {status_code}{detail}")
 
     @property
     def is_retryable(self) -> bool:

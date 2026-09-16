@@ -8,7 +8,7 @@ from rich.text import Text
 # Brand colours used across the TUI.
 PURPLE = "#774AA4"  # DataDog purple
 ORANGE = "#FC6D26"  # GitLab orange
-AMBER = "#FCA121"   # amber highlight
+AMBER = "#FCA121"  # amber highlight
 
 
 def gradient_text(text: str, start_hex: str = ORANGE, end_hex: str = AMBER) -> Text:
@@ -17,6 +17,7 @@ def gradient_text(text: str, start_hex: str = ORANGE, end_hex: str = AMBER) -> T
     n = len(text)
     if n == 0:
         return t
+
     def _parse(h: str) -> tuple[int, int, int]:
         return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
 

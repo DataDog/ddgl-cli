@@ -35,9 +35,9 @@ _REFRESH_INTERVAL = 20  # seconds between auto-refreshes for running pipelines
 
 _DD_THEME = Theme(
     name="datadog",
-    primary="#774AA4",    # DataDog purple
+    primary="#774AA4",  # DataDog purple
     secondary="#5A3E8E",  # darker purple variant
-    accent="#FC6D26",     # GitLab orange accent
+    accent="#FC6D26",  # GitLab orange accent
     warning="#FAB800",
     error="#DD2B0E",
     success="#2DA160",
@@ -74,7 +74,12 @@ class PipelineViewer(App[None]):
         self._cache = cache
         # Filter state: text tokens from search box + explicit dropdown selections.
         self._text_filter = FilterSpec()
-        self._dropdown_statuses: set[str] = {"running", "failed", "allowed-failure", "success"}
+        self._dropdown_statuses: set[str] = {
+            "running",
+            "failed",
+            "allowed-failure",
+            "success",
+        }
         self._dropdown_stages: set[str] = set()
         # Refresh state.
         self._refresh_timer: Timer | None = None
@@ -323,14 +328,10 @@ class PipelineViewer(App[None]):
     ) -> None:
         self.load_pipeline(message.pipeline)
 
-    def on_job_list_panel_job_selected(
-        self, message: JobListPanel.JobSelected
-    ) -> None:
+    def on_job_list_panel_job_selected(self, message: JobListPanel.JobSelected) -> None:
         all_jobs = self.query_one(JobListPanel).jobs
         self.push_screen(
-            JobDetailScreen(
-                message.job, self._client, self._cache, all_jobs=all_jobs
-            )
+            JobDetailScreen(message.job, self._client, self._cache, all_jobs=all_jobs)
         )
 
     def on_job_detail_screen_job_retried(

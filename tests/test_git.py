@@ -61,16 +61,32 @@ class TestGetRecentShas:
     @pytest.fixture()
     def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         """Repo with 3 commits."""
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
-        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True,
-                       env=env, capture_output=True)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t.co",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t.co",
+        }
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=tmp_path,
+            check=True,
+            env=env,
+            capture_output=True,
+        )
         for i in range(3):
             (tmp_path / f"file{i}.txt").write_text(str(i))
-            subprocess.run(["git", "add", "."], cwd=tmp_path, check=True,
-                           capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"commit {i}"], cwd=tmp_path,
-                           check=True, env=env, capture_output=True)
+            subprocess.run(
+                ["git", "add", "."], cwd=tmp_path, check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", f"commit {i}"],
+                cwd=tmp_path,
+                check=True,
+                env=env,
+                capture_output=True,
+            )
         monkeypatch.chdir(tmp_path)
         return tmp_path
 
@@ -91,7 +107,10 @@ class TestGetRecentShas:
         shas = await get_recent_shas(depth=3)
         # HEAD is first — get HEAD sha via git
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True,
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
         head_sha = result.stdout.decode().strip()
         assert shas[0] == head_sha
@@ -100,7 +119,10 @@ class TestGetRecentShas:
         shas = await get_recent_shas(depth=3, start="HEAD~1")
         assert len(shas) == 2  # HEAD~1 and its one ancestor
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD~1"], cwd=repo, check=True, capture_output=True,
+            ["git", "rev-parse", "HEAD~1"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
         assert shas[0] == result.stdout.decode().strip()
 
@@ -113,15 +135,18 @@ class TestLooksLikeSha:
     @pytest.mark.parametrize(
         "ref, expected",
         [
-            ("abc1234", True),          # 7 hex chars, minimum abbreviation
-            ("a" * 40, True),           # full-length SHA
-            ("ABC1234", True),          # case-insensitive
-            ("main", False),            # branch name
-            ("main^", False),           # revision expression
-            ("feature/foo", False),     # branch with slash
-            ("abc123", False),          # too short (6 hex chars)
-            ("a" * 41, False),          # too long
-            ("deadbee", True),          # hex-looking but is a real word — still matches (documented limitation)
+            ("abc1234", True),  # 7 hex chars, minimum abbreviation
+            ("a" * 40, True),  # full-length SHA
+            ("ABC1234", True),  # case-insensitive
+            ("main", False),  # branch name
+            ("main^", False),  # revision expression
+            ("feature/foo", False),  # branch with slash
+            ("abc123", False),  # too short (6 hex chars)
+            ("a" * 41, False),  # too long
+            (
+                "deadbee",
+                True,
+            ),  # hex-looking but is a real word — still matches (documented limitation)
         ],
     )
     def test_heuristic(self, ref: str, expected: bool) -> None:
@@ -130,56 +155,80 @@ class TestLooksLikeSha:
 
 class TestDetectProjectPath:
     async def test_detects_gitlab_remote(
-        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_git_repo)
         path = await detect_project_path()
         assert path == "my-group/my-project"
 
     async def test_github_remote_ignored_by_default(
-        self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_github_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_github_repo)
         path = await detect_project_path()
         assert path is None
 
     async def test_detects_github_remote_when_fallback_enabled(
-        self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_github_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_github_repo)
         path = await detect_project_path(allow_github_fallback=True)
         assert path == "DataDog/my-repo"
 
     async def test_prefers_gitlab_over_github_fallback(
-        self, tmp_github_repo: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_github_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_github_repo)
         subprocess.run(
-            ["git", "remote", "add", "gitlab",
-             "git@gitlab.example.com:DataDog/my-repo.git"],
-            cwd=tmp_github_repo, check=True, capture_output=True,
+            [
+                "git",
+                "remote",
+                "add",
+                "gitlab",
+                "git@gitlab.example.com:DataDog/my-repo.git",
+            ],
+            cwd=tmp_github_repo,
+            check=True,
+            capture_output=True,
         )
         path = await detect_project_path(allow_github_fallback=True)
         # gitlab remote wins over the github fallback
         assert path == "DataDog/my-repo"
 
     async def test_returns_none_outside_git_repo(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_path)
         path = await detect_project_path()
         assert path is None
 
     async def test_returns_none_no_remotes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         repo = tmp_path / "bare"
         repo.mkdir()
-        env = {**os.environ,
-               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
-        subprocess.run(["git", "init"], cwd=repo, check=True,
-                       capture_output=True, env=env)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t.co",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t.co",
+        }
+        subprocess.run(
+            ["git", "init"], cwd=repo, check=True, capture_output=True, env=env
+        )
         monkeypatch.chdir(repo)
         path = await detect_project_path()
         assert path is None

@@ -5,6 +5,7 @@
 
 These are local scaffolding types — not production imports.
 """
+
 from __future__ import annotations
 
 from ddgl.constants import JobStatus, PipelineStatus

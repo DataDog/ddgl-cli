@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/pipeline_info.py."""
+
 from __future__ import annotations
 
 from rich.text import Text

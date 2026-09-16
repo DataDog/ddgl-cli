@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/screens/job_detail.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -55,6 +56,7 @@ def _trace(*children):
     from ddgl.model.trace import Trace
 
     return Trace(children=list(children))
+
 
 # ---------------------------------------------------------------------------
 # _fmt_duration
@@ -382,8 +384,11 @@ class _FakeClient:
             raise self.retry_error
         self.retried_job_ids.append(job_id)
         return make_job(
-            id=999, name=self._job.name, stage=self._job.stage,
-            status=JobStatus.PENDING, pipeline_id=self._job.pipeline_id,
+            id=999,
+            name=self._job.name,
+            stage=self._job.stage,
+            status=JobStatus.PENDING,
+            pipeline_id=self._job.pipeline_id,
         )
 
 

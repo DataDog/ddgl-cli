@@ -46,7 +46,7 @@ def _hhmmss(ts: str) -> str:
 
 
 def _pluralize_jobs(count: int) -> str:
-    """"1 job" / "2 jobs"."""
+    """ "1 job" / "2 jobs"."""
     return f"{count} job" if count == 1 else f"{count} jobs"
 
 
@@ -89,7 +89,9 @@ def event_to_text(event: AttachEvent, detail: DetailLevel = DetailLevel.NORMAL) 
         # jobs_total is None on attach()'s first ("attached, jobs not yet
         # loaded") snapshot — see AttachEvent's docstring. Must not render
         # as the literal string "None jobs".
-        jobs_part = "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
+        jobs_part = (
+            "loading jobs…" if event.jobs_total is None else f"{event.jobs_total} jobs"
+        )
         return f"[{ts}]{_tag('INFO')}attach #{event.pipeline_id}{ref} — {event.status}, {jobs_part}"
     if isinstance(event, JobEvent):
         old = event.old_status or "new"
@@ -130,7 +132,10 @@ def _visible_at(event: AttachEvent, detail: DetailLevel) -> bool:
 
 
 async def render_lines(
-    events: AsyncIterator[AttachEvent], *, as_json: bool = False, detail: DetailLevel = DetailLevel.NORMAL
+    events: AsyncIterator[AttachEvent],
+    *,
+    as_json: bool = False,
+    detail: DetailLevel = DetailLevel.NORMAL,
 ) -> AttachEvent:
     """Consume attach()'s event stream, printing one line per event.
 
@@ -153,12 +158,17 @@ async def render_lines(
             result = event
         if as_json:
             console.print(
-                msgspec.json.encode(event).decode(), highlight=False, markup=False, soft_wrap=True
+                msgspec.json.encode(event).decode(),
+                highlight=False,
+                markup=False,
+                soft_wrap=True,
             )
             continue
         if not _visible_at(event, detail):
             continue
-        console.print(event_to_text(event, detail), highlight=False, markup=False, soft_wrap=True)
+        console.print(
+            event_to_text(event, detail), highlight=False, markup=False, soft_wrap=True
+        )
     assert result is not None, "attach() event stream ended without a result event"
     return result
 
@@ -205,14 +215,18 @@ def _live_markup(event: AttachEvent, detail: DetailLevel, *, retries: int = 0) -
     if event.pipeline_elapsed is not None:
         bits.append(f"[dim]{format_duration(event.pipeline_elapsed)} elapsed[/dim]")
     if detail > DetailLevel.MINIMAL and event.eta_seconds is not None:
-        bits.append(f"[dim italic]~{format_duration(event.eta_seconds)} left[/dim italic]")
+        bits.append(
+            f"[dim italic]~{format_duration(event.eta_seconds)} left[/dim italic]"
+        )
     return "  " + " · ".join(bits)
 
 
 def _final_renderable(event: ResultEvent) -> RenderableType:
     if event.reason == "timeout":
         if event.pipeline_id is None:
-            return Text.from_markup("[yellow]⏱[/yellow]  timed out waiting for a pipeline to appear")
+            return Text.from_markup(
+                "[yellow]⏱[/yellow]  timed out waiting for a pipeline to appear"
+            )
         text = f"[yellow]⏱[/yellow]  #{event.pipeline_id} timed out waiting (status: {event.status})"
         return Text.from_markup(text)
 
@@ -232,11 +246,15 @@ def _final_renderable(event: ResultEvent) -> RenderableType:
 
     renderables: list[RenderableType] = [Text.from_markup(line)]
     if event.failed_jobs:
-        renderables.append(Text.from_markup(f"   failed: {', '.join(event.failed_jobs)}"))
+        renderables.append(
+            Text.from_markup(f"   failed: {', '.join(event.failed_jobs)}")
+        )
     return Group(*renderables)
 
 
-async def render_live(events: AsyncIterator[AttachEvent], detail: DetailLevel = DetailLevel.NORMAL) -> AttachEvent:
+async def render_live(
+    events: AsyncIterator[AttachEvent], detail: DetailLevel = DetailLevel.NORMAL
+) -> AttachEvent:
     """Consume attach()'s event stream as a redrawing single-line TTY view.
 
     A "switched" event (--follow rebind) is additionally printed as a
@@ -270,7 +288,10 @@ async def render_live(events: AsyncIterator[AttachEvent], detail: DetailLevel = 
                 live.update(_final_renderable(event))
                 break
             live.update(
-                Spinner("dots", text=Text.from_markup(_live_markup(event, detail, retries=retries)))
+                Spinner(
+                    "dots",
+                    text=Text.from_markup(_live_markup(event, detail, retries=retries)),
+                )
             )
     assert result is not None, "attach() event stream ended without a result event"
     return result

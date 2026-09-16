@@ -156,7 +156,13 @@ def _status_summary(jobs: list[Job]) -> Text:
     counts = Counter(status_token(j) for j in jobs)
     line = Text()
     for status in (
-        "failed", "allowed-failure", "canceled", "running", "pending", "skipped", "success",
+        "failed",
+        "allowed-failure",
+        "canceled",
+        "running",
+        "pending",
+        "skipped",
+        "success",
     ):
         n = counts.get(status, 0)
         if n:

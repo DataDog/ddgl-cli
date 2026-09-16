@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/attach.py."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -109,7 +110,9 @@ async def _fake_load_config(cache: Cache | None = None) -> Config:
 
 class TestAttachConfig:
     async def test_loads_config_with_open_cache(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         received_cache: Cache | None = None
 
@@ -123,9 +126,20 @@ class TestAttachConfig:
         monkeypatch.setattr("ddgl.cli.attach.load_config", fail_after_capturing_cache)
 
         exit_code = await _attach(
-            ref="main", pipeline_id=None, depth=10, interval=1, heartbeat=False,
-            detail="normal", wait_for_start=True, follow=False, timeout=None,
-            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=False,
+            ref="main",
+            pipeline_id=None,
+            depth=10,
+            interval=1,
+            heartbeat=False,
+            detail="normal",
+            wait_for_start=True,
+            follow=False,
+            timeout=None,
+            retry_policy=RetryPolicy(),
+            output_json=False,
+            plain=True,
+            force_live=False,
+            no_cache=False,
         )
 
         assert exit_code == 2
@@ -139,18 +153,37 @@ class TestAttachApiError:
         # Resolve a running pipeline, then have the jobs endpoint 500 — the
         # exact failure the user hit on datadog-agent (500 mid-pagination).
         _mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
-            return_value=Response(200, json=[
-                {"id": 1, "ref": "main", "status": "running", "sha": "abc",
-                 "created_at": "2026-07-21T00:00:00.000Z"},
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    {
+                        "id": 1,
+                        "ref": "main",
+                        "status": "running",
+                        "sha": "abc",
+                        "created_at": "2026-07-21T00:00:00.000Z",
+                    },
+                ],
+            )
         )
         _mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
             return_value=Response(500, json={"message": "500 Internal Server Error"})
         )
         exit_code = await _attach(
-            ref="main", pipeline_id=None, depth=10, interval=0.01, heartbeat=False,
-            detail="normal", wait_for_start=True, follow=False, timeout=None,
-            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=True,
+            ref="main",
+            pipeline_id=None,
+            depth=10,
+            interval=0.01,
+            heartbeat=False,
+            detail="normal",
+            wait_for_start=True,
+            follow=False,
+            timeout=None,
+            retry_policy=RetryPolicy(),
+            output_json=False,
+            plain=True,
+            force_live=False,
+            no_cache=True,
         )
         assert exit_code == 2
 
@@ -163,9 +196,20 @@ class TestAttachApiError:
         monkeypatch.setattr(GitLabClient, "_get_response", disconnected)
 
         exit_code = await _attach(
-            ref="main", pipeline_id=None, depth=10, interval=0.01, heartbeat=False,
-            detail="normal", wait_for_start=True, follow=False, timeout=None,
-            retry_policy=RetryPolicy(), output_json=False, plain=True, force_live=False, no_cache=True,
+            ref="main",
+            pipeline_id=None,
+            depth=10,
+            interval=0.01,
+            heartbeat=False,
+            detail="normal",
+            wait_for_start=True,
+            follow=False,
+            timeout=None,
+            retry_policy=RetryPolicy(),
+            output_json=False,
+            plain=True,
+            force_live=False,
+            no_cache=True,
         )
 
         assert exit_code == 2
@@ -181,7 +225,9 @@ async def _unreachable(**kwargs: object) -> int:
 
 
 class TestRetryFlags:
-    def _policy_from(self, args: list[str], monkeypatch: pytest.MonkeyPatch) -> RetryPolicy:
+    def _policy_from(
+        self, args: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> RetryPolicy:
         """Run `attach` far enough to capture the policy it built."""
         captured: dict[str, RetryPolicy] = {}
 
@@ -204,10 +250,21 @@ class TestRetryFlags:
         assert policy.total == DEFAULT_JOB_RETRY_TOTAL
         assert policy.exclude == ()
 
-    def test_tuning_values_are_threaded_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tuning_values_are_threaded_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         policy = self._policy_from(
-            ["--retry", "--retry-attempts", "5", "--retry-total", "7",
-             "--retry-exclude", "e2e", "--retry-exclude", "^deploy"],
+            [
+                "--retry",
+                "--retry-attempts",
+                "5",
+                "--retry-total",
+                "7",
+                "--retry-exclude",
+                "e2e",
+                "--retry-exclude",
+                "^deploy",
+            ],
             monkeypatch,
         )
         assert (policy.attempts_per_job, policy.total) == (5, 7)
@@ -220,7 +277,8 @@ class TestRetryFlags:
         assert (policy.attempts_per_job, policy.total) == (0, 0)
 
     @pytest.mark.parametrize(
-        "flag", [
+        "flag",
+        [
             ["--retry-attempts", "5"],
             ["--retry-total", "7"],
             ["--retry-exclude", "e2e"],
@@ -236,7 +294,9 @@ class TestRetryFlags:
         assert "no effect without --retry" in result.output
         assert flag[0] in result.output
 
-    def test_every_offending_flag_is_named(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_every_offending_flag_is_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr("ddgl.cli.attach._attach", _unreachable)
         result = CliRunner().invoke(
             main, ["attach", "--retry-attempts", "5", "--retry-total", "7"]
@@ -253,10 +313,14 @@ class TestRetryFlags:
         assert self._policy_from([], monkeypatch).enabled is False
 
     def test_negative_values_are_rejected(self) -> None:
-        result = CliRunner().invoke(main, ["attach", "--retry", "--retry-attempts", "-1"])
+        result = CliRunner().invoke(
+            main, ["attach", "--retry", "--retry-attempts", "-1"]
+        )
         assert result.exit_code == 2
 
-    def test_invalid_exclude_regex_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_invalid_exclude_regex_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Caught at parse time rather than as a traceback on whichever
         poll tick first had a candidate to match."""
         monkeypatch.setattr("ddgl.cli.attach._attach", _unreachable)

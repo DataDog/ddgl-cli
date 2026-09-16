@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/render/attach.py."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -37,8 +38,13 @@ from ddgl.render.attach import (
 
 class TestEventToText:
     def test_snapshot(self) -> None:
-        e = SnapshotEvent(ts="2026-07-21T12:00:03+00:00",
-            pipeline_id=918342, ref="feature/checkout", status="running", jobs_total=40, jobs_done=0,
+        e = SnapshotEvent(
+            ts="2026-07-21T12:00:03+00:00",
+            pipeline_id=918342,
+            ref="feature/checkout",
+            status="running",
+            jobs_total=40,
+            jobs_done=0,
         )
         text = event_to_text(e)
         assert "40 jobs" in text
@@ -46,8 +52,11 @@ class TestEventToText:
     def test_snapshot_with_no_jobs_loaded_yet_shows_loading(self) -> None:
         """attach()'s early snapshot (before the job fetch) has jobs_total
         None — must render as 'loading jobs…', never the string 'None jobs'."""
-        e = SnapshotEvent(ts="2026-07-21T12:00:03+00:00",
-            pipeline_id=918342, ref="feature/checkout", status="running",
+        e = SnapshotEvent(
+            ts="2026-07-21T12:00:03+00:00",
+            pipeline_id=918342,
+            ref="feature/checkout",
+            status="running",
         )
         text = event_to_text(e)
         assert "None" not in text
@@ -56,79 +65,140 @@ class TestEventToText:
         assert "attach #918342 feature/checkout" in text
 
     def test_job_without_duration(self) -> None:
-        e = JobEvent(ts="2026-07-21T12:03:14+00:00",
-            job_id=1, job_stage="test", job_name="build:unit", old_status="created", status="running",
+        e = JobEvent(
+            ts="2026-07-21T12:03:14+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build:unit",
+            old_status="created",
+            status="running",
         )
         text = event_to_text(e)
         assert text == "[12:03:14][JOB]   build:unit created→running"
 
     def test_job_with_duration(self) -> None:
-        e = JobEvent(ts="2026-07-21T12:05:29+00:00",
-            job_id=1, job_stage="test", job_name="build:unit", old_status="running", status="failed", duration=135.0,
+        e = JobEvent(
+            ts="2026-07-21T12:05:29+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build:unit",
+            old_status="running",
+            status="failed",
+            duration=135.0,
         )
         text = event_to_text(e)
         assert "build:unit running→failed" in text
         assert "2m 15s" in text
 
     def test_job_new_has_no_old_status_shown_as_new(self) -> None:
-        e = JobEvent(ts="2026-07-21T12:00:00+00:00", job_id=1, job_stage="test", job_name="x", old_status=None, status="created")
+        e = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="x",
+            old_status=None,
+            status="created",
+        )
         assert "x new→created" in event_to_text(e)
 
     def test_job_message_hidden_at_normal_detail(self) -> None:
-        e = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="unit", old_status="running", status="failed", message="script_failure",
+        e = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="unit",
+            old_status="running",
+            status="failed",
+            message="script_failure",
         )
         assert "script_failure" not in event_to_text(e, detail=DetailLevel.NORMAL)
 
     def test_job_message_shown_at_full_detail(self) -> None:
-        e = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="unit", old_status="running", status="failed", message="script_failure",
+        e = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="unit",
+            old_status="running",
+            status="failed",
+            message="script_failure",
         )
         assert "script_failure" in event_to_text(e, detail=DetailLevel.FULL)
 
     def test_pipeline(self) -> None:
-        e = PipelineEvent(ts="2026-07-21T12:31:57+00:00", old_status="running", status="failed")
+        e = PipelineEvent(
+            ts="2026-07-21T12:31:57+00:00", old_status="running", status="failed"
+        )
         assert event_to_text(e) == "[12:31:57][PIPE]  running→failed"
 
     def test_heartbeat(self) -> None:
-        e = HeartbeatEvent(ts="2026-07-21T12:10:00+00:00",
-            jobs_total=40, jobs_done=22, failed_jobs=("a", "b", "c", "d"),
+        e = HeartbeatEvent(
+            ts="2026-07-21T12:10:00+00:00",
+            jobs_total=40,
+            jobs_done=22,
+            failed_jobs=("a", "b", "c", "d"),
         )
         assert event_to_text(e) == "[12:10:00][BEAT]  22/40 jobs, 4 failed"
 
     def test_poll(self) -> None:
-        e = PollEvent(ts="2026-07-21T12:10:00+00:00",
-            jobs_total=40, jobs_done=22, failed_jobs=("a", "b"), current_stage="test",
+        e = PollEvent(
+            ts="2026-07-21T12:10:00+00:00",
+            jobs_total=40,
+            jobs_done=22,
+            failed_jobs=("a", "b"),
+            current_stage="test",
         )
         assert event_to_text(e) == "[12:10:00][POLL]  22/40 jobs · 2 failed · test"
 
     def test_switched(self) -> None:
-        e = SwitchedEvent(ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found")
+        e = SwitchedEvent(
+            ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found"
+        )
         assert event_to_text(e) == "[12:00:00][WARN]  newer pipeline #2 found"
 
     def test_result_success_no_failed_jobs_clause(self) -> None:
-        e = ResultEvent(ts="2026-07-21T12:31:57+00:00", pipeline_id=1,
-            status="success", reason="terminal",
+        e = ResultEvent(
+            ts="2026-07-21T12:31:57+00:00",
+            pipeline_id=1,
+            status="success",
+            reason="terminal",
         )
         text = event_to_text(e)
         assert text == "[12:31:57][FINAL] Pipeline #1 SUCCESS."
 
     def test_result_failed_lists_failed_jobs(self) -> None:
-        e = ResultEvent(ts="2026-07-21T12:31:57+00:00", pipeline_id=918342,
-            status="failed", failed_jobs=("build:unit", "lint:ruff"), reason="terminal",
+        e = ResultEvent(
+            ts="2026-07-21T12:31:57+00:00",
+            pipeline_id=918342,
+            status="failed",
+            failed_jobs=("build:unit", "lint:ruff"),
+            reason="terminal",
         )
         text = event_to_text(e)
-        assert text == "[12:31:57][FINAL] Pipeline #918342 FAILED. Failed jobs: build:unit, lint:ruff"
+        assert (
+            text
+            == "[12:31:57][FINAL] Pipeline #918342 FAILED. Failed jobs: build:unit, lint:ruff"
+        )
 
     def test_result_timeout_with_pipeline(self) -> None:
-        e = ResultEvent(ts="2026-07-21T12:00:00+00:00", pipeline_id=1, status="running", reason="timeout")
+        e = ResultEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            pipeline_id=1,
+            status="running",
+            reason="timeout",
+        )
         text = event_to_text(e)
         assert "Timed out waiting for pipeline #1" in text
         assert "running" in text
 
     def test_result_timeout_without_pipeline(self) -> None:
-        e = ResultEvent(ts="2026-07-21T12:00:00+00:00", pipeline_id=None, reason="timeout")
-        assert event_to_text(e) == "[12:00:00][FINAL] Timed out waiting for a pipeline to appear."
+        e = ResultEvent(
+            ts="2026-07-21T12:00:00+00:00", pipeline_id=None, reason="timeout"
+        )
+        assert (
+            event_to_text(e)
+            == "[12:00:00][FINAL] Timed out waiting for a pipeline to appear."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -140,22 +210,47 @@ def _events(*events: AttachEvent) -> AsyncIterator[AttachEvent]:
     async def _gen() -> AsyncIterator[AttachEvent]:
         for e in events:
             yield e
+
     return _gen()
 
 
-_SNAPSHOT = SnapshotEvent(ts="2026-07-21T12:00:00+00:00", pipeline_id=1, ref="main", status="running",
-    jobs_total=1, jobs_done=0,
+_SNAPSHOT = SnapshotEvent(
+    ts="2026-07-21T12:00:00+00:00",
+    pipeline_id=1,
+    ref="main",
+    status="running",
+    jobs_total=1,
+    jobs_done=0,
 )
-_JOB = JobEvent(ts="2026-07-21T12:00:05+00:00", job_id=1, job_stage="test", job_name="a", old_status="running", status="success", duration=5.0)
-_PIPELINE = PipelineEvent(ts="2026-07-21T12:00:05+00:00", old_status="running", status="success")
+_JOB = JobEvent(
+    ts="2026-07-21T12:00:05+00:00",
+    job_id=1,
+    job_stage="test",
+    job_name="a",
+    old_status="running",
+    status="success",
+    duration=5.0,
+)
+_PIPELINE = PipelineEvent(
+    ts="2026-07-21T12:00:05+00:00", old_status="running", status="success"
+)
 _HEARTBEAT = HeartbeatEvent(ts="2026-07-21T12:00:02+00:00", jobs_total=1, jobs_done=0)
-_RESULT = ResultEvent(ts="2026-07-21T12:00:05+00:00", pipeline_id=1, ref="main", status="success",
-    jobs_total=1, jobs_done=1, duration=5.0, reason="terminal",
+_RESULT = ResultEvent(
+    ts="2026-07-21T12:00:05+00:00",
+    pipeline_id=1,
+    ref="main",
+    status="success",
+    jobs_total=1,
+    jobs_done=1,
+    duration=5.0,
+    reason="terminal",
 )
 
 
 class TestRenderLines:
-    async def test_prints_lines_and_returns_result(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_prints_lines_and_returns_result(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         result = await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _RESULT))
         out = capsys.readouterr().out
         assert "[INFO]" in out
@@ -164,7 +259,9 @@ class TestRenderLines:
         assert "[FINAL]" in out
         assert result is _RESULT
 
-    async def test_as_json_emits_valid_jsonl(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_as_json_emits_valid_jsonl(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         await render_lines(_events(_SNAPSHOT, _RESULT), as_json=True)
         out = capsys.readouterr().out
         lines = [line for line in out.splitlines() if line]
@@ -172,11 +269,18 @@ class TestRenderLines:
         decoded = [msgspec.json.decode(line, type=dict) for line in lines]
         expected = [msgspec.to_builtins(_SNAPSHOT), msgspec.to_builtins(_RESULT)]
         for e in expected:
-            e["failed_jobs"] = list(e["failed_jobs"])  # JSON array decodes as list, not tuple
+            e["failed_jobs"] = list(
+                e["failed_jobs"]
+            )  # JSON array decodes as list, not tuple
         assert decoded == expected
 
-    async def test_detail_none_shows_only_result(self, capsys: pytest.CaptureFixture[str]) -> None:
-        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail=DetailLevel.NONE)
+    async def test_detail_none_shows_only_result(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        await render_lines(
+            _events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT),
+            detail=DetailLevel.NONE,
+        )
         out = capsys.readouterr().out
         assert "[INFO]" not in out
         assert "[JOB]" not in out
@@ -187,25 +291,42 @@ class TestRenderLines:
     async def test_detail_minimal_shows_summaries_but_not_job_or_pipeline(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        await render_lines(_events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT), detail=DetailLevel.MINIMAL)
+        await render_lines(
+            _events(_SNAPSHOT, _JOB, _PIPELINE, _HEARTBEAT, _RESULT),
+            detail=DetailLevel.MINIMAL,
+        )
         out = capsys.readouterr().out
         assert "[INFO]" in out
         assert "[BEAT]" in out
         assert "[JOB]" not in out
         assert "[PIPE]" not in out
 
-    async def test_detail_normal_shows_job_only_when_terminal(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_detail_normal_shows_job_only_when_terminal(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """At --detail normal, job transitions are the one kind gated by
         status: only transitions reaching a terminal state (success/
         failed/canceled/skipped) are shown — the created→running/
         running→pending blips that dominate on a large pipeline are not."""
-        in_progress = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="build", old_status="created", status="running",
+        in_progress = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build",
+            old_status="created",
+            status="running",
         )
-        terminal = JobEvent(ts="2026-07-21T12:00:01+00:00",
-            job_id=1, job_stage="test", job_name="build", old_status="running", status="success",
+        terminal = JobEvent(
+            ts="2026-07-21T12:00:01+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build",
+            old_status="running",
+            status="success",
         )
-        await render_lines(_events(in_progress, terminal, _RESULT), detail=DetailLevel.NORMAL)
+        await render_lines(
+            _events(in_progress, terminal, _RESULT), detail=DetailLevel.NORMAL
+        )
         out = capsys.readouterr().out
         job_lines = [line for line in out.splitlines() if "[JOB]" in line]
         assert len(job_lines) == 1
@@ -217,8 +338,12 @@ class TestRenderLines:
         """Pipeline transitions and --follow rebinds are rare/low-noise
         compared to job transitions, so unlike "job" they aren't gated by
         terminal status at the normal level."""
-        switched = SwitchedEvent(ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found")
-        await render_lines(_events(_PIPELINE, switched, _RESULT), detail=DetailLevel.NORMAL)
+        switched = SwitchedEvent(
+            ts="2026-07-21T12:00:00+00:00", message="newer pipeline #2 found"
+        )
+        await render_lines(
+            _events(_PIPELINE, switched, _RESULT), detail=DetailLevel.NORMAL
+        )
         out = capsys.readouterr().out
         assert "[PIPE]" in out
         assert "[WARN]" in out
@@ -228,12 +353,24 @@ class TestRenderLines:
     ) -> None:
         """The engine emits a distinct post-poll summary once the tick's
         transition burst is complete; transitions themselves stay concise."""
-        job = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="build", old_status="running", status="success",
-            jobs_total=10, jobs_done=4, failed_jobs=("lint",), current_stage="test",
+        job = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build",
+            old_status="running",
+            status="success",
+            jobs_total=10,
+            jobs_done=4,
+            failed_jobs=("lint",),
+            current_stage="test",
         )
-        poll = PollEvent(ts="2026-07-21T12:00:00+00:00",
-            jobs_total=10, jobs_done=4, failed_jobs=("lint",), current_stage="test",
+        poll = PollEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            jobs_total=10,
+            jobs_done=4,
+            failed_jobs=("lint",),
+            current_stage="test",
         )
         await render_lines(_events(job, poll, _RESULT))
         out = capsys.readouterr().out
@@ -249,8 +386,13 @@ class TestRenderLines:
     async def test_minimal_shows_poll_summary_but_not_transition(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        job = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="build", old_status="running", status="success",
+        job = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="build",
+            old_status="running",
+            status="success",
         )
         poll = PollEvent(ts="2026-07-21T12:00:00+00:00", jobs_total=10, jobs_done=4)
         await render_lines(_events(job, poll, _RESULT), detail=DetailLevel.MINIMAL)
@@ -266,12 +408,19 @@ class TestRenderLines:
             out = capsys.readouterr().out
             assert "[FINAL]" in out, f"missing [FINAL] at detail={detail}"
 
-    async def test_long_line_is_not_word_wrapped(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_long_line_is_not_word_wrapped(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """A long job name (or a long JSONL line) must stay one physical
         line — Rich word-wraps to terminal width by default, which would
         silently split one event across multiple output lines."""
-        long_job = JobEvent(ts="2026-07-21T12:00:00+00:00",
-            job_id=1, job_stage="test", job_name="a" * 200, old_status="running", status="success",
+        long_job = JobEvent(
+            ts="2026-07-21T12:00:00+00:00",
+            job_id=1,
+            job_stage="test",
+            job_name="a" * 200,
+            old_status="running",
+            status="success",
         )
         await render_lines(_events(long_job, _RESULT))
         out = capsys.readouterr().out
@@ -291,9 +440,16 @@ class TestLiveMarkup:
         assert "loading jobs" in markup
 
     def test_normal_state_shows_counts_and_stage_and_eta(self) -> None:
-        e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
-            jobs_total=40, jobs_done=18, failed_jobs=("a", "b"),
-            current_stage="test", eta_seconds=90,
+        e = SnapshotEvent(
+            ts="x",
+            pipeline_id=1,
+            ref="main",
+            status="running",
+            jobs_total=40,
+            jobs_done=18,
+            failed_jobs=("a", "b"),
+            current_stage="test",
+            eta_seconds=90,
         )
         markup = _live_markup(e, DetailLevel.NORMAL)
         assert "18/40 jobs" in markup
@@ -305,14 +461,26 @@ class TestLiveMarkup:
         """--detail none in live mode is the bare spinner with no text at
         all — the only content is the final state, shown separately via
         _final_renderable once the result event arrives."""
-        e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
-            jobs_total=40, jobs_done=18,
+        e = SnapshotEvent(
+            ts="x",
+            pipeline_id=1,
+            ref="main",
+            status="running",
+            jobs_total=40,
+            jobs_done=18,
         )
         assert _live_markup(e, DetailLevel.NONE) == ""
 
     def test_detail_minimal_omits_stage_and_eta(self) -> None:
-        e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
-            jobs_total=40, jobs_done=18, current_stage="test", eta_seconds=90,
+        e = SnapshotEvent(
+            ts="x",
+            pipeline_id=1,
+            ref="main",
+            status="running",
+            jobs_total=40,
+            jobs_done=18,
+            current_stage="test",
+            eta_seconds=90,
         )
         markup = _live_markup(e, DetailLevel.MINIMAL)
         assert "18/40 jobs" in markup
@@ -320,8 +488,14 @@ class TestLiveMarkup:
         assert "left" not in markup
 
     def test_detail_full_names_failed_jobs_instead_of_counting(self) -> None:
-        e = SnapshotEvent(ts="x", pipeline_id=1, ref="main", status="running",
-            jobs_total=40, jobs_done=18, failed_jobs=("build:unit", "lint:ruff"),
+        e = SnapshotEvent(
+            ts="x",
+            pipeline_id=1,
+            ref="main",
+            status="running",
+            jobs_total=40,
+            jobs_done=18,
+            failed_jobs=("build:unit", "lint:ruff"),
         )
         markup = _live_markup(e, DetailLevel.FULL)
         assert "2 failed" not in markup
@@ -334,8 +508,12 @@ class TestRenderLive:
         result = await render_live(_events(_SNAPSHOT, _JOB, _RESULT))
         assert result is _RESULT
 
-    async def test_switched_prints_warning_above_live_region(self, capsys: pytest.CaptureFixture[str]) -> None:
-        switched = SwitchedEvent(ts="2026-07-21T12:00:00+00:00", pipeline_id=2, message="switching to #2")
+    async def test_switched_prints_warning_above_live_region(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        switched = SwitchedEvent(
+            ts="2026-07-21T12:00:00+00:00", pipeline_id=2, message="switching to #2"
+        )
         await render_live(_events(_SNAPSHOT, switched, _RESULT))
         out = capsys.readouterr().out
         assert "switching to #2" in out
@@ -370,13 +548,17 @@ class TestRetryLine:
         other line's message and break the column alignment."""
         assert len(_tag("RETRY")) == _TAG_WIDTH
 
-    async def test_shown_at_minimal_detail(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_shown_at_minimal_detail(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Rare and high-signal, so it survives filtering that drops job
         transitions."""
         await render_lines(_events(_RETRY, _RESULT), detail=DetailLevel.MINIMAL)
         assert "[RETRY]" in capsys.readouterr().out
 
-    async def test_hidden_at_detail_none(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_hidden_at_detail_none(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         await render_lines(_events(_RETRY, _RESULT), detail=DetailLevel.NONE)
         assert "[RETRY]" not in capsys.readouterr().out
 
@@ -384,21 +566,34 @@ class TestRetryLine:
 class TestRetryCountInFinalLine:
     def test_absent_when_nothing_was_retried(self) -> None:
         event = ResultEvent(
-            ts="x", pipeline_id=1, status="success", reason="terminal",
-            jobs_total=2, jobs_done=2,
+            ts="x",
+            pipeline_id=1,
+            status="success",
+            reason="terminal",
+            jobs_total=2,
+            jobs_done=2,
         )
         assert "retried" not in event_to_text(event)
 
     def test_reported_when_retries_happened(self) -> None:
         event = ResultEvent(
-            ts="x", pipeline_id=1, status="success", reason="terminal",
-            jobs_total=2, jobs_done=2, retries=2,
+            ts="x",
+            pipeline_id=1,
+            status="success",
+            reason="terminal",
+            jobs_total=2,
+            jobs_done=2,
+            retries=2,
         )
         assert "Auto-retried 2 jobs." in event_to_text(event)
 
     def test_singular_for_one_retry(self) -> None:
         event = ResultEvent(
-            ts="x", pipeline_id=1, status="success", reason="terminal", retries=1,
+            ts="x",
+            pipeline_id=1,
+            status="success",
+            reason="terminal",
+            retries=1,
         )
         assert "Auto-retried 1 job." in event_to_text(event)
 
@@ -429,7 +624,9 @@ class TestRenderLiveRetries:
         assert "unit-tests-1" in out
         assert "#98801" in out
 
-    async def test_silent_at_detail_none(self, capsys: pytest.CaptureFixture[str]) -> None:
+    async def test_silent_at_detail_none(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         await render_live(_events(_SNAPSHOT, _RETRY, _RESULT), detail=DetailLevel.NONE)
         assert "unit-tests-1" not in capsys.readouterr().out
 
@@ -437,8 +634,14 @@ class TestRenderLiveRetries:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = ResultEvent(
-            ts="x", pipeline_id=1, ref="main", status="success", reason="terminal",
-            jobs_total=2, jobs_done=2, retries=3,
+            ts="x",
+            pipeline_id=1,
+            ref="main",
+            status="success",
+            reason="terminal",
+            jobs_total=2,
+            jobs_done=2,
+            retries=3,
         )
         await render_live(_events(_SNAPSHOT, result))
         assert "3 retried" in capsys.readouterr().out

@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/core/attach.py."""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +39,7 @@ from ._stubs import TEST_CONFIG, FakeCache
 _PROJECT_ID = TEST_CONFIG.project_id
 _ENCODED_PROJECT = _PROJECT_ID.replace("/", "%2F")
 
+
 def _job(job_id: int, stage: str, status: JobStatus) -> Job:
     return Job(
         id=job_id, name=f"job-{job_id}", stage=stage, status=status, pipeline_id=1
@@ -69,8 +71,12 @@ class TestTransitionEvents:
     def test_job_status_change_yields_job_then_poll(self) -> None:
         job_before = _job(10, "build", JobStatus.RUNNING)
         job_after = _job(10, "build", JobStatus.SUCCESS)
-        prev = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_before])
-        curr = PipelineState(pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_after])
+        prev = PipelineState(
+            pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_before]
+        )
+        curr = PipelineState(
+            pipeline=_pipeline(1, PipelineStatus.RUNNING), jobs=[job_after]
+        )
         events = _build_tick_events(prev, curr, context=_EMPTY_CTX, heartbeat=False)
         assert [_kind(e) for e in events] == ["job", "poll"]
         job_event = events[0]
@@ -121,9 +127,14 @@ async def client(mock_api: respx.MockRouter) -> GitLabClient:
         yield c
 
 
-def _pipeline_payload(pipeline_id: int, status: str = "running", ref: str = "main") -> dict[str, Any]:
+def _pipeline_payload(
+    pipeline_id: int, status: str = "running", ref: str = "main"
+) -> dict[str, Any]:
     return {
-        "id": pipeline_id, "ref": ref, "status": status, "sha": "abc123",
+        "id": pipeline_id,
+        "ref": ref,
+        "status": status,
+        "sha": "abc123",
         "created_at": "2024-01-01T00:00:00.000Z",
         "finished_at": "2024-01-01T00:05:00.000Z" if status != "running" else None,
     }
@@ -137,7 +148,11 @@ def _job_payload(
     allow_failure: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "id": job_id, "name": name, "stage": stage, "status": status, "ref": "main",
+        "id": job_id,
+        "name": name,
+        "stage": stage,
+        "status": status,
+        "ref": "main",
         "pipeline": {"id": 100},
         "duration": 30.0 if status in ("success", "failed") else None,
         "allow_failure": allow_failure,
@@ -153,7 +168,9 @@ def _kind(event: AttachEvent) -> str:
     return type(event).__name__.removesuffix("Event").lower()
 
 
-def _mock_resolve(mock_api: respx.MockRouter, *, pipeline_id: int, ref: str = "main") -> None:
+def _mock_resolve(
+    mock_api: respx.MockRouter, *, pipeline_id: int, ref: str = "main"
+) -> None:
     """Mock the initial list-pipelines call used by resolve_pipeline."""
     mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
         return_value=Response(200, json=[_pipeline_payload(pipeline_id, ref=ref)])
@@ -174,9 +191,27 @@ class TestAttachHappyPath:
 
         jobs_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs")
         jobs_route.side_effect = [
-            Response(200, json=[_job_payload(10, "created", "a"), _job_payload(11, "created", "b")]),
-            Response(200, json=[_job_payload(10, "running", "a"), _job_payload(11, "created", "b")]),
-            Response(200, json=[_job_payload(10, "success", "a"), _job_payload(11, "success", "b")]),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "created", "a"),
+                    _job_payload(11, "created", "b"),
+                ],
+            ),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "running", "a"),
+                    _job_payload(11, "created", "b"),
+                ],
+            ),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "success", "a"),
+                    _job_payload(11, "success", "b"),
+                ],
+            ),
         ]
         pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
         pipeline_route.side_effect = [
@@ -192,7 +227,15 @@ class TestAttachHappyPath:
         # poll rollup; within a tick, a pipeline transition is checked before
         # job transitions — matches tick2 here: pipeline flips before jobs do.
         assert kinds == [
-            "snapshot", "snapshot", "job", "poll", "pipeline", "job", "job", "poll", "result"
+            "snapshot",
+            "snapshot",
+            "job",
+            "poll",
+            "pipeline",
+            "job",
+            "job",
+            "poll",
+            "result",
         ]
         # Regression: pipeline_id was only ever set explicitly on some event
         # kinds; "job" and "heartbeat" events fell through to the struct's
@@ -206,7 +249,10 @@ class TestAttachHappyPath:
         assert early_snapshot.ref == "main"
         assert early_snapshot.jobs_total is None  # jobs not loaded yet
         assert early_snapshot.jobs_done is None
-        assert early_snapshot.pipeline_elapsed is not None and early_snapshot.pipeline_elapsed > 0
+        assert (
+            early_snapshot.pipeline_elapsed is not None
+            and early_snapshot.pipeline_elapsed > 0
+        )
 
         snapshot = events[1]
         assert snapshot.pipeline_id == 1
@@ -219,7 +265,11 @@ class TestAttachHappyPath:
         assert snapshot.pipeline_elapsed is not None and snapshot.pipeline_elapsed > 0
 
         job_events = [e for e in events if isinstance(e, JobEvent)]
-        assert (job_events[0].job_name, job_events[0].old_status, job_events[0].status) == ("a", "created", "running")
+        assert (
+            job_events[0].job_name,
+            job_events[0].old_status,
+            job_events[0].status,
+        ) == ("a", "created", "running")
         assert job_events[0].job_stage == "test"  # that job's own stage
 
         result = events[-1]
@@ -254,7 +304,9 @@ class TestAttachFailure:
             Response(200, json=[_job_payload(10, "failed", "unit")]),
         ]
         pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
-        pipeline_route.side_effect = [Response(200, json=_pipeline_payload(1, "failed"))]
+        pipeline_route.side_effect = [
+            Response(200, json=_pipeline_payload(1, "failed"))
+        ]
 
         events = await _collect(client, ref="main")
         result = events[-1]
@@ -276,13 +328,17 @@ class TestAttachFailure:
 
         jobs_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs")
         jobs_route.side_effect = [
-            Response(200, json=[_job_payload(10, "running", "flaky", allow_failure=True)]),
+            Response(
+                200, json=[_job_payload(10, "running", "flaky", allow_failure=True)]
+            ),
             Response(
                 200, json=[_job_payload(10, "failed", "flaky", allow_failure=True)]
             ),
         ]
         pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
-        pipeline_route.side_effect = [Response(200, json=_pipeline_payload(1, "success"))]
+        pipeline_route.side_effect = [
+            Response(200, json=_pipeline_payload(1, "success"))
+        ]
 
         events = await _collect(client, ref="main")
         result = events[-1]
@@ -352,7 +408,9 @@ class TestAttachFollow:
         list_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines")
         list_route.side_effect = [
             Response(200, json=[_pipeline_payload(1, "running")]),  # initial resolve
-            Response(200, json=[_pipeline_payload(2, "success", ref="main")]),  # follow check finds #2
+            Response(
+                200, json=[_pipeline_payload(2, "success", ref="main")]
+            ),  # follow check finds #2
         ]
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
             return_value=Response(200, json=[_job_payload(10, "running", "a")])
@@ -386,8 +444,11 @@ class TestAttachFollow:
             if pipeline_id == 2:
                 return [
                     Job(
-                        id=20, name="a", stage="test",
-                        status=JobStatus.SUCCESS, pipeline_id=2,
+                        id=20,
+                        name="a",
+                        stage="test",
+                        status=JobStatus.SUCCESS,
+                        pipeline_id=2,
                     )
                 ]
             return await real_get_all_jobs(cached_client, pipeline_id, **kwargs)
@@ -411,9 +472,27 @@ class TestAttachHeartbeat:
         _mock_resolve(mock_api, pipeline_id=1)
         jobs_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs")
         jobs_route.side_effect = [
-            Response(200, json=[_job_payload(10, "created", "a"), _job_payload(11, "created", "b")]),
-            Response(200, json=[_job_payload(10, "running", "a"), _job_payload(11, "created", "b")]),
-            Response(200, json=[_job_payload(10, "success", "a"), _job_payload(11, "success", "b")]),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "created", "a"),
+                    _job_payload(11, "created", "b"),
+                ],
+            ),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "running", "a"),
+                    _job_payload(11, "created", "b"),
+                ],
+            ),
+            Response(
+                200,
+                json=[
+                    _job_payload(10, "success", "a"),
+                    _job_payload(11, "success", "b"),
+                ],
+            ),
         ]
         pipeline_route = mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1")
         pipeline_route.side_effect = [
@@ -448,7 +527,9 @@ class TestAttachHeartbeat:
         beat = next(e for e in events if isinstance(e, HeartbeatEvent))
         assert (beat.jobs_total, beat.jobs_done) == (1, 0)
         assert beat.ref == "main"
-        assert beat.pipeline_id == 1  # regression: heartbeat used to fall through to None
+        assert (
+            beat.pipeline_id == 1
+        )  # regression: heartbeat used to fall through to None
 
     async def test_no_heartbeat_by_default(
         self, client: GitLabClient, mock_api: respx.MockRouter
@@ -488,7 +569,10 @@ class TestAttachTimeoutWhileRunning:
         assert result.status == "running"
 
     async def test_cancels_initial_job_fetch_at_deadline(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _mock_resolve(mock_api, pipeline_id=1)
 
@@ -503,6 +587,7 @@ class TestAttachTimeoutWhileRunning:
         assert asyncio.get_running_loop().time() - started < 0.05
         assert [_kind(event) for event in events] == ["snapshot", "result"]
         assert events[-1].reason == "timeout"
+
 
 class TestAttachCaching:
     async def test_polls_bypass_cache_and_write_terminal_jobs(
@@ -544,7 +629,10 @@ class TestAttachCaching:
 
 class TestAttachPollResilience:
     async def test_transient_tick_failure_is_skipped_not_fatal(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _mock_resolve(mock_api, pipeline_id=1)
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
@@ -574,7 +662,10 @@ class TestAttachPollResilience:
         assert all(_kind(e) != "result" or e is events[-1] for e in events)
 
     async def test_transport_tick_failure_is_skipped_not_fatal(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import httpx
 
@@ -598,7 +689,10 @@ class TestAttachPollResilience:
         assert events[-1].status == "success"
 
     async def test_gives_up_after_max_consecutive_failures(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from ddgl.constants import MAX_CONSECUTIVE_POLL_FAILURES
 
@@ -622,7 +716,10 @@ class TestAttachPollResilience:
         assert calls["n"] == MAX_CONSECUTIVE_POLL_FAILURES
 
     async def test_follow_check_failure_does_not_block_main_poll(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _mock_resolve(mock_api, pipeline_id=1)
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
@@ -636,7 +733,10 @@ class TestAttachPollResilience:
             raise GitLabAPIError(500, "GET", "/fake", "boom")
 
         import ddgl.core.attach as attach_module
-        monkeypatch.setattr(attach_module, "list_pipelines", always_failing_list_pipelines)
+
+        monkeypatch.setattr(
+            attach_module, "list_pipelines", always_failing_list_pipelines
+        )
 
         events = await _collect(client, ref="main", follow=True)
         # Despite the follow-check failing every single tick, the main poll
@@ -646,17 +746,26 @@ class TestAttachPollResilience:
         assert events[-1].status == "success"
 
     async def test_follow_job_fetch_failure_stays_on_old_pipeline(
-        self, client: GitLabClient, mock_api: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         call_state = {"list_calls": 0}
 
         def _list_side_effect(request: Any, **kwargs: Any) -> Response:
             call_state["list_calls"] += 1
             if call_state["list_calls"] == 1:
-                return Response(200, json=[_pipeline_payload(1, "running")])  # initial resolve
-            return Response(200, json=[_pipeline_payload(2, "running", ref="main")])  # every follow-check
+                return Response(
+                    200, json=[_pipeline_payload(1, "running")]
+                )  # initial resolve
+            return Response(
+                200, json=[_pipeline_payload(2, "running", ref="main")]
+            )  # every follow-check
 
-        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(side_effect=_list_side_effect)
+        mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines").mock(
+            side_effect=_list_side_effect
+        )
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
             return_value=Response(200, json=[_job_payload(10, "success", "a")])
         )
@@ -736,7 +845,9 @@ class _RetryScenario:
             side_effect=self._pipeline
         )
 
-    def accepts_retry(self, job_id: int, *, new_id: int, name: str = "a") -> respx.Route:
+    def accepts_retry(
+        self, job_id: int, *, new_id: int, name: str = "a"
+    ) -> respx.Route:
         return self.mock_api.post(
             f"/projects/{_ENCODED_PROJECT}/jobs/{job_id}/retry"
         ).mock(return_value=Response(200, json=_job_payload(new_id, "pending", name)))
@@ -782,7 +893,9 @@ class TestAttachRetry:
         scenario.install()
         route = scenario.accepts_retry(10, new_id=11)
 
-        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+        events = await _collect(
+            retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2
+        )
 
         assert route.call_count == 1
         retry = next(e for e in events if isinstance(e, RetryEvent))
@@ -823,7 +936,10 @@ class TestAttachRetry:
         assert route.call_count == 1
 
     async def test_job_with_a_newer_record_is_not_retried(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         """Something already retried it — GitLab's own `retry:`, another
         ddgl run, or a human in the web UI."""
@@ -841,7 +957,10 @@ class TestAttachRetry:
         assert events[-1].reason == "terminal"  # nothing retried, so it ends
 
     async def test_attempts_budget_is_respected(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         scenario.poll_pages = [[_job_payload(30, "failed", "a")]]
         # Three records for this name: the original plus two retries.
@@ -853,48 +972,65 @@ class TestAttachRetry:
         scenario.install()
 
         await _collect(
-            retry_client, ref="main",
+            retry_client,
+            ref="main",
             retry_policy=RetryPolicy(enabled=True, attempts_per_job=2),
         )
 
         assert _posts(retry_api) == []
 
     async def test_total_budget_caps_the_run(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
-        scenario.poll_pages = [[
-            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
-        ]]
+        scenario.poll_pages = [
+            [
+                _job_payload(10, "failed", "a"),
+                _job_payload(20, "failed", "b"),
+            ]
+        ]
         scenario.attempts = [
-            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+            _job_payload(10, "failed", "a"),
+            _job_payload(20, "failed", "b"),
         ]
         scenario.install()
         scenario.accepts_retry(10, new_id=11, name="a")
         scenario.accepts_retry(20, new_id=21, name="b")
 
         await _collect(
-            retry_client, ref="main",
-            retry_policy=RetryPolicy(enabled=True, total=1), timeout=0.2,
+            retry_client,
+            ref="main",
+            retry_policy=RetryPolicy(enabled=True, total=1),
+            timeout=0.2,
         )
 
         assert len(_posts(retry_api)) == 1
 
     async def test_excluded_names_are_never_retried(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
         scenario.attempts = [_job_payload(10, "failed", "flaky-e2e")]
         scenario.install()
 
         await _collect(
-            retry_client, ref="main",
+            retry_client,
+            ref="main",
             retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
         )
 
         assert _posts(retry_api) == []
 
     async def test_allowed_failures_are_never_retried(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         scenario.statuses = ["success"]  # an allowed failure doesn't fail it
         scenario.poll_pages = [[_job_payload(10, "failed", "a", allow_failure=True)]]
@@ -908,17 +1044,23 @@ class TestAttachRetry:
     async def test_a_rejected_retry_does_not_stop_the_others(
         self, retry_client: GitLabClient, scenario: _RetryScenario
     ) -> None:
-        scenario.poll_pages = [[
-            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
-        ]]
+        scenario.poll_pages = [
+            [
+                _job_payload(10, "failed", "a"),
+                _job_payload(20, "failed", "b"),
+            ]
+        ]
         scenario.attempts = [
-            _job_payload(10, "failed", "a"), _job_payload(20, "failed", "b"),
+            _job_payload(10, "failed", "a"),
+            _job_payload(20, "failed", "b"),
         ]
         scenario.install()
         rejected = scenario.rejects_retry(10)
         accepted = scenario.accepts_retry(20, new_id=21, name="b")
 
-        events = await _collect(retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2)
+        events = await _collect(
+            retry_client, ref="main", retry_policy=_RETRY_ON, timeout=0.2
+        )
 
         assert rejected.called
         assert accepted.call_count == 1
@@ -959,7 +1101,10 @@ class TestAttachRetry:
         assert events[-1].retries == 1
 
     async def test_disabled_by_default(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         scenario.poll_pages = [[_job_payload(10, "failed", "a")]]
         scenario.attempts = [_job_payload(10, "failed", "a")]
@@ -971,7 +1116,10 @@ class TestAttachRetry:
         assert events[-1].retries == 0
 
     async def test_no_tally_fetch_without_candidates(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         """A tick with nothing failing must not pay for the extra call."""
         scenario.statuses = ["success"]
@@ -985,14 +1133,18 @@ class TestAttachRetry:
         )
 
     async def test_no_tally_fetch_when_every_candidate_is_excluded(
-        self, retry_client: GitLabClient, scenario: _RetryScenario, retry_api: respx.MockRouter
+        self,
+        retry_client: GitLabClient,
+        scenario: _RetryScenario,
+        retry_api: respx.MockRouter,
     ) -> None:
         """The local gates run first, so an excluded job costs no call."""
         scenario.poll_pages = [[_job_payload(10, "failed", "flaky-e2e")]]
         scenario.install()
 
         await _collect(
-            retry_client, ref="main",
+            retry_client,
+            ref="main",
             retry_policy=RetryPolicy(enabled=True, exclude=("e2e",)),
         )
 

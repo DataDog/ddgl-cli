@@ -29,7 +29,9 @@ class LogLine(msgspec.Struct):
     iso_timestamp: str | None = None  # HH:MM:SS from leading ISO-8601 timestamp
     stream: Stream | None = None  # from 00O/01E marker
     stream_id: int | None = None  # executor stream id (00=executor, 01=script, …)
-    continuation: bool = False  # True when append flag is "+" (continuation of previous line)
+    continuation: bool = (
+        False  # True when append flag is "+" (continuation of previous line)
+    )
 
 
 class Section(msgspec.Struct):

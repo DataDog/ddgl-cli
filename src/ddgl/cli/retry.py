@@ -53,17 +53,24 @@ _USAGE_ERROR = 2
 @pipeline_resolution_options
 @job_filter_options
 @click.option(
-    "--job", "job_ids", multiple=True, type=int,
+    "--job",
+    "job_ids",
+    multiple=True,
+    type=int,
     help="Retry a specific job by ID (repeatable). Overrides `-f`/`--stage`/`--name`.",
 )
 @click.option(
-    "--force", is_flag=True, default=False,
+    "--force",
+    is_flag=True,
+    default=False,
     help=(
         "Retry every matched job, including ones that already succeeded or are "
         "still running. Requires a job filter."
     ),
 )
-@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
+@click.option(
+    "--json", "output_json", is_flag=True, default=False, help="Output as JSON."
+)
 @click.pass_context
 def retry_cmd(
     ctx: click.Context,
@@ -117,10 +124,18 @@ def retry_cmd(
 
     exit_code = asyncio.run(
         _retry(
-            ref=ref, pipeline_id=pipeline_id, depth=depth, failed_only=failed_only,
-            include_allowed_failures=include_allowed_failures, stage=stage,
-            name_pattern=name_pattern, job_ids=job_ids, force=force, targeted=targeted,
-            output_json=output_json, skip_confirm=skip_confirm,
+            ref=ref,
+            pipeline_id=pipeline_id,
+            depth=depth,
+            failed_only=failed_only,
+            include_allowed_failures=include_allowed_failures,
+            stage=stage,
+            name_pattern=name_pattern,
+            job_ids=job_ids,
+            force=force,
+            targeted=targeted,
+            output_json=output_json,
+            skip_confirm=skip_confirm,
             no_cache=(ctx.obj or {}).get("no_cache", False),
         )
     )
@@ -149,20 +164,34 @@ async def _retry(
             async with GitLabClient(config, cache=cache) as client:
                 if not targeted:
                     return await _retry_bulk(
-                        client, ref=ref, pipeline_id=pipeline_id, depth=depth,
-                        output_json=output_json, skip_confirm=skip_confirm, cache=cache,
+                        client,
+                        ref=ref,
+                        pipeline_id=pipeline_id,
+                        depth=depth,
+                        output_json=output_json,
+                        skip_confirm=skip_confirm,
+                        cache=cache,
                     )
 
                 selection = await _select(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth,
+                    client,
+                    ref=ref,
+                    pipeline_id=pipeline_id,
+                    depth=depth,
                     failed_only=failed_only,
                     include_allowed_failures=include_allowed_failures,
-                    stage=stage, name_pattern=name_pattern, job_ids=job_ids,
-                    force=force, quiet=output_json, cache=cache,
+                    stage=stage,
+                    name_pattern=name_pattern,
+                    job_ids=job_ids,
+                    force=force,
+                    quiet=output_json,
+                    cache=cache,
                 )
                 return await _retry_selected(
-                    client, selection,
-                    output_json=output_json, skip_confirm=skip_confirm,
+                    client,
+                    selection,
+                    output_json=output_json,
+                    skip_confirm=skip_confirm,
                 )
     # Everything reaching here is a failure to work out *what* to retry — bad
     # config, unresolvable ref, unreachable API. The retry calls themselves are
@@ -195,7 +224,11 @@ async def _retry_bulk(
     """
     with status_spinner("Resolving pipeline…", quiet=output_json):
         pipeline = await resolve_pipeline(
-            client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
+            client,
+            ref=ref,
+            pipeline_id=pipeline_id,
+            depth=depth,
+            cache=cache,
         )
 
     if not skip_confirm:
@@ -240,14 +273,22 @@ async def _select(
 
     with status_spinner("Resolving pipeline…", quiet=quiet):
         pipeline = await resolve_pipeline(
-            client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
+            client,
+            ref=ref,
+            pipeline_id=pipeline_id,
+            depth=depth,
+            cache=cache,
         )
     with status_spinner("Fetching jobs…", quiet=quiet):
         return await select_in_pipeline(
-            client, pipeline,
+            client,
+            pipeline,
             failed_only=failed_only,
             include_allowed_failures=include_allowed_failures,
-            stage=stage, name_pattern=name_pattern, force=force, cache=cache,
+            stage=stage,
+            name_pattern=name_pattern,
+            force=force,
+            cache=cache,
         )
 
 
@@ -265,7 +306,9 @@ async def _retry_selected(
 
     if not skip_confirm:
         render_retry_preview(
-            selection.jobs, pipeline_id=selection.pipeline_id, ref=selection.ref,
+            selection.jobs,
+            pipeline_id=selection.pipeline_id,
+            ref=selection.ref,
         )
         click.confirm("Continue?", abort=True, err=True)
 

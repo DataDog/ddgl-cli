@@ -5,6 +5,7 @@
 
 These are local scaffolding types — not production imports.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -56,7 +57,9 @@ class _FakeNSProxy:
         return self._store.get(extended)
 
     def set(self, key: Any, value: Any, ttl: float = 0.0) -> None:
-        stored = msgspec.to_builtins(value) if isinstance(value, msgspec.Struct) else value
+        stored = (
+            msgspec.to_builtins(value) if isinstance(value, msgspec.Struct) else value
+        )
         self._store[self._extend(key)] = stored
 
     def get_many(

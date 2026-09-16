@@ -42,12 +42,15 @@ def _fallback_revision(ref: str) -> str:
         "No pipeline found for ref %r directly; searching commit history from "
         "%r instead (assumes your local clone's remote-tracking ref is up to "
         "date — run `git fetch` if this seems stale).",
-        ref, revision,
+        ref,
+        revision,
     )
     return revision
 
 
-def cache_terminal_pipeline(cache: Cache | None, project_id: str, pipeline: Pipeline) -> None:
+def cache_terminal_pipeline(
+    cache: Cache | None, project_id: str, pipeline: Pipeline
+) -> None:
     """Write a SUCCESS pipeline to the durable object cache.
 
     Only SUCCESS is cached — other terminal statuses can still change
@@ -141,7 +144,9 @@ async def list_pipelines(
     No list-level caching. SUCCESS pipelines among the results are cached individually.
     """
     project_id = client._config.project_id or ""
-    page = await client.fetch_pipelines(ref=ref, per_page=count, scope=scope, fresh=fresh)
+    page = await client.fetch_pipelines(
+        ref=ref, per_page=count, scope=scope, fresh=fresh
+    )
     pipelines = page.items
 
     for p in pipelines:
@@ -173,7 +178,9 @@ async def find_latest_pipeline(
     try:
         shas = await get_recent_shas(depth, start=revision)
     except ShellError as exc:
-        logger.warning("Could not resolve %r to walk commit history (%s)", revision, exc)
+        logger.warning(
+            "Could not resolve %r to walk commit history (%s)", revision, exc
+        )
         shas = []
 
     for sha in shas:
@@ -211,4 +218,6 @@ async def resolve_pipeline(
     else:
         depth = min(depth, _EXPLICIT_REF_FALLBACK_DEPTH)
 
-    return await find_latest_pipeline(client, ref, depth=depth, cache=cache, fresh=fresh)
+    return await find_latest_pipeline(
+        client, ref, depth=depth, cache=cache, fresh=fresh
+    )

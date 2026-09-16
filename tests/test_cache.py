@@ -270,9 +270,7 @@ class TestCacheBypass:
 
 
 class TestNamespaceProxyGetMany:
-    def _proxy(
-        self, backend: MockBackend, bypass: bool = False
-    ) -> _NamespaceProxy:
+    def _proxy(self, backend: MockBackend, bypass: bool = False) -> _NamespaceProxy:
         return _NamespaceProxy(backend, bypass=bypass, key_class=NestedKey)
 
     def test_get_many_delegates_to_backend(self) -> None:

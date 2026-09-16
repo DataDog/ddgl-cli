@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Job dependency DAG widget for the job detail screen."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

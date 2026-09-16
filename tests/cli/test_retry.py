@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/retry.py."""
+
 from __future__ import annotations
 
 import json
@@ -59,8 +60,12 @@ def _job_payload(
     pipeline_id: int = 100,
 ) -> dict[str, Any]:
     return {
-        "id": job_id, "name": name, "stage": stage, "status": status,
-        "ref": "main", "allow_failure": allow_failure,
+        "id": job_id,
+        "name": name,
+        "stage": stage,
+        "status": status,
+        "ref": "main",
+        "allow_failure": allow_failure,
         "pipeline": {"id": pipeline_id},
     }
 
@@ -86,9 +91,9 @@ class TestUsageErrors:
     def test_non_tty_without_yes_makes_no_api_call(
         self, mock_api: respx.MockRouter
     ) -> None:
-        route = mock_api.post(
-            f"/projects/{_ENCODED_PROJECT}/pipelines/100/retry"
-        ).mock(return_value=Response(200, json=_pipeline_payload(status="running")))
+        route = mock_api.post(f"/projects/{_ENCODED_PROJECT}/pipelines/100/retry").mock(
+            return_value=Response(200, json=_pipeline_payload(status="running"))
+        )
         CliRunner().invoke(main, ["retry", "--pipeline", "100"])
         assert not route.called
 
@@ -195,15 +200,22 @@ class TestTargetedMode:
         )
 
     def test_failed_filter_retries_each_job(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests"),
-            _job_payload(2, name="lint"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests"),
+                _job_payload(2, name="lint"),
+            ],
+        )
         r1 = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         r2 = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
-            return_value=Response(200, json=_job_payload(12, name="lint", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(12, name="lint", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -219,11 +231,13 @@ class TestTargetedMode:
         self, mock_api: respx.MockRouter
     ) -> None:
         self._mock_pipeline_with_jobs(mock_api, [_job_payload(1, name="unit-tests")])
-        bulk = mock_api.post(
-            f"/projects/{_ENCODED_PROJECT}/pipelines/100/retry"
-        ).mock(return_value=Response(200, json=_pipeline_payload(status="running")))
+        bulk = mock_api.post(f"/projects/{_ENCODED_PROJECT}/pipelines/100/retry").mock(
+            return_value=Response(200, json=_pipeline_payload(status="running"))
+        )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         CliRunner().invoke(
@@ -233,15 +247,22 @@ class TestTargetedMode:
         assert not bulk.called
 
     def test_stage_filter_narrows_the_set(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests", stage="test"),
-            _job_payload(2, name="docker", stage="build"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests", stage="test"),
+                _job_payload(2, name="docker", stage="build"),
+            ],
+        )
         wanted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         unwanted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
-            return_value=Response(200, json=_job_payload(12, name="docker", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(12, name="docker", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -252,13 +273,20 @@ class TestTargetedMode:
         assert wanted.call_count == 1
         assert not unwanted.called
 
-    def test_skips_jobs_that_are_not_retryable(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests", status="success"),
-            _job_payload(2, name="lint", status="running"),
-        ])
+    def test_skips_jobs_that_are_not_retryable(
+        self, mock_api: respx.MockRouter
+    ) -> None:
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests", status="success"),
+                _job_payload(2, name="lint", status="running"),
+            ],
+        )
         posted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -270,9 +298,12 @@ class TestTargetedMode:
         assert "none retryable" in result.output
 
     def test_no_match_at_all(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests", stage="test"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests", stage="test"),
+            ],
+        )
 
         result = CliRunner().invoke(
             main, ["--no-cache", "-y", "retry", "--pipeline", "100", "--stage", "nope"]
@@ -282,11 +313,16 @@ class TestTargetedMode:
         assert "No jobs match the given filters." in result.output
 
     def test_canceled_jobs_are_retryable(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests", status="canceled"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests", status="canceled"),
+            ],
+        )
         posted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -297,12 +333,17 @@ class TestTargetedMode:
         assert posted.call_count == 1
 
     def test_partial_failure_exits_1(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests"),
-            _job_payload(2, name="lint"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests"),
+                _job_payload(2, name="lint"),
+            ],
+        )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
             return_value=Response(403, json={"message": "403 Forbidden"})
@@ -316,12 +357,17 @@ class TestTargetedMode:
         assert "could not be retried" in result.output
 
     def test_json_output(self, mock_api: respx.MockRouter) -> None:
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests"),
-            _job_payload(2, name="lint"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests"),
+                _job_payload(2, name="lint"),
+            ],
+        )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
             return_value=Response(403, json={"message": "403 Forbidden"})
@@ -350,13 +396,25 @@ class TestTargetedMode:
 
     def test_json_output_when_nothing_to_do(self, mock_api: respx.MockRouter) -> None:
         """--json always emits a parseable object, even for a no-op."""
-        self._mock_pipeline_with_jobs(mock_api, [
-            _job_payload(1, name="unit-tests", status="success"),
-        ])
+        self._mock_pipeline_with_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="unit-tests", status="success"),
+            ],
+        )
 
         result = CliRunner().invoke(
             main,
-            ["--no-cache", "-y", "retry", "--pipeline", "100", "--stage", "test", "--json"],
+            [
+                "--no-cache",
+                "-y",
+                "retry",
+                "--pipeline",
+                "100",
+                "--stage",
+                "test",
+                "--json",
+            ],
         )
 
         assert result.exit_code == 0
@@ -378,10 +436,13 @@ class TestAllowedFailures:
             return_value=Response(200, json=_pipeline_payload())
         )
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/100/jobs").mock(
-            return_value=Response(200, json=[
-                _job_payload(1, name="unit-tests", allow_failure=False),
-                _job_payload(2, name="flaky-e2e", allow_failure=True),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _job_payload(1, name="unit-tests", allow_failure=False),
+                    _job_payload(2, name="flaky-e2e", allow_failure=True),
+                ],
+            )
         )
 
     def test_failed_excludes_allowed_failures_by_default(
@@ -389,10 +450,14 @@ class TestAllowedFailures:
     ) -> None:
         self._mock(mock_api)
         blocking = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         allowed = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
-            return_value=Response(200, json=_job_payload(12, name="flaky-e2e", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(12, name="flaky-e2e", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -408,16 +473,25 @@ class TestAllowedFailures:
     ) -> None:
         self._mock(mock_api)
         blocking = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         allowed = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
-            return_value=Response(200, json=_job_payload(12, name="flaky-e2e", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(12, name="flaky-e2e", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
             main,
             [
-                "--no-cache", "-y", "retry", "--pipeline", "100", "-f",
+                "--no-cache",
+                "-y",
+                "retry",
+                "--pipeline",
+                "100",
+                "-f",
                 "--include-allowed-failures",
             ],
         )
@@ -441,10 +515,14 @@ class TestJobIds:
             return_value=Response(200, json=_job_payload(2, name="lint"))
         )
         r1 = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
         r2 = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/2/retry").mock(
-            return_value=Response(200, json=_job_payload(12, name="lint", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(12, name="lint", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -463,7 +541,9 @@ class TestJobIds:
             return_value=Response(200, json=_job_payload(1, name="unit-tests"))
         )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         CliRunner().invoke(
@@ -475,10 +555,14 @@ class TestJobIds:
     def test_overrides_other_filters(self, mock_api: respx.MockRouter) -> None:
         """A --stage that matches nothing must not narrow --job's set."""
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/jobs/1").mock(
-            return_value=Response(200, json=_job_payload(1, name="unit-tests", stage="test"))
+            return_value=Response(
+                200, json=_job_payload(1, name="unit-tests", stage="test")
+            )
         )
         posted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -489,13 +573,19 @@ class TestJobIds:
         assert result.exit_code == 0
         assert posted.call_count == 1
 
-    def test_reports_the_pipeline_from_the_job(self, mock_api: respx.MockRouter) -> None:
+    def test_reports_the_pipeline_from_the_job(
+        self, mock_api: respx.MockRouter
+    ) -> None:
         """Job.pipeline_id is what lets --job name its pipeline in output."""
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/jobs/1").mock(
-            return_value=Response(200, json=_job_payload(1, name="unit-tests", pipeline_id=100))
+            return_value=Response(
+                200, json=_job_payload(1, name="unit-tests", pipeline_id=100)
+            )
         )
         mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -508,10 +598,14 @@ class TestJobIds:
 
     def test_force_retries_a_successful_job(self, mock_api: respx.MockRouter) -> None:
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/jobs/1").mock(
-            return_value=Response(200, json=_job_payload(1, name="unit-tests", status="success"))
+            return_value=Response(
+                200, json=_job_payload(1, name="unit-tests", status="success")
+            )
         )
         posted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
         result = CliRunner().invoke(
@@ -525,15 +619,17 @@ class TestJobIds:
         self, mock_api: respx.MockRouter
     ) -> None:
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/jobs/1").mock(
-            return_value=Response(200, json=_job_payload(1, name="unit-tests", status="success"))
+            return_value=Response(
+                200, json=_job_payload(1, name="unit-tests", status="success")
+            )
         )
         posted = mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
-        result = CliRunner().invoke(
-            main, ["--no-cache", "-y", "retry", "--job", "1"]
-        )
+        result = CliRunner().invoke(main, ["--no-cache", "-y", "retry", "--job", "1"])
 
         assert result.exit_code == 0
         assert not posted.called
@@ -554,7 +650,9 @@ class TestConfirmation:
             return_value=Response(200, json=[_job_payload(1, name="unit-tests")])
         )
         return mock_api.post(f"/projects/{_ENCODED_PROJECT}/jobs/1/retry").mock(
-            return_value=Response(200, json=_job_payload(11, name="unit-tests", status="pending"))
+            return_value=Response(
+                200, json=_job_payload(11, name="unit-tests", status="pending")
+            )
         )
 
     def test_declining_the_prompt_makes_no_api_call(

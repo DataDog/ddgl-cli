@@ -73,7 +73,9 @@ class StructSqliteBackend(_SqliteBackend):
         conn.commit()
         logger.debug("StructSqliteBackend initialised")
 
-    def _ensure_table(self, conn: sqlite3.Connection, table_name: str, cls: type) -> None:
+    def _ensure_table(
+        self, conn: sqlite3.Connection, table_name: str, cls: type
+    ) -> None:
         """Create (or recreate on schema change) the table for *cls*."""
         current_hash = _schema_hash(cls)
 
@@ -193,7 +195,13 @@ class StructSqliteBackend(_SqliteBackend):
 
         result = self._deserialize(row_dict, cls, table_name)
         if result is not None:
-            logger.debug("get(%r/%s/%s) hit (%s)", table_name, project_id, object_id, cls.__name__)  # noqa: E501
+            logger.debug(
+                "get(%r/%s/%s) hit (%s)",
+                table_name,
+                project_id,
+                object_id,
+                cls.__name__,
+            )  # noqa: E501
         return result
 
     def set(self, key: Key, value: object, ttl: float) -> None:

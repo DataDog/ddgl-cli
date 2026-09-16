@@ -54,8 +54,15 @@ def setup_logging(verbosity: int = 0) -> None:
 @click.group()
 @click.version_option(package_name="ddgl")
 @click.option("-v", "--verbose", count=True, help="Increase verbosity (`-v`/`-vv`).")
-@click.option("-y", "--yes", is_flag=True, default=False, help="Skip confirmation prompts.")
-@click.option("--no-cache", is_flag=True, default=False, help="Bypass the cache (reads return miss; writes still populate it).")
+@click.option(
+    "-y", "--yes", is_flag=True, default=False, help="Skip confirmation prompts."
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Bypass the cache (reads return miss; writes still populate it).",
+)
 @click.pass_context
 def main(ctx: click.Context, verbose: int, yes: bool, no_cache: bool) -> None:
     """ddgl — Terminal-based GitLab client."""

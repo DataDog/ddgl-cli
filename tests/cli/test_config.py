@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/config.py."""
+
 from __future__ import annotations
 
 import json
@@ -17,11 +18,14 @@ from ddgl.model import ConfigFile
 
 class TestConfigPath:
     def test_prints_config_file_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config_path = tmp_path / "config.toml"
         monkeypatch.setattr(
-            "ddgl.cli.config.get_config_file_path", lambda: config_path,
+            "ddgl.cli.config.get_config_file_path",
+            lambda: config_path,
         )
 
         result = CliRunner().invoke(main, ["config", "path"])
@@ -30,11 +34,14 @@ class TestConfigPath:
         assert result.output.strip() == str(config_path)
 
     def test_prints_absolute_path_as_json(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config_path = tmp_path / "config.toml"
         monkeypatch.setattr(
-            "ddgl.cli.config.get_config_file_path", lambda: config_path,
+            "ddgl.cli.config.get_config_file_path",
+            lambda: config_path,
         )
 
         result = CliRunner().invoke(main, ["config", "path", "--json"])
@@ -45,7 +52,8 @@ class TestConfigPath:
 
 class TestConfigShow:
     def test_prints_censored_resolved_config_as_toml(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def load_config() -> Config:
             return Config(
@@ -65,7 +73,8 @@ class TestConfigShow:
         assert "secret-token" not in result.output
 
     def test_prints_uncensored_resolved_config_as_json(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def load_config() -> Config:
             return Config(
@@ -77,7 +86,8 @@ class TestConfigShow:
         monkeypatch.setattr("ddgl.cli.config.load_config", load_config)
 
         result = CliRunner().invoke(
-            main, ["config", "show", "--json", "--no-censor"],
+            main,
+            ["config", "show", "--json", "--no-censor"],
         )
 
         assert result.exit_code == 0
@@ -88,7 +98,8 @@ class TestConfigShow:
         }
 
     def test_prints_raw_config_file(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         raw_config = ConfigFile(
             gitlab_url="https://raw.gitlab.example.com",
@@ -97,7 +108,8 @@ class TestConfigShow:
             github_fallback=True,
         )
         monkeypatch.setattr(
-            "ddgl.cli.config.load_config_file", lambda: raw_config,
+            "ddgl.cli.config.load_config_file",
+            lambda: raw_config,
         )
 
         result = CliRunner().invoke(main, ["config", "show", "--raw", "--json"])

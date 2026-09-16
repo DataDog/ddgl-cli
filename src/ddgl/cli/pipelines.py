@@ -28,7 +28,9 @@ def pipelines() -> None:
 
 @pipelines.command("list")
 @click.option("--ref", default=None, help="Git ref (default: current branch).")
-@click.option("-n", "--count", default=20, show_default=True, help="Max pipelines to show.")
+@click.option(
+    "-n", "--count", default=20, show_default=True, help="Max pipelines to show."
+)
 @click.option(
     "--scope",
     type=click.Choice([s.value for s in PipelineScope], case_sensitive=False),
@@ -38,13 +40,24 @@ def pipelines() -> None:
 @output_options
 @click.pass_context
 def pipelines_list(
-    ctx: click.Context, ref: str | None, count: int, scope: str | None, output_json: bool, no_pager: bool
+    ctx: click.Context,
+    ref: str | None,
+    count: int,
+    scope: str | None,
+    output_json: bool,
+    no_pager: bool,
 ) -> None:
     """List recent pipelines for a ref."""
     no_cache = (ctx.obj or {}).get("no_cache", False)
     try:
         result, resolved_ref = asyncio.run(
-            _list(ref, count, PipelineScope(scope) if scope else None, quiet=output_json, no_cache=no_cache)
+            _list(
+                ref,
+                count,
+                PipelineScope(scope) if scope else None,
+                quiet=output_json,
+                no_cache=no_cache,
+            )
         )
     except ConfigError as e:
         click.echo(f"Error: {e}", err=True)
@@ -62,16 +75,24 @@ def pipelines_list(
         return
 
     # +5: title line, table header, separator, bottom border, shell prompt
-    use_pager = not no_pager and console.is_terminal and len(result) + 5 > console.height
+    use_pager = (
+        not no_pager and console.is_terminal and len(result) + 5 > console.height
+    )
     with console.pager(styles=True) if use_pager else nullcontext():
         render_pipeline_table(result, ref=resolved_ref)
 
 
 async def _list(
-    ref: str | None, count: int, scope: PipelineScope | None, *, quiet: bool = False, no_cache: bool = False
+    ref: str | None,
+    count: int,
+    scope: PipelineScope | None,
+    *,
+    quiet: bool = False,
+    no_cache: bool = False,
 ) -> tuple[list, str]:
     if ref is None:
         from ddgl.git import get_current_branch
+
         ref = await get_current_branch()
 
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
@@ -79,7 +100,9 @@ async def _list(
         async with GitLabClient(config, cache=cache) as client:
             spinner = nullcontext() if quiet else console.status("Fetching pipelines…")
             with spinner:
-                result = await list_pipelines(client, ref, scope=scope, count=count, cache=cache)
+                result = await list_pipelines(
+                    client, ref, scope=scope, count=count, cache=cache
+                )
 
     return result, ref
 
@@ -89,12 +112,19 @@ async def _list(
 @output_options
 @click.pass_context
 def pipelines_get(
-    ctx: click.Context, ref: str | None, pipeline_id: int | None, depth: int, output_json: bool, no_pager: bool
+    ctx: click.Context,
+    ref: str | None,
+    pipeline_id: int | None,
+    depth: int,
+    output_json: bool,
+    no_pager: bool,
 ) -> None:
     """Resolve and display the latest pipeline (or a specific one by ID)."""
     no_cache = (ctx.obj or {}).get("no_cache", False)
     try:
-        pipeline = asyncio.run(_get(ref, pipeline_id, depth, quiet=output_json, no_cache=no_cache))
+        pipeline = asyncio.run(
+            _get(ref, pipeline_id, depth, quiet=output_json, no_cache=no_cache)
+        )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -106,7 +136,14 @@ def pipelines_get(
     render_pipeline_detail(pipeline)  # always short (~10 field lines), no pager needed
 
 
-async def _get(ref: str | None, pipeline_id: int | None, depth: int, *, quiet: bool = False, no_cache: bool = False):
+async def _get(
+    ref: str | None,
+    pipeline_id: int | None,
+    depth: int,
+    *,
+    quiet: bool = False,
+    no_cache: bool = False,
+):
     with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
         config = await load_config(cache=cache)
         async with GitLabClient(config, cache=cache) as client:

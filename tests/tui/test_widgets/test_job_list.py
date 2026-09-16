@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/job_list.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -236,9 +237,9 @@ def test_sort_mode_label_nonempty() -> None:
 @pytest.mark.parametrize(
     "mode,expected_first_name",
     [
-        (SortMode.STAGE, "alpha"),       # stage "a" comes first, then alpha
+        (SortMode.STAGE, "alpha"),  # stage "a" comes first, then alpha
         (SortMode.ALPHABETICAL, "alpha"),
-        (SortMode.START_TIME, "beta"),   # beta has earlier start_at
+        (SortMode.START_TIME, "beta"),  # beta has earlier start_at
     ],
 )
 def test_apply_sort_dispatch(mode: SortMode, expected_first_name: str) -> None:
@@ -557,7 +558,13 @@ async def test_allowed_failure_row_shows_warning_glyph_and_label() -> None:
     async with app.run_test() as pilot:
         panel = app.query_one(JobListPanel)
         panel.jobs = [
-            make_job(id=1, name="flaky", stage="test", status=JobStatus.FAILED, allow_failure=True)
+            make_job(
+                id=1,
+                name="flaky",
+                stage="test",
+                status=JobStatus.FAILED,
+                allow_failure=True,
+            )
         ]
         await pilot.pause()
         row = panel.get_row("1")
@@ -570,7 +577,13 @@ async def test_blocking_failure_row_unchanged() -> None:
     async with app.run_test() as pilot:
         panel = app.query_one(JobListPanel)
         panel.jobs = [
-            make_job(id=1, name="unit", stage="test", status=JobStatus.FAILED, allow_failure=False)
+            make_job(
+                id=1,
+                name="unit",
+                stage="test",
+                status=JobStatus.FAILED,
+                allow_failure=False,
+            )
         ]
         await pilot.pause()
         row = panel.get_row("1")

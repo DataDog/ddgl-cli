@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/pipelines.py."""
+
 from __future__ import annotations
 
 import json
@@ -23,9 +24,12 @@ _pipelines_module = sys.modules["ddgl.cli.pipelines"]
 
 class TestPipelinesListEmptyJson:
     def test_json_flag_outputs_empty_array_not_a_sentence(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_list(*args: object, **kwargs: object) -> tuple[list[Pipeline], str]:
+        async def fake_list(
+            *args: object, **kwargs: object
+        ) -> tuple[list[Pipeline], str]:
             return [], "main"
 
         monkeypatch.setattr(_pipelines_module, "_list", fake_list)
@@ -36,9 +40,12 @@ class TestPipelinesListEmptyJson:
         assert json.loads(result.output) == []
 
     def test_without_json_flag_prints_human_message(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_list(*args: object, **kwargs: object) -> tuple[list[Pipeline], str]:
+        async def fake_list(
+            *args: object, **kwargs: object
+        ) -> tuple[list[Pipeline], str]:
             return [], "main"
 
         monkeypatch.setattr(_pipelines_module, "_list", fake_list)

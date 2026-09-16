@@ -50,7 +50,11 @@ class JobLog:
         return [
             LogSection(
                 name=node.name,
-                lines=[child.text for child in node.children if not isinstance(child, Section)],
+                lines=[
+                    child.text
+                    for child in node.children
+                    if not isinstance(child, Section)
+                ],
             )
             for node in self.trace.children
             if isinstance(node, Section)

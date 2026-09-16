@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/job_history.py — pure-function tests only."""
+
 from __future__ import annotations
 
 from ddgl.constants import JobStatus

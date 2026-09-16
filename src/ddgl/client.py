@@ -199,7 +199,12 @@ class GitLabClient:
                 delay = _backoff_delay(attempt)
                 logger.warning(
                     "%s %s -> connection error (%s), retrying in %.1fs (attempt %d/%d)",
-                    method, path, exc, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
+                    method,
+                    path,
+                    exc,
+                    delay,
+                    attempt + 2,
+                    HTTP_RETRY_ATTEMPTS,
                 )
                 await asyncio.sleep(delay)
                 continue
@@ -210,7 +215,12 @@ class GitLabClient:
             delay = _retry_after_seconds(resp) or _backoff_delay(attempt)
             logger.warning(
                 "%s %s -> %d (retryable), retrying in %.1fs (attempt %d/%d)",
-                method, path, resp.status_code, delay, attempt + 2, HTTP_RETRY_ATTEMPTS,
+                method,
+                path,
+                resp.status_code,
+                delay,
+                attempt + 2,
+                HTTP_RETRY_ATTEMPTS,
             )
             await asyncio.sleep(delay)
 
@@ -236,19 +246,27 @@ class GitLabClient:
         ultimately has.
         """
         return await self._request(
-            HttpMethod.GET, path, params=params,
-            retry_statuses=RETRYABLE_STATUS_CODES, retry_transport=True,
+            HttpMethod.GET,
+            path,
+            params=params,
+            retry_statuses=RETRYABLE_STATUS_CODES,
+            retry_transport=True,
         )
 
-    async def _post_response(self, path: str, json: dict[str, Any] | None = None) -> httpx.Response:
+    async def _post_response(
+        self, path: str, json: dict[str, Any] | None = None
+    ) -> httpx.Response:
         """POST with automatic retry on a 429 only.
 
         Unlike GET, a POST isn't idempotent, so it can't be retried as
         aggressively — see `_request`'s docstring for the full rationale.
         """
         return await self._request(
-            HttpMethod.POST, path, json=json,
-            retry_statuses=RATE_LIMITED_STATUS_CODES, retry_transport=False,
+            HttpMethod.POST,
+            path,
+            json=json,
+            retry_statuses=RATE_LIMITED_STATUS_CODES,
+            retry_transport=False,
         )
 
     def _raise_for_status(self, resp: httpx.Response) -> None:
@@ -277,7 +295,9 @@ class GitLabClient:
                     ) from exc
                 raise NotFoundError(path, "") from exc
             raise GitLabAPIError(
-                resp.status_code, HttpMethod(resp.request.method), path,
+                resp.status_code,
+                HttpMethod(resp.request.method),
+                path,
                 resp.text[:200] if resp.text else "",
             ) from exc
 
@@ -363,7 +383,9 @@ class GitLabClient:
             if hit is not None:
                 logger.debug("API cache HIT %s", path)
                 items = [item_factory(d) for d in json.loads(hit)]
-                return Page(items=items, page=1, next_page=None, total_pages=1, total=len(items))
+                return Page(
+                    items=items, page=1, next_page=None, total_pages=1, total=len(items)
+                )
         logger.debug("GET %s", path)
         resp = await self._get_response(path, **params)
         logger.debug("GET %s -> %d", path, resp.status_code)
@@ -373,7 +395,9 @@ class GitLabClient:
             from ddgl.cache import CacheNS
 
             key = self._cache_key(path, params)
-            self._cache[CacheNS.API_RESPONSES].set(key, json.dumps(resp.json()), ttl=ttl)
+            self._cache[CacheNS.API_RESPONSES].set(
+                key, json.dumps(resp.json()), ttl=ttl
+            )
         return page
 
     async def _paginate(
@@ -394,7 +418,9 @@ class GitLabClient:
             pages_fetched += 1
             logger.debug(
                 "Page %d/%s fetched (%d items)",
-                pages_fetched, page.total_pages or "?", len(page.items),
+                pages_fetched,
+                page.total_pages or "?",
+                len(page.items),
             )
             if not page.has_next:
                 break
@@ -446,7 +472,9 @@ class GitLabClient:
             while page_num is not None:
                 if pages_fetched >= MAX_PAGES:
                     raise PaginationLimitError(MAX_PAGES, None)
-                page = await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+                page = await self._get_page(
+                    path, item_factory, ttl=ttl, page=page_num, **params
+                )
                 items.extend(page.items)
                 pages_fetched += 1
                 page_num = page.next_page
@@ -459,7 +487,9 @@ class GitLabClient:
 
         async def _fetch(page_num: int) -> Page[T]:
             async with semaphore:
-                return await self._get_page(path, item_factory, ttl=ttl, page=page_num, **params)
+                return await self._get_page(
+                    path, item_factory, ttl=ttl, page=page_num, **params
+                )
 
         tasks = [asyncio.create_task(_fetch(n)) for n in range(2, total_pages + 1)]
         try:
@@ -723,7 +753,10 @@ class GitLabClient:
         every page past the first.
         """
         return await self.get_all_jobs(
-            pipeline_id, project_id=project_id, fresh=True, include_retried=True,
+            pipeline_id,
+            project_id=project_id,
+            fresh=True,
+            include_retried=True,
         )
 
     async def get_job(
@@ -812,7 +845,9 @@ class GitLabClient:
                 if resp.status_code == 404:
                     raise NotFoundError("job", job_id) from exc
                 raise GitLabAPIError(
-                    resp.status_code, HttpMethod.GET, path,
+                    resp.status_code,
+                    HttpMethod.GET,
+                    path,
                     (await resp.aread()).decode()[:200],
                 ) from exc
             async for line in resp.aiter_lines():
