@@ -59,7 +59,66 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Run tests
-        run: uv run pytest -v
+        run: uv run pytest -v --cov --cov-report=
+
+      # Renamed per leg so `coverage combine` in the coverage job sees four
+      # distinct data files rather than four artifacts all called .coverage.
+      - name: Name the coverage data for this leg
+        run: mv .coverage ".coverage.${{ matrix.os }}-${{ matrix.python-version }}"
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .coverage.*
+          # Coverage data files are dotfiles, which this action skips by default.
+          include-hidden-files: true
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage
+    # The only job with a dependency: it aggregates what the matrix produced.
+    needs: test
+    # Skipping `test` would skip this job anyway, but this job is the one
+    # holding pull-requests: write, so the fork policy is stated explicitly
+    # here rather than inherited from `needs:`.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # Full history so the comment action can diff against the base branch.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Download coverage data from every matrix leg
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+
+      # Combining all four legs matters because shell.py, git.py and the
+      # platformdirs paths differ per OS; gating on Linux alone would fail the
+      # build over lines that macOS does cover.
+      - name: Combine coverage data
+        run: uv run coverage combine
+
+      - name: Report coverage and enforce the floor
+        run: uv run coverage report
+
+      - name: Comment coverage on the pull request
+        # Skipped on pushes to main, where this action would otherwise want to
+        # persist a badge to a dedicated branch.
+        if: github.event_name == 'pull_request'
+        uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
 
   build:
     name: Build
