@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull request pushes are worth cancelling; main is not.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # lint, test and build are mutually independent and intentionally carry no
+  # `needs:`, so all six runners start at once. Each job's `if:` blocks fork
+  # pull requests outright; GitHub has no workflow-level equivalent, so the
+  # condition is repeated rather than centralised in a gate job that would
+  # serialise everything behind it.
+  lint:
+    name: Lint
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv and dependencies
+        uses: ./.github/actions/setup
+
+      # Called directly rather than through pre-commit: --output-format=github
+      # turns findings into inline annotations on the diff, and these
+      # invocations are read-only where the hooks rewrite files.
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+
+      - name: ruff format
+        run: uv run ruff format --check --diff .
+
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv and dependencies
+        uses: ./.github/actions/setup
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run tests
+        run: uv run pytest -v
+
+  build:
+    name: Build
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # hatch-vcs derives the version from `git describe`, which needs the tag
+      # history. A shallow clone yields a bogus version without failing.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up uv and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
+      # Installs the artifact we just built into a throwaway environment, so a
+      # broken console script or unreadable version metadata fails here rather
+      # than after publishing.
+      - name: Smoke-test the built wheel
+        run: |
+          set -euo pipefail
+          wheel="$(ls dist/*.whl)"
+          uv run --isolated --no-project --with "${wheel}" ddgl --version
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

@@ -1,0 +1,25 @@
+name: Set up uv and dependencies
+description: >-
+  Installs uv, provisions the requested Python version, and syncs the locked
+  dependency set. Requires the repository to already be checked out.
+
+inputs:
+  python-version:
+    description: Python version to provision.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true
+
+    # --locked fails when uv.lock is out of sync with pyproject.toml, so a
+    # dependency change that forgets to refresh the lockfile is caught here.
+    - name: Sync dependencies
+      run: uv sync --locked
+      shell: bash
