@@ -20,13 +20,17 @@ from ddgl.tui.app import PipelineViewer
 @click.command("viz")
 @pipeline_resolution_options
 @click.pass_context
-def viz(ctx: click.Context, ref: str | None, pipeline_id: int | None, depth: int) -> None:
+def viz(
+    ctx: click.Context, ref: str | None, pipeline_id: int | None, depth: int
+) -> None:
     """Open the interactive pipeline viewer."""
     no_cache = (ctx.obj or {}).get("no_cache", False)
     asyncio.run(_viz(ref, pipeline_id, depth, no_cache=no_cache))
 
 
-async def _viz(ref: str | None, pipeline_id: int | None, depth: int, *, no_cache: bool = False) -> None:
+async def _viz(
+    ref: str | None, pipeline_id: int | None, depth: int, *, no_cache: bool = False
+) -> None:
     try:
         with Cache.open(CACHE_DIR, bypass=no_cache) as cache:
             config = await load_config(cache=cache)

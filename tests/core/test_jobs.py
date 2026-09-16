@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/core/jobs.py."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -209,10 +210,13 @@ class TestListJobs:
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
         mock_api.get("/projects/grp%2Fproj/pipelines/100/jobs").mock(
-            return_value=Response(200, json=[
-                _job_payload(10, status="success"),
-                _job_payload(11, status="running"),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _job_payload(10, status="success"),
+                    _job_payload(11, status="running"),
+                ],
+            )
         )
         cache = FakeCache()
         _ = [j async for j in list_jobs(client, 100, cache=cache)]
@@ -236,6 +240,7 @@ class TestListJobs:
         async def fake_iter_jobs(pipeline_id: int, **kwargs: Any) -> Any:
             seen.update(kwargs)
             from ddgl.model.page import Page
+
             yield Page(items=[], page=1, next_page=None, total_pages=1, total=0)
 
         monkeypatch.setattr(client, "iter_jobs", fake_iter_jobs)
@@ -251,10 +256,18 @@ class TestListJobs:
 class TestFilterJobs:
     def _make_jobs(self) -> list[Job]:
         return [
-            Job.from_api(_job_payload(1, status="failed", name="unit-test", stage="test")),
-            Job.from_api(_job_payload(2, status="success", name="build-app", stage="build")),
-            Job.from_api(_job_payload(3, status="failed", name="e2e-test", stage="test")),
-            Job.from_api(_job_payload(4, status="running", name="deploy", stage="deploy")),
+            Job.from_api(
+                _job_payload(1, status="failed", name="unit-test", stage="test")
+            ),
+            Job.from_api(
+                _job_payload(2, status="success", name="build-app", stage="build")
+            ),
+            Job.from_api(
+                _job_payload(3, status="failed", name="e2e-test", stage="test")
+            ),
+            Job.from_api(
+                _job_payload(4, status="running", name="deploy", stage="deploy")
+            ),
         ]
 
     def test_no_filter_returns_all(self) -> None:
@@ -294,16 +307,30 @@ class TestFilterJobs:
     def test_failed_only_excludes_allowed_failures(self) -> None:
         jobs = self._make_jobs() + [
             Job.from_api(
-                _job_payload(5, status="failed", name="flaky-test", stage="test", allow_failure=True)
+                _job_payload(
+                    5,
+                    status="failed",
+                    name="flaky-test",
+                    stage="test",
+                    allow_failure=True,
+                )
             )
         ]
         result = filter_jobs(jobs, failed_only=True)
         assert [j.id for j in result] == [1, 3]
 
-    def test_failed_only_with_include_allowed_failures_restores_old_behaviour(self) -> None:
+    def test_failed_only_with_include_allowed_failures_restores_old_behaviour(
+        self,
+    ) -> None:
         jobs = self._make_jobs() + [
             Job.from_api(
-                _job_payload(5, status="failed", name="flaky-test", stage="test", allow_failure=True)
+                _job_payload(
+                    5,
+                    status="failed",
+                    name="flaky-test",
+                    stage="test",
+                    allow_failure=True,
+                )
             )
         ]
         result = filter_jobs(jobs, failed_only=True, include_allowed_failures=True)

@@ -43,8 +43,20 @@ from ddgl.render.log import render_log_section
 @click.command()
 @pipeline_resolution_options
 @job_filter_options
-@click.option("--job", "job_id", default=None, type=int, help="Fetch log for a specific job by ID.")
-@click.option("--output", "output_path", default=None, type=click.Path(), help="Output path (file or directory).")
+@click.option(
+    "--job",
+    "job_id",
+    default=None,
+    type=int,
+    help="Fetch log for a specific job by ID.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    default=None,
+    type=click.Path(),
+    help="Output path (file or directory).",
+)
 @output_options
 @trace_format_options
 @click.pass_context
@@ -85,8 +97,16 @@ def logs(
     try:
         results = asyncio.run(
             _fetch_logs(
-                ref, pipeline_id, depth, failed_only, include_allowed_failures,
-                stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache,
+                ref,
+                pipeline_id,
+                depth,
+                failed_only,
+                include_allowed_failures,
+                stage,
+                name_pattern,
+                job_id,
+                quiet=output_json,
+                no_cache=no_cache,
             )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
@@ -98,7 +118,9 @@ def logs(
             click.echo("{}")
         else:
             has_filters = failed_only or stage or name_pattern
-            click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+            click.echo(
+                "No jobs match the given filters." if has_filters else "No jobs found."
+            )
         return
 
     if output_json:
@@ -182,13 +204,16 @@ async def _fetch_logs(
 
             # Tasks must be awaited while the client is still open.
             results: list[tuple[str, str]] = []
-            futures = [_await_with_name(name, task) for _, (name, task) in log_tasks.items()]
+            futures = [
+                _await_with_name(name, task) for _, (name, task) in log_tasks.items()
+            ]
 
             if quiet:
                 for coro in asyncio.as_completed(futures):
                     results.append(await coro)
             else:
                 from ddgl.render._console import err_console
+
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -215,7 +240,7 @@ def _write_log_to_path(name: str, text: str, output_path: str) -> None:
     clean = strip_ansi(text)
     if out.is_dir():
         # Sanitize the job name to make sure it is a valid filename
-        name = re.sub(r'[^\w\-.]', '_', name)
+        name = re.sub(r"[^\w\-.]", "_", name)
         p = out.joinpath(f"{name}.log")
         p.write_text(clean)
     else:

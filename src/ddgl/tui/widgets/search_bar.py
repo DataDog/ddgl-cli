@@ -52,9 +52,9 @@ def parse_query(raw: str) -> FilterSpec:
     remainder: list[str] = []
     for token in raw.split():
         if token.startswith("status:"):
-            statuses.add(token[len("status:"):].lower())
+            statuses.add(token[len("status:") :].lower())
         elif token.startswith("stage:"):
-            stages.add(token[len("stage:"):].lower())
+            stages.add(token[len("stage:") :].lower())
         else:
             remainder.append(token)
     return FilterSpec(text=" ".join(remainder), statuses=statuses, stages=stages)
@@ -91,7 +91,9 @@ class FuzzySearchInput(Widget):
 
     _regex: reactive[bool] = reactive(False)
 
-    def __init__(self, *, placeholder: str = "Filter jobs...", **kwargs: object) -> None:
+    def __init__(
+        self, *, placeholder: str = "Filter jobs...", **kwargs: object
+    ) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
         self._placeholder = placeholder
 

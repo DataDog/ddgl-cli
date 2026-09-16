@@ -18,7 +18,9 @@ from ddgl.model.job import Job
 logger = logging.getLogger("ddgl.core.jobs")
 
 
-def cache_terminal_jobs(cache: Cache | None, project_id: str, jobs: Iterable[Job]) -> None:
+def cache_terminal_jobs(
+    cache: Cache | None, project_id: str, jobs: Iterable[Job]
+) -> None:
     """Write terminal-state jobs to the durable object cache."""
     if cache is None:
         return
@@ -47,7 +49,9 @@ async def get_jobs(
 
     project_id = client._config.project_id or ""
     if cache is not None:
-        cached_objects = cache[CacheNS.OBJECTS]["jobs"][project_id].get_many(ids, cls=Job)
+        cached_objects = cache[CacheNS.OBJECTS]["jobs"][project_id].get_many(
+            ids, cls=Job
+        )
         cached_map: dict[int, Job] = {
             j.id: j for j in cached_objects if isinstance(j, Job)
         }
@@ -164,9 +168,11 @@ def filter_jobs(
         stage=stage,
     )
     if isinstance(jobs, AsyncIterable):
+
         async def _afilter() -> AsyncIterator[Job]:
             async for job in jobs:
                 if pred(job):
                     yield job
+
         return _afilter()
     return [j for j in jobs if pred(j)]

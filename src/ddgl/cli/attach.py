@@ -74,26 +74,40 @@ def _retry_policy(
         try:
             re.compile(pattern)
         except re.error as exc:
-            click.echo(f"Error: --retry-exclude {pattern!r} is not a valid regex: {exc}", err=True)
+            click.echo(
+                f"Error: --retry-exclude {pattern!r} is not a valid regex: {exc}",
+                err=True,
+            )
             sys.exit(2)
 
     return RetryPolicy(
-        enabled=retry, attempts_per_job=attempts, total=total, exclude=exclude,
+        enabled=retry,
+        attempts_per_job=attempts,
+        total=total,
+        exclude=exclude,
     )
 
 
 @click.command()
 @pipeline_resolution_options
 @click.option(
-    "--interval", default=10.0, show_default=True, type=float,
+    "--interval",
+    default=10.0,
+    show_default=True,
+    type=float,
     help="Poll cadence in seconds (also controls --heartbeat cadence).",
 )
 @click.option(
-    "--heartbeat/--no-heartbeat", "heartbeat", default=False,
+    "--heartbeat/--no-heartbeat",
+    "heartbeat",
+    default=False,
     help="Emit a tally line on poll ticks where nothing changed.",
 )
 @click.option(
-    "--detail", type=click.Choice(_DETAIL_CHOICES), default="normal", show_default=True,
+    "--detail",
+    type=click.Choice(_DETAIL_CHOICES),
+    default="normal",
+    show_default=True,
     help=(
         "How much to show: none=final state only, minimal=summaries only, "
         "normal=summaries + job transitions to terminal states, full=everything. "
@@ -101,44 +115,75 @@ def _retry_policy(
     ),
 )
 @click.option(
-    "--no-wait", is_flag=True, default=False,
+    "--no-wait",
+    is_flag=True,
+    default=False,
     help="Require an existing pipeline; error immediately instead of waiting for one to appear.",
 )
 @click.option(
-    "--follow", is_flag=True, default=False,
+    "--follow",
+    is_flag=True,
+    default=False,
     help="Switch to a newer pipeline for the ref if one appears (warns on switch).",
 )
 @click.option(
-    "--timeout", default=None, type=float,
+    "--timeout",
+    default=None,
+    type=float,
     help="Max seconds to block. On elapse while still running, exit 124.",
 )
 @click.option(
-    "--retry", is_flag=True, default=False,
+    "--retry",
+    is_flag=True,
+    default=False,
     help=(
         "Auto-retry failed jobs — both those already failed when attaching and "
         "any that fail while polling."
     ),
 )
 @click.option(
-    "--retry-attempts", type=click.IntRange(min=0),
-    default=DEFAULT_JOB_RETRY_ATTEMPTS, show_default=True,
+    "--retry-attempts",
+    type=click.IntRange(min=0),
+    default=DEFAULT_JOB_RETRY_ATTEMPTS,
+    show_default=True,
     help=(
         "Retries allowed per job name, counting GitLab's own `retry:` attempts. "
         "`0` for unlimited. Requires `--retry`."
     ),
 )
 @click.option(
-    "--retry-total", type=click.IntRange(min=0),
-    default=DEFAULT_JOB_RETRY_TOTAL, show_default=True,
+    "--retry-total",
+    type=click.IntRange(min=0),
+    default=DEFAULT_JOB_RETRY_TOTAL,
+    show_default=True,
     help="Retries allowed across the whole run. `0` for unlimited. Requires `--retry`.",
 )
 @click.option(
-    "--retry-exclude", multiple=True, metavar="REGEX",
+    "--retry-exclude",
+    multiple=True,
+    metavar="REGEX",
     help="Never auto-retry jobs whose name matches (repeatable). Requires `--retry`.",
 )
-@click.option("--json", "output_json", is_flag=True, default=False, help="Force JSONL output, even in a TTY.")
-@click.option("--plain", is_flag=True, default=False, help="Force append-only line output (override TTY auto-detect).")
-@click.option("--live", "force_live", is_flag=True, default=False, help="Force the redrawing TTY view (override non-TTY auto-detect).")
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    default=False,
+    help="Force JSONL output, even in a TTY.",
+)
+@click.option(
+    "--plain",
+    is_flag=True,
+    default=False,
+    help="Force append-only line output (override TTY auto-detect).",
+)
+@click.option(
+    "--live",
+    "force_live",
+    is_flag=True,
+    default=False,
+    help="Force the redrawing TTY view (override non-TTY auto-detect).",
+)
 @click.pass_context
 def attach_cmd(
     ctx: click.Context,
@@ -169,16 +214,32 @@ def attach_cmd(
         sys.exit(2)
 
     policy = _retry_policy(
-        ctx, retry=retry, attempts=retry_attempts, total=retry_total, exclude=retry_exclude,
+        ctx,
+        retry=retry,
+        attempts=retry_attempts,
+        total=retry_total,
+        exclude=retry_exclude,
     )
 
     no_cache = (ctx.obj or {}).get("no_cache", False)
-    exit_code = asyncio.run(_attach(
-        ref=ref, pipeline_id=pipeline_id, depth=depth, interval=interval,
-        heartbeat=heartbeat, detail=detail, wait_for_start=not no_wait,
-        follow=follow, timeout=timeout, retry_policy=policy, output_json=output_json,
-        plain=plain, force_live=force_live, no_cache=no_cache,
-    ))
+    exit_code = asyncio.run(
+        _attach(
+            ref=ref,
+            pipeline_id=pipeline_id,
+            depth=depth,
+            interval=interval,
+            heartbeat=heartbeat,
+            detail=detail,
+            wait_for_start=not no_wait,
+            follow=follow,
+            timeout=timeout,
+            retry_policy=policy,
+            output_json=output_json,
+            plain=plain,
+            force_live=force_live,
+            no_cache=no_cache,
+        )
+    )
     sys.exit(exit_code)
 
 
@@ -226,15 +287,30 @@ async def _attach(
             async with GitLabClient(config, cache=cache) as client:
                 events = attach(
                     client,
-                    ref=ref, pipeline_id=pipeline_id, depth=depth, interval=interval,
-                    heartbeat=heartbeat, wait_for_start=wait_for_start, follow=follow,
-                    timeout=timeout, retry_policy=retry_policy, cache=cache,
+                    ref=ref,
+                    pipeline_id=pipeline_id,
+                    depth=depth,
+                    interval=interval,
+                    heartbeat=heartbeat,
+                    wait_for_start=wait_for_start,
+                    follow=follow,
+                    timeout=timeout,
+                    retry_policy=retry_policy,
+                    cache=cache,
                 )
                 if use_live:
                     result = await render_live(events, detail=detail_level)
                 else:
-                    result = await render_lines(events, as_json=output_json, detail=detail_level)
-    except (ConfigError, NoPipelineFoundError, NotFoundError, GitLabAPIError, httpx.TransportError) as e:
+                    result = await render_lines(
+                        events, as_json=output_json, detail=detail_level
+                    )
+    except (
+        ConfigError,
+        NoPipelineFoundError,
+        NotFoundError,
+        GitLabAPIError,
+        httpx.TransportError,
+    ) as e:
         click.echo(f"Error: {e}", err=True)
         return 2
 

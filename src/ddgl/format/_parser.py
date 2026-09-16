@@ -16,12 +16,8 @@ from ddgl.model.trace import LogLine, Section, Stream, Trace
 # ── regexes ──────────────────────────────────────────────────────────────────
 
 # Section markers (matched against the line body after stripping prefix/noise).
-_SECTION_START_RE = re.compile(
-    r"section_start:(\d+):(\S+)"
-)
-_SECTION_END_RE = re.compile(
-    r"section_end:(\d+):(\S+)"
-)
+_SECTION_START_RE = re.compile(r"section_start:(\d+):(\S+)")
+_SECTION_END_RE = re.compile(r"section_end:(\d+):(\S+)")
 _TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})\.\d+Z) ")
 _STREAM_RE = re.compile(r"^([0-9a-fA-F]{2})([OE])([ +])")
 _NOISE_RE = re.compile(r"\r|\x1b\[0K")
@@ -69,7 +65,7 @@ def parse_trace(text: str) -> Trace:
         body = cleaned
         if ts_match:
             short_ts = ts_match.group(2)
-            body = cleaned[ts_match.end():]
+            body = cleaned[ts_match.end() :]
 
         # Step 2: strip stream marker (00O, 01E, etc.).
         stream: Stream | None = None
@@ -80,7 +76,7 @@ def parse_trace(text: str) -> Trace:
             stream = Stream(stream_match.group(2))
             stream_id = int(stream_match.group(1), 16)
             continuation = stream_match.group(3) == "+"
-            body = body[stream_match.end():]
+            body = body[stream_match.end() :]
 
         # Strip any remaining ANSI noise from the body prefix before
         # checking section markers (e.g. "[0K" remnants).
@@ -111,9 +107,15 @@ def parse_trace(text: str) -> Trace:
             continue
 
         # Regular log line.
-        _target().append(LogLine(
-            text=body, raw=raw_line, iso_timestamp=short_ts,
-            stream=stream, stream_id=stream_id, continuation=continuation,
-        ))
+        _target().append(
+            LogLine(
+                text=body,
+                raw=raw_line,
+                iso_timestamp=short_ts,
+                stream=stream,
+                stream_id=stream_id,
+                continuation=continuation,
+            )
+        )
 
     return trace

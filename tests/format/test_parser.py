@@ -118,10 +118,7 @@ class TestParseTraceSections:
         assert outer.children[2].text == "after inner"
 
     def test_unclosed_section(self) -> None:
-        raw = (
-            "section_start:10:hanging\r\x1b[0K\n"
-            "still going\n"
-        )
+        raw = "section_start:10:hanging\r\x1b[0K\nstill going\n"
         trace = parse_trace(raw)
         sec = trace.children[0]
         assert isinstance(sec, Section)

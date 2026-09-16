@@ -59,8 +59,15 @@ def jobs_list(
     try:
         pipeline, result = asyncio.run(
             _jobs_list(
-                ref, pipeline_id, depth, failed_only, include_allowed_failures,
-                stage, name_pattern, quiet=output_json, no_cache=no_cache,
+                ref,
+                pipeline_id,
+                depth,
+                failed_only,
+                include_allowed_failures,
+                stage,
+                name_pattern,
+                quiet=output_json,
+                no_cache=no_cache,
             )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
@@ -72,7 +79,9 @@ def jobs_list(
             click.echo("[]")
         else:
             has_filters = failed_only or stage or name_pattern
-            click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+            click.echo(
+                "No jobs match the given filters." if has_filters else "No jobs found."
+            )
         return
 
     if output_json:
@@ -103,12 +112,19 @@ async def _jobs_list(
         async with GitLabClient(config, cache=cache) as client:
             with nullcontext() if quiet else console.status("Resolving pipeline…"):
                 pipeline = await resolve_pipeline(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
+                    client,
+                    ref=ref,
+                    pipeline_id=pipeline_id,
+                    depth=depth,
+                    cache=cache,
                 )
             scope = JobStatus.FAILED if failed_only else None
             with nullcontext() if quiet else console.status("Fetching jobs…"):
                 all_jobs = [
-                    j async for j in list_jobs(client, pipeline.id, scope=scope, cache=cache)
+                    j
+                    async for j in list_jobs(
+                        client, pipeline.id, scope=scope, cache=cache
+                    )
                 ]
 
     result = filter_jobs(
@@ -125,7 +141,10 @@ async def _jobs_list(
 @pipeline_resolution_options
 @job_filter_options
 @click.option(
-    "--job", "job_id", default=None, type=int,
+    "--job",
+    "job_id",
+    default=None,
+    type=int,
     help="Show a specific job by ID.",
 )
 @output_options
@@ -161,8 +180,16 @@ def jobs_get(
     try:
         matched = asyncio.run(
             _jobs_get(
-                ref, pipeline_id, depth, failed_only, include_allowed_failures,
-                stage, name_pattern, job_id, quiet=output_json, no_cache=no_cache,
+                ref,
+                pipeline_id,
+                depth,
+                failed_only,
+                include_allowed_failures,
+                stage,
+                name_pattern,
+                job_id,
+                quiet=output_json,
+                no_cache=no_cache,
             )
         )
     except (ConfigError, NoPipelineFoundError, NotFoundError) as e:
@@ -174,7 +201,9 @@ def jobs_get(
             click.echo("[]")
         else:
             has_filters = failed_only or stage or name_pattern
-            click.echo("No jobs match the given filters." if has_filters else "No jobs found.")
+            click.echo(
+                "No jobs match the given filters." if has_filters else "No jobs found."
+            )
         return
 
     if output_json:
@@ -212,12 +241,17 @@ async def _jobs_get(
 
             with nullcontext() if quiet else console.status("Resolving pipeline…"):
                 pipeline = await resolve_pipeline(
-                    client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache,
+                    client,
+                    ref=ref,
+                    pipeline_id=pipeline_id,
+                    depth=depth,
+                    cache=cache,
                 )
             scope = JobStatus.FAILED if failed_only else None
             with nullcontext() if quiet else console.status("Fetching jobs…"):
                 return [
-                    j async for j in filter_jobs(
+                    j
+                    async for j in filter_jobs(
                         list_jobs(client, pipeline.id, scope=scope, cache=cache),
                         failed_only=failed_only,
                         include_allowed_failures=include_allowed_failures,

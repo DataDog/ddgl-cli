@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/app.py — PipelineViewer.load_pipeline() flow."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -50,11 +51,16 @@ class _FakeClient:
 
         self.iter_jobs_fresh_values.append(fresh)
         yield Page(
-            items=self._jobs, page=1, next_page=None,
-            total_pages=1, total=len(self._jobs),
+            items=self._jobs,
+            page=1,
+            next_page=None,
+            total_pages=1,
+            total=len(self._jobs),
         )
 
-    async def get_pipeline(self, pipeline_id: int, *, fresh: bool = False, **kwargs: Any) -> Pipeline:
+    async def get_pipeline(
+        self, pipeline_id: int, *, fresh: bool = False, **kwargs: Any
+    ) -> Pipeline:
         self.get_pipeline_calls += 1
         self.get_pipeline_fresh_values.append(fresh)
         return make_pipeline(id=pipeline_id)
@@ -317,7 +323,8 @@ async def test_r_with_non_retryable_job_warns_and_does_not_retry(
     client = app._client
     notified: list[str | None] = []
     monkeypatch.setattr(
-        app, "notify",
+        app,
+        "notify",
         lambda *a, severity=None, **kw: notified.append(severity),
     )
     async with app.run_test(headless=True) as pilot:
@@ -337,7 +344,8 @@ async def test_r_with_no_job_selected_warns_and_does_not_retry(
     client = app._client
     notified: list[str | None] = []
     monkeypatch.setattr(
-        app, "notify",
+        app,
+        "notify",
         lambda *a, severity=None, **kw: notified.append(severity),
     )
     async with app.run_test(headless=True) as pilot:

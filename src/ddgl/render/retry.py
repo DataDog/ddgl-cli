@@ -25,12 +25,14 @@ def _print_json(payload: dict[str, object]) -> None:
     """
     console.print(
         msgspec.json.encode(payload).decode(),
-        highlight=False, markup=False, soft_wrap=True,
+        highlight=False,
+        markup=False,
+        soft_wrap=True,
     )
 
 
 def target_suffix(pipeline_id: int | None, ref: str | None) -> str:
-    """" in pipeline #123 (main)", or "" when the pipeline isn't known.
+    """ " in pipeline #123 (main)", or "" when the pipeline isn't known.
 
     `ddgl retry --job ID` skips pipeline resolution, so the pipeline is
     only known there via `Job.pipeline_id` — and not at all if the payload
@@ -56,7 +58,9 @@ def _table(*columns: str) -> Table:
     return table
 
 
-def render_nothing_to_retry(selection: RetrySelection, *, as_json: bool = False) -> None:
+def render_nothing_to_retry(
+    selection: RetrySelection, *, as_json: bool = False
+) -> None:
     """Explain an empty candidate set.
 
     "Nothing matched your filter" and "things matched but none can be
@@ -65,7 +69,10 @@ def render_nothing_to_retry(selection: RetrySelection, *, as_json: bool = False)
     """
     if as_json:
         render_retry_outcomes(
-            [], pipeline_id=selection.pipeline_id, ref=selection.ref, as_json=True,
+            [],
+            pipeline_id=selection.pipeline_id,
+            ref=selection.ref,
+            as_json=True,
         )
     elif selection.matched:
         console.print(
@@ -76,7 +83,9 @@ def render_nothing_to_retry(selection: RetrySelection, *, as_json: bool = False)
         console.print("No jobs match the given filters.")
 
 
-def render_retry_preview(jobs: Sequence[Job], *, pipeline_id: int | None, ref: str | None) -> None:
+def render_retry_preview(
+    jobs: Sequence[Job], *, pipeline_id: int | None, ref: str | None
+) -> None:
     """Print the job list shown above the confirmation prompt.
 
     Goes to stderr, like the prompt it introduces: it's interactive UI, not
@@ -101,26 +110,32 @@ def render_retry_outcomes(
 ) -> None:
     """Print the post-retry result table, then any per-job failures."""
     if as_json:
-        _print_json({
-            "pipeline_id": pipeline_id,
-            "ref": ref,
-            "mode": "targeted",
-            "retried": [
-                {
-                    "old_job_id": o.old_job_id,
-                    "job_name": o.job_name,
-                    "new_job_id": o.new_job.id,
-                    "status": str(o.new_job.status),
-                }
-                for o in outcomes
-                if o.new_job is not None
-            ],
-            "errors": [
-                {"old_job_id": o.old_job_id, "job_name": o.job_name, "error": o.error}
-                for o in outcomes
-                if o.new_job is None
-            ],
-        })
+        _print_json(
+            {
+                "pipeline_id": pipeline_id,
+                "ref": ref,
+                "mode": "targeted",
+                "retried": [
+                    {
+                        "old_job_id": o.old_job_id,
+                        "job_name": o.job_name,
+                        "new_job_id": o.new_job.id,
+                        "status": str(o.new_job.status),
+                    }
+                    for o in outcomes
+                    if o.new_job is not None
+                ],
+                "errors": [
+                    {
+                        "old_job_id": o.old_job_id,
+                        "job_name": o.job_name,
+                        "error": o.error,
+                    }
+                    for o in outcomes
+                    if o.new_job is None
+                ],
+            }
+        )
         return
 
     # Pair each success with its new job up front, so the row builder below
@@ -146,7 +161,9 @@ def render_retry_outcomes(
     if failed:
         console.print(f"\n{len(failed)} job(s) could not be retried:")
         for outcome in failed:
-            console.print(f"  [red]{outcome.job_name}[/red]  {_one_line(outcome.error)}")
+            console.print(
+                f"  [red]{outcome.job_name}[/red]  {_one_line(outcome.error)}"
+            )
 
 
 def _one_line(error: str | None) -> str:
@@ -167,16 +184,18 @@ def render_retried_pipeline(pipeline: Pipeline, *, as_json: bool = False) -> Non
     nothing per-job, and points at `ddgl attach` for what happens next.
     """
     if as_json:
-        _print_json({
-            "pipeline_id": pipeline.id,
-            "ref": pipeline.ref,
-            "mode": "bulk",
-            "status": str(pipeline.status),
-            # Empty rather than absent: the key set matches targeted mode's
-            # so a consumer can read both without branching on `mode`.
-            "retried": [],
-            "errors": [],
-        })
+        _print_json(
+            {
+                "pipeline_id": pipeline.id,
+                "ref": pipeline.ref,
+                "mode": "bulk",
+                "status": str(pipeline.status),
+                # Empty rather than absent: the key set matches targeted mode's
+                # so a consumer can read both without branching on `mode`.
+                "retried": [],
+                "errors": [],
+            }
+        )
         return
 
     console.print(

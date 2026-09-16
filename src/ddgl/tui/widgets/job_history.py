@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Same-job history widget for the job detail screen."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,7 +42,9 @@ async def fetch_job_history(
     cache: Cache | None = None,
 ) -> list[HistoryEntry]:
     """Fetch same-named job across recent pipelines on *ref*."""
-    pipelines = await list_pipelines(client, ref, count=_HISTORY_PIPELINE_COUNT, cache=cache)
+    pipelines = await list_pipelines(
+        client, ref, count=_HISTORY_PIPELINE_COUNT, cache=cache
+    )
 
     entries: list[HistoryEntry] = []
     for pipeline in pipelines:
@@ -63,8 +66,18 @@ def _fmt_date(iso: str) -> str:
     if not iso or len(iso) < 10:
         return "—"
     months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
     ]
     try:
         month = months[int(iso[5:7]) - 1]
@@ -76,7 +89,9 @@ def _fmt_date(iso: str) -> str:
 
 def _status_cell(job: Job) -> Text:
     """Coloured status cell for a history row: icon + label."""
-    return Text(f"{job_status_icon(job)} {job_status_label(job)}", style=job_status_color(job))
+    return Text(
+        f"{job_status_icon(job)} {job_status_label(job)}", style=job_status_color(job)
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/core/pipeline.py."""
+
 from __future__ import annotations
 
 import logging
@@ -227,10 +228,13 @@ class TestListPipelines:
         from ddgl.cache.cache_config import CacheNS
 
         mock_api.get("/projects/grp%2Fproj/pipelines").mock(
-            return_value=Response(200, json=[
-                _pipeline_payload(10, status="success"),
-                _pipeline_payload(11, status="failed"),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _pipeline_payload(10, status="success"),
+                    _pipeline_payload(11, status="failed"),
+                ],
+            )
         )
         cache = FakeCache()
         await list_pipelines(client, "main", cache=cache)
@@ -266,9 +270,14 @@ class TestFindLatestPipeline:
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
         mock_api.get("/projects/grp%2Fproj/pipelines").mock(
-            return_value=Response(200, json=[
-                _pipeline_payload(10), _pipeline_payload(20), _pipeline_payload(5),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _pipeline_payload(10),
+                    _pipeline_payload(20),
+                    _pipeline_payload(5),
+                ],
+            )
         )
         result = await find_latest_pipeline(client, "main")
         assert result.id == 20
@@ -432,31 +441,63 @@ class TestFindLatestPipelineNeverQueriesOriginPrefixedRef:
     @pytest.fixture()
     def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         """A real git repo with a real, pushed-to origin remote."""
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.co",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.co"}
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t.co",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t.co",
+        }
         origin = tmp_path / "origin.git"
         origin.mkdir()
-        subprocess.run(["git", "init", "-q", "--bare", "-b", "main"], cwd=origin,
-                       check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init", "-q", "--bare", "-b", "main"],
+            cwd=origin,
+            check=True,
+            capture_output=True,
+        )
 
         work = tmp_path / "work"
         work.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, check=True,
-                       env=env, capture_output=True)
-        subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=work,
-                       check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init", "-q", "-b", "main"],
+            cwd=work,
+            check=True,
+            env=env,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(origin)],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
         for i in range(2):
             (work / f"f{i}.txt").write_text(str(i))
-            subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"c{i}"], cwd=work, check=True,
-                           env=env, capture_output=True)
-        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=work,
-                       check=True, capture_output=True)
+            subprocess.run(
+                ["git", "add", "."], cwd=work, check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", f"c{i}"],
+                cwd=work,
+                check=True,
+                env=env,
+                capture_output=True,
+            )
+        subprocess.run(
+            ["git", "push", "-q", "origin", "main"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
         monkeypatch.chdir(work)
         return work
 
     async def test_only_plain_ref_and_real_shas_reach_gitlab(
-        self, repo: Path, client: GitLabClient, mock_api: respx.MockRouter,
+        self,
+        repo: Path,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
     ) -> None:
         seen_refs: list[str] = []
 

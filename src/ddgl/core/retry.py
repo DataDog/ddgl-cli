@@ -79,7 +79,9 @@ async def retry_jobs(client: GitLabClient, jobs: Sequence[Job]) -> list[RetryOut
     return outcomes
 
 
-def _select(jobs: list[Job], *, force: bool, pipeline: Pipeline | None) -> RetrySelection:
+def _select(
+    jobs: list[Job], *, force: bool, pipeline: Pipeline | None
+) -> RetrySelection:
     """Apply the retryable gate and work out which pipeline to report."""
     matched = len(jobs)
     candidates = jobs if force else [job for job in jobs if job.is_retryable]
@@ -97,10 +99,15 @@ def _select(jobs: list[Job], *, force: bool, pipeline: Pipeline | None) -> Retry
 
     logger.info(
         "Retry selection: %d matched, %d retryable%s",
-        matched, len(candidates), " (--force)" if force else "",
+        matched,
+        len(candidates),
+        " (--force)" if force else "",
     )
     return RetrySelection(
-        jobs=candidates, matched=matched, pipeline_id=pipeline_id, ref=ref,
+        jobs=candidates,
+        matched=matched,
+        pipeline_id=pipeline_id,
+        ref=ref,
     )
 
 
@@ -144,7 +151,8 @@ async def select_in_pipeline(
     logger.info("Selecting jobs to retry in pipeline %d", pipeline.id)
     scope = JobStatus.FAILED if failed_only else None
     jobs = [
-        job async for job in filter_jobs(
+        job
+        async for job in filter_jobs(
             list_jobs(client, pipeline.id, scope=scope, cache=cache),
             failed_only=failed_only,
             include_allowed_failures=include_allowed_failures,

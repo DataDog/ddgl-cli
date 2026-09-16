@@ -8,4 +8,12 @@ from ddgl.model.log import JobLog, LogSection
 from ddgl.model.page import Page
 from ddgl.model.pipeline import Pipeline
 
-__all__ = ["AttachEvent", "ConfigFile", "Job", "JobLog", "LogSection", "Page", "Pipeline"]
+__all__ = [
+    "AttachEvent",
+    "ConfigFile",
+    "Job",
+    "JobLog",
+    "LogSection",
+    "Page",
+    "Pipeline",
+]

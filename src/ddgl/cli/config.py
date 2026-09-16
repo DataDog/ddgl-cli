@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ddgl.config import Config
     from ddgl.model import ConfigFile
 
+
 @click.group()
 def config_group() -> None:
     """Query currently resolved config parameters"""
@@ -78,6 +79,7 @@ def show(output_json: bool, output_raw: bool, censor: bool) -> None:
     # Sanitize any Nones before exporting as toml
     sanitized = _strip_none(msgspec.to_builtins(data))
     console.print(msgspec.toml.encode(sanitized).decode(), soft_wrap=True)
+
 
 def _strip_none(obj):
     if obj is None:

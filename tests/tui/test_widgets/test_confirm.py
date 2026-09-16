@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/confirm.py."""
+
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
@@ -19,7 +20,9 @@ class _ModalHostApp(App[None]):
         return iter(())
 
     def show(self) -> None:
-        self.push_screen(ConfirmModal("Retry job?", "build/test — failed"), self._on_dismiss)
+        self.push_screen(
+            ConfirmModal("Retry job?", "build/test — failed"), self._on_dismiss
+        )
 
     def _on_dismiss(self, result: bool) -> None:
         self.result = result

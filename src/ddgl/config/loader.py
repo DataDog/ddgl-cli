@@ -58,7 +58,9 @@ class Config(msgspec.Struct, frozen=True):
 
 
 def _resolve_token(
-    file_config: ConfigFile, gitlab_url: str, cache: Cache | None,
+    file_config: ConfigFile,
+    gitlab_url: str,
+    cache: Cache | None,
 ) -> str:
     """Resolve a GitLab token: env var, then token_file, then token_command.
 
@@ -164,6 +166,7 @@ async def load_config(cache: Cache | None = None) -> Config:
     )
     logger.debug(
         "Config loaded: url=%s project_id=%s",
-        config.gitlab_url, config.project_id,
+        config.gitlab_url,
+        config.project_id,
     )
     return config

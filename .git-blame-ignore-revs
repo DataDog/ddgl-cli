@@ -1,0 +1,7 @@
+# Revisions listed here are skipped by `git blame`.
+#
+# GitHub honours this file automatically. To use it locally, run:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: apply ruff format across the codebase
+a1798454710f041fe0923f25954a8e53f5fc9d73

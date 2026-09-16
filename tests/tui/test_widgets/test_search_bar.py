@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/search_bar.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -97,7 +98,7 @@ def test_parse_query_status_lowercased() -> None:
 
 
 def test_parse_query_allowed_failure_token() -> None:
-    """"allowed-failure" is a pseudo-status (see job_list.status_token) that
+    """ "allowed-failure" is a pseudo-status (see job_list.status_token) that
     parse_query treats like any other status token value."""
     spec = parse_query("status:allowed-failure")
     assert spec.statuses == {"allowed-failure"}

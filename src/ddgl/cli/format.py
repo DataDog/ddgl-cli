@@ -17,7 +17,9 @@ from ddgl.render._console import console
 
 @click.command()
 @trace_format_options
-@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON.")
+@click.option(
+    "--json", "output_json", is_flag=True, default=False, help="Output as JSON."
+)
 @click.option("--no-pager", is_flag=True, default=False, help="Disable the pager.")
 @click.argument("source", default="-", type=click.File("r"))
 def format_cmd(

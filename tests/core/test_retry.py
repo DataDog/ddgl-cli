@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/core/retry.py."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -77,7 +78,10 @@ def _pipeline_payload(pipeline_id: int, status: str = "running") -> dict[str, An
 
 def _make_job(**overrides: object) -> Job:
     defaults: dict[str, object] = {
-        "id": 1, "name": "build", "stage": "build", "status": "failed",
+        "id": 1,
+        "name": "build",
+        "stage": "build",
+        "status": "failed",
         "pipeline_id": 100,
     }
     return Job(**(defaults | overrides))
@@ -220,7 +224,9 @@ class TestTallyAttempts:
     ) -> None:
         route = mock_api.get("/projects/grp%2Fproj/pipelines/100/jobs").mock(
             return_value=Response(
-                200, json=[], headers={"x-total-pages": "1"},
+                200,
+                json=[],
+                headers={"x-total-pages": "1"},
             )
         )
 
@@ -285,7 +291,9 @@ class TestSelectByID:
         )
         two = _job_payload(2, name="b", status="failed")
         two["pipeline"] = {"id": 999}
-        mock_api.get("/projects/grp%2Fproj/jobs/2").mock(return_value=Response(200, json=two))
+        mock_api.get("/projects/grp%2Fproj/jobs/2").mock(
+            return_value=Response(200, json=two)
+        )
 
         selection = await select_by_id(client, [1, 2])
 
@@ -301,11 +309,14 @@ class TestSelectInPipeline:
     async def test_keeps_only_retryable_jobs(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
-        self._mock_jobs(mock_api, [
-            _job_payload(1, name="a", status="failed"),
-            _job_payload(2, name="b", status="canceled"),
-            _job_payload(3, name="c", status="success"),
-        ])
+        self._mock_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="a", status="failed"),
+                _job_payload(2, name="b", status="canceled"),
+                _job_payload(3, name="c", status="success"),
+            ],
+        )
 
         selection = await select_in_pipeline(client, _pipeline())
 
@@ -318,7 +329,9 @@ class TestSelectInPipeline:
         """The resolved pipeline is reported even though the jobs' own
         back-reference says otherwise — it's the authoritative source."""
         mock_api.get("/projects/grp%2Fproj/pipelines/7/jobs").mock(
-            return_value=Response(200, json=[_job_payload(1, name="a", status="failed")])
+            return_value=Response(
+                200, json=[_job_payload(1, name="a", status="failed")]
+            )
         )
 
         selection = await select_in_pipeline(client, _pipeline(7, ref="feature"))
@@ -338,10 +351,13 @@ class TestSelectInPipeline:
     async def test_stage_filter_is_applied(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
-        self._mock_jobs(mock_api, [
-            _job_payload(1, name="a", status="failed", stage="test"),
-            _job_payload(2, name="b", status="failed", stage="build"),
-        ])
+        self._mock_jobs(
+            mock_api,
+            [
+                _job_payload(1, name="a", status="failed", stage="test"),
+                _job_payload(2, name="b", status="failed", stage="build"),
+            ],
+        )
 
         selection = await select_in_pipeline(client, _pipeline(), stage="test")
 
@@ -372,7 +388,10 @@ class TestSelectInPipeline:
         self._mock_jobs(mock_api, payloads)
 
         selection = await select_in_pipeline(
-            client, _pipeline(), failed_only=True, include_allowed_failures=True,
+            client,
+            _pipeline(),
+            failed_only=True,
+            include_allowed_failures=True,
         )
 
         assert [j.id for j in selection.jobs] == [1, 2]

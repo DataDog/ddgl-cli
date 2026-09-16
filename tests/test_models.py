@@ -26,15 +26,21 @@ from ddgl.model.pipeline import Pipeline
 class TestPipeline:
     def _make(self, **overrides: object) -> Pipeline:
         defaults: dict[str, object] = {
-            "id": 1, "ref": "main",
-            "status": PipelineStatus.SUCCESS, "sha": "abc",
+            "id": 1,
+            "ref": "main",
+            "status": PipelineStatus.SUCCESS,
+            "sha": "abc",
         }
         return Pipeline(**(defaults | overrides))
 
     def test_from_api(self) -> None:
         data = {
-            "id": 1, "ref": "main", "status": "success", "sha": "abc",
-            "web_url": "https://example.com", "duration": 120,
+            "id": 1,
+            "ref": "main",
+            "status": "success",
+            "sha": "abc",
+            "web_url": "https://example.com",
+            "duration": 120,
             "extra_field": "ignored",
         }
         p = Pipeline.from_api(data)
@@ -68,15 +74,22 @@ class TestPipeline:
 class TestJob:
     def _make(self, **overrides: object) -> Job:
         defaults: dict[str, object] = {
-            "id": 1, "name": "build", "stage": "build",
-            "status": JobStatus.SUCCESS, "ref": "main", "pipeline_id": 1,
+            "id": 1,
+            "name": "build",
+            "stage": "build",
+            "status": JobStatus.SUCCESS,
+            "ref": "main",
+            "pipeline_id": 1,
         }
         return Job(**(defaults | overrides))
 
     def test_from_api(self) -> None:
         data = {
-            "id": 10, "name": "test", "stage": "test",
-            "status": "failed", "ref": "main",
+            "id": 10,
+            "name": "test",
+            "stage": "test",
+            "status": "failed",
+            "ref": "main",
             "failure_reason": "script_failure",
             "pipeline": {"id": 1, "project_id": 7},  # only `id` is read
         }
@@ -215,32 +228,51 @@ class TestAttachEvent:
         assert not hasattr(e, "job_stage")
 
     def test_job_transition_fields(self) -> None:
-        e = JobEvent(ts="2025-01-01T00:00:00Z",
-            job_id=1, job_name="build:unit", job_stage="test",
-            old_status="running", status="failed", duration=135.0,
+        e = JobEvent(
+            ts="2025-01-01T00:00:00Z",
+            job_id=1,
+            job_name="build:unit",
+            job_stage="test",
+            old_status="running",
+            status="failed",
+            duration=135.0,
         )
         assert e.old_status == "running"
         assert e.status == "failed"
 
     def test_result_fields(self) -> None:
-        e = ResultEvent(ts="2025-01-01T00:31:57Z",
-            pipeline_id=918342, status="failed",
+        e = ResultEvent(
+            ts="2025-01-01T00:31:57Z",
+            pipeline_id=918342,
+            status="failed",
             failed_jobs=("build:unit", "lint:ruff"),
-            duration=1914.0, reason="terminal",
+            duration=1914.0,
+            reason="terminal",
         )
         assert e.reason == "terminal"
         assert e.failed_jobs == ("build:unit", "lint:ruff")
 
     def test_json_roundtrip(self) -> None:
-        e = SnapshotEvent(ts="2025-01-01T00:00:00Z",
-            pipeline_id=1, status="running", jobs_total=5, jobs_done=1,
+        e = SnapshotEvent(
+            ts="2025-01-01T00:00:00Z",
+            pipeline_id=1,
+            status="running",
+            jobs_total=5,
+            jobs_done=1,
         )
         decoded = msgspec.json.decode(msgspec.json.encode(e), type=dict)
         assert decoded == {
-            "kind": "snapshot", "ts": "2025-01-01T00:00:00Z", "pipeline_id": 1,
-            "ref": None, "current_stage": None, "pipeline_elapsed": None,
-            "status": "running", "jobs_total": 5, "jobs_done": 1,
-            "failed_jobs": [], "eta_seconds": None,
+            "kind": "snapshot",
+            "ts": "2025-01-01T00:00:00Z",
+            "pipeline_id": 1,
+            "ref": None,
+            "current_stage": None,
+            "pipeline_elapsed": None,
+            "status": "running",
+            "jobs_total": 5,
+            "jobs_done": 1,
+            "failed_jobs": [],
+            "eta_seconds": None,
         }
 
     def test_result_defaults_to_zero_retries(self) -> None:
@@ -256,8 +288,11 @@ class TestRetryEvent:
     def test_fields(self) -> None:
         e = RetryEvent(
             ts="2025-01-01T00:00:00Z",
-            job_id=98765, job_name="unit-tests-1", job_stage="test",
-            new_job_id=98801, attempt=2,
+            job_id=98765,
+            job_name="unit-tests-1",
+            job_stage="test",
+            new_job_id=98801,
+            attempt=2,
         )
         assert e.job_id == 98765
         assert e.new_job_id == 98801
@@ -266,9 +301,13 @@ class TestRetryEvent:
 
     def test_json_roundtrip(self) -> None:
         e = RetryEvent(
-            ts="2025-01-01T00:00:00Z", pipeline_id=1,
-            job_id=98765, job_name="unit-tests-1", job_stage="test",
-            new_job_id=98801, attempt=2,
+            ts="2025-01-01T00:00:00Z",
+            pipeline_id=1,
+            job_id=98765,
+            job_name="unit-tests-1",
+            job_stage="test",
+            new_job_id=98801,
+            attempt=2,
         )
         decoded = msgspec.json.decode(msgspec.json.encode(e), type=dict)
         assert decoded["kind"] == "retry"
@@ -316,7 +355,9 @@ class TestResultEventConstructors:
         assert result.status is None
 
     def test_timed_out_carries_the_last_events_state(self) -> None:
-        last = HeartbeatEvent(ts="now", pipeline_id=9, ref="main", jobs_total=5, jobs_done=4)
+        last = HeartbeatEvent(
+            ts="now", pipeline_id=9, ref="main", jobs_total=5, jobs_done=4
+        )
         result = ResultEvent.timed_out(last)
         assert result.reason == "timeout"
         assert (result.pipeline_id, result.jobs_total, result.jobs_done) == (9, 5, 4)
@@ -336,15 +377,18 @@ class TestPipelineState:
 
     def _state(self, jobs: list[Job]) -> PipelineState:
         return PipelineState(
-            pipeline=Pipeline(id=1, ref="main", status=PipelineStatus.RUNNING), jobs=jobs
+            pipeline=Pipeline(id=1, ref="main", status=PipelineStatus.RUNNING),
+            jobs=jobs,
         )
 
     def test_jobs_done_counts_terminal_jobs(self) -> None:
-        state = self._state([
-            self._job(1, "build", JobStatus.SUCCESS),
-            self._job(2, "test", JobStatus.RUNNING),
-            self._job(3, "test", JobStatus.SKIPPED),
-        ])
+        state = self._state(
+            [
+                self._job(1, "build", JobStatus.SUCCESS),
+                self._job(2, "test", JobStatus.RUNNING),
+                self._job(3, "test", JobStatus.SKIPPED),
+            ]
+        )
         assert state.jobs_done == 2
 
     def test_failed_job_names_excludes_allowed_failures(self) -> None:
@@ -359,10 +403,12 @@ class TestPipelineState:
         assert self._state([]).current_stage is None
 
     def test_current_stage_single_stage(self) -> None:
-        state = self._state([
-            self._job(1, "build", JobStatus.RUNNING),
-            self._job(2, "build", JobStatus.CREATED),
-        ])
+        state = self._state(
+            [
+                self._job(1, "build", JobStatus.RUNNING),
+                self._job(2, "build", JobStatus.CREATED),
+            ]
+        )
         assert state.current_stage == "build"
 
     def test_current_stage_is_oldest_incomplete_not_most_advanced(self) -> None:
@@ -375,27 +421,33 @@ class TestPipelineState:
         returns jobs newest-ID-first, so a highest-ID-first list places the
         most-advanced stage's job before the oldest stage's job.
         """
-        state = self._state([
-            self._job(30, "deploy", JobStatus.RUNNING),
-            self._job(20, "test", JobStatus.SUCCESS),
-            self._job(10, "build", JobStatus.RUNNING),
-        ])
+        state = self._state(
+            [
+                self._job(30, "deploy", JobStatus.RUNNING),
+                self._job(20, "test", JobStatus.SUCCESS),
+                self._job(10, "build", JobStatus.RUNNING),
+            ]
+        )
         assert state.current_stage == "build"
 
     def test_current_stage_ignores_fully_done_stages(self) -> None:
-        state = self._state([
-            self._job(10, "build", JobStatus.SUCCESS),
-            self._job(20, "test", JobStatus.RUNNING),
-            self._job(30, "deploy", JobStatus.CREATED),
-        ])
+        state = self._state(
+            [
+                self._job(10, "build", JobStatus.SUCCESS),
+                self._job(20, "test", JobStatus.RUNNING),
+                self._job(30, "deploy", JobStatus.CREATED),
+            ]
+        )
         assert state.current_stage == "test"
 
     def test_current_stage_all_done_falls_back_to_oldest_overall(self) -> None:
-        state = self._state([
-            self._job(30, "deploy", JobStatus.SUCCESS),
-            self._job(10, "build", JobStatus.SUCCESS),
-            self._job(20, "test", JobStatus.SUCCESS),
-        ])
+        state = self._state(
+            [
+                self._job(30, "deploy", JobStatus.SUCCESS),
+                self._job(10, "build", JobStatus.SUCCESS),
+                self._job(20, "test", JobStatus.SUCCESS),
+            ]
+        )
         assert state.current_stage == "build"
 
 
@@ -404,8 +456,20 @@ class TestEventContextFromState:
         state = PipelineState(
             pipeline=Pipeline(id=42, ref="feature", status=PipelineStatus.RUNNING),
             jobs=[
-                Job(id=1, name="a", stage="build", status=JobStatus.SUCCESS, pipeline_id=42),
-                Job(id=2, name="b", stage="test", status=JobStatus.FAILED, pipeline_id=42),
+                Job(
+                    id=1,
+                    name="a",
+                    stage="build",
+                    status=JobStatus.SUCCESS,
+                    pipeline_id=42,
+                ),
+                Job(
+                    id=2,
+                    name="b",
+                    stage="test",
+                    status=JobStatus.FAILED,
+                    pipeline_id=42,
+                ),
             ],
         )
         context = EventContext.from_state(state)

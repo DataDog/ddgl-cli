@@ -118,7 +118,11 @@ def _build_tick_events(
     nothing at all if it isn't.
     """
     if prev is None:
-        return [SnapshotEvent(ts=now_iso(), status=str(curr.pipeline.status), **context.as_fields())]
+        return [
+            SnapshotEvent(
+                ts=now_iso(), status=str(curr.pipeline.status), **context.as_fields()
+            )
+        ]
 
     events: list[AttachEvent] = []
     pipeline_event = _build_pipeline_event(prev.pipeline, curr.pipeline, context)
@@ -159,7 +163,8 @@ def _candidates_before_tally(
     if policy.total and ledger.total_issued >= policy.total:
         return []
     return [
-        job for job in state.jobs
+        job
+        for job in state.jobs
         if job.is_blocking
         and job.id not in ledger.posted_job_ids
         and not any(re.search(pattern, job.name) for pattern in policy.exclude)
@@ -195,7 +200,9 @@ async def _apply_retry_policy(
     if not candidates:
         return [], None
 
-    tally = await tally_attempts(client, state.pipeline.id, {j.name for j in candidates})
+    tally = await tally_attempts(
+        client, state.pipeline.id, {j.name for j in candidates}
+    )
 
     selected: list[Job] = []
     for job in candidates:
@@ -205,13 +212,16 @@ async def _apply_retry_policy(
         if not tally.is_newest(job):
             logger.info(
                 "attach: %s already has a newer attempt, not retrying job %d",
-                job.name, job.id,
+                job.name,
+                job.id,
             )
             continue
         if not _within_budget(job, tally, policy):
             logger.info(
                 "attach: %s has used its %d retries, not retrying job %d",
-                job.name, policy.attempts_per_job, job.id,
+                job.name,
+                policy.attempts_per_job,
+                job.id,
             )
             continue
         selected.append(job)
@@ -278,7 +288,11 @@ async def _get_pipeline_state(
 
 
 async def _check_for_new_pipeline(
-    client: GitLabClient, current: PipelineState, *, cache: Cache | None, project_id: str
+    client: GitLabClient,
+    current: PipelineState,
+    *,
+    cache: Cache | None,
+    project_id: str,
 ) -> PipelineState | None:
     """The state of a pipeline newer than `current`'s for the same ref, or
     None if there isn't one.
@@ -306,7 +320,10 @@ async def _check_for_new_pipeline(
     except (GitLabAPIError, httpx.TransportError) as exc:
         logger.warning(
             "attach: found newer pipeline %d but failed to fetch its jobs (%s); "
-            "staying on #%d, will retry next tick", newest.id, exc, current.pipeline.id,
+            "staying on #%d, will retry next tick",
+            newest.id,
+            exc,
+            current.pipeline.id,
         )
         return None
 
@@ -340,7 +357,12 @@ async def _resolve_or_wait(
     while True:
         try:
             return await resolve_pipeline(
-                client, ref=ref, pipeline_id=pipeline_id, depth=depth, cache=cache, fresh=True
+                client,
+                ref=ref,
+                pipeline_id=pipeline_id,
+                depth=depth,
+                cache=cache,
+                fresh=True,
             )
         except NoPipelineFoundError:
             if not wait_for_start:
@@ -418,8 +440,13 @@ async def _poll_pipeline(
     """
     project_id = client._config.project_id or ""
     pipeline = await _resolve_or_wait(
-        client, ref=ref, pipeline_id=pipeline_id, depth=depth,
-        wait_for_start=wait_for_start, interval=interval, cache=cache,
+        client,
+        ref=ref,
+        pipeline_id=pipeline_id,
+        depth=depth,
+        wait_for_start=wait_for_start,
+        interval=interval,
+        cache=cache,
     )
 
     # Emitted before the job fetch below, which on a pipeline with hundreds
@@ -441,7 +468,10 @@ async def _poll_pipeline(
     jobs = await client.get_all_jobs(pipeline.id, fresh=True)
     cache_terminal_jobs(cache, project_id, jobs)
     logger.info(
-        "attach: loaded %d jobs for pipeline %d (%s)", len(jobs), pipeline.id, pipeline.status
+        "attach: loaded %d jobs for pipeline %d (%s)",
+        len(jobs),
+        pipeline.id,
+        pipeline.status,
     )
 
     # The resolved pipeline and its jobs are the first tick, so the loop
@@ -455,7 +485,9 @@ async def _poll_pipeline(
 
     while True:
         context = EventContext.from_state(curr)
-        for event in _build_tick_events(prev, curr, context=context, heartbeat=heartbeat):
+        for event in _build_tick_events(
+            prev, curr, context=context, heartbeat=heartbeat
+        ):
             yield event
 
         outcomes, tally = await _apply_retry_policy(client, curr, policy, ledger)
@@ -470,7 +502,8 @@ async def _poll_pipeline(
         if curr.pipeline.is_finished and not retried_now:
             logger.info(
                 "attach: pipeline %d reached terminal status %s",
-                curr.pipeline.id, curr.pipeline.status,
+                curr.pipeline.id,
+                curr.pipeline.status,
             )
             yield ResultEvent.terminal(curr, context, retries=ledger.total_issued)
             return
@@ -493,7 +526,7 @@ async def _poll_pipeline(
                     yield SwitchedEvent(
                         ts=now_iso(),
                         message=f"newer pipeline #{switched.pipeline.id} found for ref "
-                                f"{switched.pipeline.ref!r}; switching from #{curr.pipeline.id}",
+                        f"{switched.pipeline.ref!r}; switching from #{curr.pipeline.id}",
                         **EventContext.from_state(switched).as_fields(),
                     )
                     # No previous tick for a pipeline we've never seen, so
@@ -511,12 +544,16 @@ async def _poll_pipeline(
                 if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES:
                     logger.warning(
                         "attach: poll failed %d times in a row (%s), giving up",
-                        consecutive_failures, exc,
+                        consecutive_failures,
+                        exc,
                     )
                     raise
                 logger.warning(
                     "attach: poll tick failed (%s), skipping — retrying in %.0fs (failure %d/%d)",
-                    exc, interval, consecutive_failures, MAX_CONSECUTIVE_POLL_FAILURES,
+                    exc,
+                    interval,
+                    consecutive_failures,
+                    MAX_CONSECUTIVE_POLL_FAILURES,
                 )
                 continue
             consecutive_failures = 0

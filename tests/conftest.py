@@ -53,16 +53,35 @@ async def client(mock_api: respx.MockRouter) -> GitLabClient:
 
 
 def _make_git_repo(path: Path, remote_name: str, remote_url: str) -> Path:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t.co",
-           "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t.co"}
-    subprocess.run(["git", "init", "-b", "my-feature"], cwd=path, check=True, env=env,
-                   capture_output=True)
-    subprocess.run(["git", "remote", "add", remote_name, remote_url],
-                   cwd=path, check=True, capture_output=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "t@t.co",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "t@t.co",
+    }
+    subprocess.run(
+        ["git", "init", "-b", "my-feature"],
+        cwd=path,
+        check=True,
+        env=env,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "remote", "add", remote_name, remote_url],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
     (path / "README.md").write_text("hello")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, env=env,
-                   capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=path,
+        check=True,
+        env=env,
+        capture_output=True,
+    )
     return path
 
 

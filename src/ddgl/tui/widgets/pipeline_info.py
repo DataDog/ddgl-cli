@@ -78,15 +78,11 @@ def _render_job_stats(jobs: list[Job]) -> Text:
     ]:
         n = counts.get(status, 0)
         if n:
-            line.append(
-                f"{status_icon(status)} {n}{sep}", style=status_color(status)
-            )
+            line.append(f"{status_icon(status)} {n}{sep}", style=status_color(status))
     # Any remaining statuses not in the short list
     shown = {"success", "failed", "allowed-failure", "running", "skipped"}
     for status, n in counts.items():
         if status not in shown and n:
-            line.append(
-                f"  {status_icon(status)} {n}", style=status_color(status)
-            )
+            line.append(f"  {status_icon(status)} {n}", style=status_color(status))
     line.append("\n")
     return line

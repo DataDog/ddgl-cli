@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/jobs.py."""
+
 from __future__ import annotations
 
 import importlib
@@ -59,11 +60,20 @@ def _pipeline_payload(pipeline_id: int = 1) -> dict[str, Any]:
 
 
 def _job_payload(
-    job_id: int, *, name: str, status: str = "failed", allow_failure: bool = False,
+    job_id: int,
+    *,
+    name: str,
+    status: str = "failed",
+    allow_failure: bool = False,
 ) -> dict[str, Any]:
     return {
-        "id": job_id, "name": name, "stage": "test", "status": status,
-        "ref": "main", "allow_failure": allow_failure, "pipeline": {"id": 1},
+        "id": job_id,
+        "name": name,
+        "stage": "test",
+        "status": status,
+        "ref": "main",
+        "allow_failure": allow_failure,
+        "pipeline": {"id": 1},
     }
 
 
@@ -74,9 +84,12 @@ def _job_payload(
 
 class TestJobsListEmptyJson:
     def test_json_flag_outputs_empty_array_not_a_sentence(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_jobs_list(*args: object, **kwargs: object) -> tuple[Pipeline, list[Job]]:
+        async def fake_jobs_list(
+            *args: object, **kwargs: object
+        ) -> tuple[Pipeline, list[Job]]:
             return _PIPELINE, []
 
         monkeypatch.setattr(jobs_module, "_jobs_list", fake_jobs_list)
@@ -87,9 +100,12 @@ class TestJobsListEmptyJson:
         assert json.loads(result.output) == []
 
     def test_without_json_flag_prints_human_message(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_jobs_list(*args: object, **kwargs: object) -> tuple[Pipeline, list[Job]]:
+        async def fake_jobs_list(
+            *args: object, **kwargs: object
+        ) -> tuple[Pipeline, list[Job]]:
             return _PIPELINE, []
 
         monkeypatch.setattr(jobs_module, "_jobs_list", fake_jobs_list)
@@ -102,7 +118,8 @@ class TestJobsListEmptyJson:
 
 class TestJobsGetEmptyJson:
     def test_json_flag_outputs_empty_array_not_a_sentence(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def fake_jobs_get(*args: object, **kwargs: object) -> list[Job]:
             return []
@@ -115,7 +132,8 @@ class TestJobsGetEmptyJson:
         assert json.loads(result.output) == []
 
     def test_without_json_flag_prints_human_message(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def fake_jobs_get(*args: object, **kwargs: object) -> list[Job]:
             return []
@@ -139,10 +157,13 @@ class TestJobsListIncludeAllowedFailures:
             return_value=Response(200, json=_pipeline_payload())
         )
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
-            return_value=Response(200, json=[
-                _job_payload(1, name="unit-tests", allow_failure=False),
-                _job_payload(2, name="flaky-e2e", allow_failure=True),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _job_payload(1, name="unit-tests", allow_failure=False),
+                    _job_payload(2, name="flaky-e2e", allow_failure=True),
+                ],
+            )
         )
 
     def test_option_is_recognized(self, mock_api: respx.MockRouter) -> None:
@@ -151,7 +172,15 @@ class TestJobsListIncludeAllowedFailures:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["--no-cache", "jobs", "list", "--pipeline", "1", "--include-allowed-failures", "--json"],
+            [
+                "--no-cache",
+                "jobs",
+                "list",
+                "--pipeline",
+                "1",
+                "--include-allowed-failures",
+                "--json",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert "no such option" not in result.output.lower()
@@ -175,7 +204,16 @@ class TestJobsListIncludeAllowedFailures:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["--no-cache", "jobs", "list", "--pipeline", "1", "-f", "--include-allowed-failures", "--json"],
+            [
+                "--no-cache",
+                "jobs",
+                "list",
+                "--pipeline",
+                "1",
+                "-f",
+                "--include-allowed-failures",
+                "--json",
+            ],
         )
         assert result.exit_code == 0, result.output
         names = {j["name"] for j in json.loads(result.output)}

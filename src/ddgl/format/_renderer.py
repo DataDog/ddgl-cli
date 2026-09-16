@@ -76,7 +76,9 @@ def _walk(
 def _section_rule(section: Section, depth: int) -> Rule:
     indent = _INDENT * depth
     icon = "\u25b8" if section.collapsed else "\u25be"
-    parts = [f"{indent}[{_SECTION_COLOR}]{icon}[/{_SECTION_COLOR}] [{_SECTION_COLOR} bold]{section.name}[/{_SECTION_COLOR} bold]"]
+    parts = [
+        f"{indent}[{_SECTION_COLOR}]{icon}[/{_SECTION_COLOR}] [{_SECTION_COLOR} bold]{section.name}[/{_SECTION_COLOR} bold]"
+    ]
     if section.duration is not None:
         parts.append(f"[dim]{section.duration}s[/dim]")
     title = "  ".join(parts)

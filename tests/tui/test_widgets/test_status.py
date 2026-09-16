@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for ddgl/tui/widgets/status.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -21,8 +22,11 @@ from ddgl.tui.widgets.status import (
 
 def _make_job(**overrides: object) -> Job:
     defaults: dict[str, object] = {
-        "id": 1, "name": "build", "stage": "build",
-        "status": JobStatus.FAILED, "pipeline_id": 1,
+        "id": 1,
+        "name": "build",
+        "stage": "build",
+        "status": JobStatus.FAILED,
+        "pipeline_id": 1,
     }
     return Job(**(defaults | overrides))  # type: ignore[arg-type]
 

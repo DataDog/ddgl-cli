@@ -58,7 +58,9 @@ class Job(msgspec.Struct):
             runner_description=runner.get("description"),
             runner_tags=tuple(runner.get("tags") or []),
             queued_duration=data.get("queued_duration"),
-            needs=tuple(n["name"] for n in needs_raw if isinstance(n, dict) and "name" in n),
+            needs=tuple(
+                n["name"] for n in needs_raw if isinstance(n, dict) and "name" in n
+            ),
             **kwargs,
         )
 

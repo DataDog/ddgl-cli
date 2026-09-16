@@ -34,7 +34,9 @@ def render_job_table(jobs: list[Job], *, pipeline: Pipeline | None = None) -> No
     for stage, stage_jobs in stages.items():
         console.print(f"  [dim]{stage}[/dim]")
 
-        table = Table(box=MINIMAL, show_header=True, header_style="bold", padding=(0, 1))
+        table = Table(
+            box=MINIMAL, show_header=True, header_style="bold", padding=(0, 1)
+        )
         table.add_column("ID", style="dim", no_wrap=True)
         table.add_column("Name")
         table.add_column("Status", no_wrap=True)

@@ -2,6 +2,7 @@
 # This product includes software developed at Datadog (https://www.datadoghq.com/) Copyright 2026 Datadog, Inc.
 
 """Tests for src/ddgl/cli/logs.py."""
+
 from __future__ import annotations
 
 import importlib
@@ -47,11 +48,20 @@ def mock_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRouter]:
 
 
 def _job_payload(
-    job_id: int, *, name: str, status: str = "failed", allow_failure: bool = False,
+    job_id: int,
+    *,
+    name: str,
+    status: str = "failed",
+    allow_failure: bool = False,
 ) -> dict[str, Any]:
     return {
-        "id": job_id, "name": name, "stage": "test", "status": status,
-        "ref": "main", "allow_failure": allow_failure, "pipeline": {"id": 1},
+        "id": job_id,
+        "name": name,
+        "stage": "test",
+        "status": status,
+        "ref": "main",
+        "allow_failure": allow_failure,
+        "pipeline": {"id": 1},
     }
 
 
@@ -62,9 +72,12 @@ def _job_payload(
 
 class TestLogsEmptyJson:
     def test_json_flag_outputs_empty_object_not_a_sentence(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_fetch_logs(*args: object, **kwargs: object) -> list[tuple[str, str]]:
+        async def fake_fetch_logs(
+            *args: object, **kwargs: object
+        ) -> list[tuple[str, str]]:
             return []
 
         monkeypatch.setattr(logs_module, "_fetch_logs", fake_fetch_logs)
@@ -75,9 +88,12 @@ class TestLogsEmptyJson:
         assert json.loads(result.output) == {}
 
     def test_without_json_flag_prints_human_message(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_fetch_logs(*args: object, **kwargs: object) -> list[tuple[str, str]]:
+        async def fake_fetch_logs(
+            *args: object, **kwargs: object
+        ) -> list[tuple[str, str]]:
             return []
 
         monkeypatch.setattr(logs_module, "_fetch_logs", fake_fetch_logs)
@@ -96,13 +112,18 @@ class TestLogsEmptyJson:
 class TestLogsIncludeAllowedFailures:
     def _mock(self, mock_api: respx.MockRouter) -> None:
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1").mock(
-            return_value=Response(200, json={"id": 1, "ref": "main", "status": "failed", "sha": "abc"})
+            return_value=Response(
+                200, json={"id": 1, "ref": "main", "status": "failed", "sha": "abc"}
+            )
         )
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/pipelines/1/jobs").mock(
-            return_value=Response(200, json=[
-                _job_payload(1, name="unit-tests", allow_failure=False),
-                _job_payload(2, name="flaky-e2e", allow_failure=True),
-            ])
+            return_value=Response(
+                200,
+                json=[
+                    _job_payload(1, name="unit-tests", allow_failure=False),
+                    _job_payload(2, name="flaky-e2e", allow_failure=True),
+                ],
+            )
         )
         mock_api.get(f"/projects/{_ENCODED_PROJECT}/jobs/1/trace").mock(
             return_value=Response(200, text="unit log")
@@ -118,7 +139,16 @@ class TestLogsIncludeAllowedFailures:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["--no-cache", "-y", "logs", "--pipeline", "1", "-f", "--include-allowed-failures", "--json"],
+            [
+                "--no-cache",
+                "-y",
+                "logs",
+                "--pipeline",
+                "1",
+                "-f",
+                "--include-allowed-failures",
+                "--json",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert set(json.loads(result.output)) == {"unit-tests", "flaky-e2e"}

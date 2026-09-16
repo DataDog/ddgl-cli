@@ -24,7 +24,10 @@ MOCK_PIPELINES = [
 ]
 
 MOCK_PIPELINE_DETAIL = {
-    "id": 100, "status": "success", "ref": "main", "sha": "abc123",
+    "id": 100,
+    "status": "success",
+    "ref": "main",
+    "sha": "abc123",
     "web_url": "https://gitlab.example.com/p/-/pipelines/100",
     "duration": 299,
     "created_at": "2025-01-01T00:00:00Z",
@@ -32,15 +35,34 @@ MOCK_PIPELINE_DETAIL = {
 }
 
 MOCK_JOBS_PAGE1 = [
-    {"id": 1, "name": "build", "stage": "build", "status": "success",
-     "ref": "main", "pipeline": {"id": 100}},
-    {"id": 2, "name": "test", "stage": "test", "status": "failed",
-     "ref": "main", "failure_reason": "script_failure", "pipeline": {"id": 100}},
+    {
+        "id": 1,
+        "name": "build",
+        "stage": "build",
+        "status": "success",
+        "ref": "main",
+        "pipeline": {"id": 100},
+    },
+    {
+        "id": 2,
+        "name": "test",
+        "stage": "test",
+        "status": "failed",
+        "ref": "main",
+        "failure_reason": "script_failure",
+        "pipeline": {"id": 100},
+    },
 ]
 
 MOCK_JOBS_PAGE2 = [
-    {"id": 3, "name": "deploy", "stage": "deploy", "status": "success",
-     "ref": "main", "pipeline": {"id": 100}},
+    {
+        "id": 3,
+        "name": "deploy",
+        "stage": "deploy",
+        "status": "success",
+        "ref": "main",
+        "pipeline": {"id": 100},
+    },
 ]
 
 
@@ -68,9 +90,15 @@ class TestFetchPipelines:
     ) -> None:
         mock_api.get(
             "/projects/my-group%2Fmy-project/pipelines",
-        ).mock(return_value=_paginated_response(
-            MOCK_PIPELINES, page=1, total_pages=3, next_page=2, total=50,
-        ))
+        ).mock(
+            return_value=_paginated_response(
+                MOCK_PIPELINES,
+                page=1,
+                total_pages=3,
+                next_page=2,
+                total=50,
+            )
+        )
 
         page = await client.fetch_pipelines(ref="main")
 
@@ -87,9 +115,13 @@ class TestFetchPipelines:
     ) -> None:
         mock_api.get(
             "/projects/my-group%2Fmy-project/pipelines",
-        ).mock(return_value=_paginated_response(
-            MOCK_PIPELINES, page=1, total_pages=1,
-        ))
+        ).mock(
+            return_value=_paginated_response(
+                MOCK_PIPELINES,
+                page=1,
+                total_pages=1,
+            )
+        )
 
         page = await client.fetch_pipelines()
         assert page.has_next is False
@@ -105,10 +137,15 @@ class TestIterPipelines:
         )
         route.side_effect = [
             _paginated_response(
-                [MOCK_PIPELINES[0]], page=1, next_page=2, total_pages=2,
+                [MOCK_PIPELINES[0]],
+                page=1,
+                next_page=2,
+                total_pages=2,
             ),
             _paginated_response(
-                [MOCK_PIPELINES[1]], page=2, total_pages=2,
+                [MOCK_PIPELINES[1]],
+                page=2,
+                total_pages=2,
             ),
         ]
 
@@ -121,15 +158,22 @@ class TestIterPipelines:
         assert pages[1].items[0].id == 99
 
     async def test_max_pages_raises(
-        self, client: GitLabClient, mock_api: respx.MockRouter,
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("ddgl.client.MAX_PAGES", 1)
         mock_api.get(
             "/projects/my-group%2Fmy-project/pipelines",
-        ).mock(return_value=_paginated_response(
-            MOCK_PIPELINES, page=1, next_page=2, total_pages=100,
-        ))
+        ).mock(
+            return_value=_paginated_response(
+                MOCK_PIPELINES,
+                page=1,
+                next_page=2,
+                total_pages=100,
+            )
+        )
 
         with pytest.raises(PaginationLimitError, match="1/100"):
             async for _ in client.iter_pipelines():
@@ -145,10 +189,15 @@ class TestGetAllPipelines:
         )
         route.side_effect = [
             _paginated_response(
-                [MOCK_PIPELINES[0]], page=1, next_page=2, total_pages=2,
+                [MOCK_PIPELINES[0]],
+                page=1,
+                next_page=2,
+                total_pages=2,
             ),
             _paginated_response(
-                [MOCK_PIPELINES[1]], page=2, total_pages=2,
+                [MOCK_PIPELINES[1]],
+                page=2,
+                total_pages=2,
             ),
         ]
 
@@ -166,9 +215,15 @@ class TestFetchJobs:
     ) -> None:
         mock_api.get(
             "/projects/my-group%2Fmy-project/pipelines/100/jobs",
-        ).mock(return_value=_paginated_response(
-            MOCK_JOBS_PAGE1, page=1, next_page=2, total_pages=2, total=3,
-        ))
+        ).mock(
+            return_value=_paginated_response(
+                MOCK_JOBS_PAGE1,
+                page=1,
+                next_page=2,
+                total_pages=2,
+                total=3,
+            )
+        )
 
         page = await client.fetch_jobs(100)
 
@@ -187,10 +242,15 @@ class TestIterJobs:
         )
         route.side_effect = [
             _paginated_response(
-                MOCK_JOBS_PAGE1, page=1, next_page=2, total_pages=2,
+                MOCK_JOBS_PAGE1,
+                page=1,
+                next_page=2,
+                total_pages=2,
             ),
             _paginated_response(
-                MOCK_JOBS_PAGE2, page=2, total_pages=2,
+                MOCK_JOBS_PAGE2,
+                page=2,
+                total_pages=2,
             ),
         ]
 
@@ -229,10 +289,15 @@ class TestGetAllJobs:
         )
         route.side_effect = [
             _paginated_response(
-                MOCK_JOBS_PAGE1, page=1, next_page=2, total_pages=2,
+                MOCK_JOBS_PAGE1,
+                page=1,
+                next_page=2,
+                total_pages=2,
             ),
             _paginated_response(
-                MOCK_JOBS_PAGE2, page=2, total_pages=2,
+                MOCK_JOBS_PAGE2,
+                page=2,
+                total_pages=2,
             ),
         ]
 
@@ -264,8 +329,16 @@ class TestGetAllJobs:
         def _respond(request: Any, **kwargs: Any) -> httpx.Response:
             page = int(request.url.params["page"])
             return _paginated_response(
-                [{"id": page, "name": f"job-{page}", "stage": "test", "pipeline": {"id": 100},
-                  "status": "success", "ref": "main"}],
+                [
+                    {
+                        "id": page,
+                        "name": f"job-{page}",
+                        "stage": "test",
+                        "pipeline": {"id": 100},
+                        "status": "success",
+                        "ref": "main",
+                    }
+                ],
                 page=page,
                 next_page=page + 1 if page < n_pages else None,
                 total_pages=n_pages,
@@ -281,15 +354,22 @@ class TestGetAllJobs:
         assert [j.id for j in jobs] == list(range(1, n_pages + 1))
 
     async def test_pages_beyond_max_pages_raises_without_fetching_them(
-        self, client: GitLabClient, mock_api: respx.MockRouter,
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("ddgl.client.MAX_PAGES", 2)
         route = mock_api.get(
             "/projects/my-group%2Fmy-project/pipelines/100/jobs",
-        ).mock(return_value=_paginated_response(
-            MOCK_JOBS_PAGE1, page=1, next_page=2, total_pages=5,
-        ))
+        ).mock(
+            return_value=_paginated_response(
+                MOCK_JOBS_PAGE1,
+                page=1,
+                next_page=2,
+                total_pages=5,
+            )
+        )
 
         with pytest.raises(PaginationLimitError, match="2/5"):
             await client.get_all_jobs(100)
@@ -305,8 +385,16 @@ class TestGetAllJobs:
             if page == 3:
                 return httpx.Response(500, json={"message": "boom"})
             return _paginated_response(
-                [{"id": page, "name": f"job-{page}", "stage": "test", "pipeline": {"id": 100},
-                  "status": "success", "ref": "main"}],
+                [
+                    {
+                        "id": page,
+                        "name": f"job-{page}",
+                        "stage": "test",
+                        "pipeline": {"id": 100},
+                        "status": "success",
+                        "ref": "main",
+                    }
+                ],
                 page=page,
                 next_page=page + 1 if page < 4 else None,
                 total_pages=4,
@@ -390,8 +478,14 @@ class TestRetryJob:
     async def test_returns_new_job(
         self, client: GitLabClient, mock_api: respx.MockRouter
     ) -> None:
-        new_job = {"id": 501, "name": "build", "stage": "build",
-                   "status": "pending", "ref": "main", "pipeline": {"id": 100}}
+        new_job = {
+            "id": 501,
+            "name": "build",
+            "stage": "build",
+            "status": "pending",
+            "ref": "main",
+            "pipeline": {"id": 100},
+        }
         route = mock_api.post(
             "/projects/my-group%2Fmy-project/jobs/1/retry",
         ).mock(return_value=httpx.Response(200, json=new_job))
@@ -530,7 +624,9 @@ class TestRetryOnTransientError:
         assert route.call_count == 3  # HTTP_RETRY_ATTEMPTS: exhausted, then raised
 
     async def test_respects_retry_after_header(
-        self, client: GitLabClient, mock_api: respx.MockRouter,
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         sleeps: list[float] = []
@@ -541,7 +637,9 @@ class TestRetryOnTransientError:
         monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
         route = mock_api.get("/projects/my-group%2Fmy-project/pipelines/100")
         route.side_effect = [
-            httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "7"}),
+            httpx.Response(
+                429, json={"message": "rate limited"}, headers={"retry-after": "7"}
+            ),
             httpx.Response(200, json=MOCK_PIPELINE_DETAIL),
         ]
         await client.get_pipeline(100)
@@ -554,7 +652,9 @@ class TestPostRetrySafety:
     safe to retry. Exercised via retry_job() as a representative caller."""
 
     async def test_429_with_retry_after_is_retried(
-        self, client: GitLabClient, mock_api: respx.MockRouter,
+        self,
+        client: GitLabClient,
+        mock_api: respx.MockRouter,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         sleeps: list[float] = []
@@ -563,11 +663,19 @@ class TestPostRetrySafety:
             sleeps.append(seconds)
 
         monkeypatch.setattr("ddgl.client.asyncio.sleep", _fake_sleep)
-        new_job = {"id": 501, "name": "build", "stage": "build",
-                   "status": "pending", "ref": "main", "pipeline": {"id": 100}}
+        new_job = {
+            "id": 501,
+            "name": "build",
+            "stage": "build",
+            "status": "pending",
+            "ref": "main",
+            "pipeline": {"id": 100},
+        }
         route = mock_api.post("/projects/my-group%2Fmy-project/jobs/1/retry")
         route.side_effect = [
-            httpx.Response(429, json={"message": "rate limited"}, headers={"retry-after": "3"}),
+            httpx.Response(
+                429, json={"message": "rate limited"}, headers={"retry-after": "3"}
+            ),
             httpx.Response(200, json=new_job),
         ]
 
@@ -608,9 +716,7 @@ class TestGetJobLog:
     ) -> None:
         mock_api.get(
             "/projects/my-group%2Fmy-project/jobs/1/trace",
-        ).mock(
-            return_value=httpx.Response(200, text="Build succeeded\nDone.")
-        )
+        ).mock(return_value=httpx.Response(200, text="Build succeeded\nDone."))
 
         log = await client.get_job_log(1)
         assert "Build succeeded" in log
@@ -643,15 +749,21 @@ class TestClientErrors:
 class TestPageModel:
     def test_has_next_true(self) -> None:
         page: Page[int] = Page(
-            items=[1, 2], page=1, next_page=2,
-            total_pages=3, total=6,
+            items=[1, 2],
+            page=1,
+            next_page=2,
+            total_pages=3,
+            total=6,
         )
         assert page.has_next is True
 
     def test_has_next_false(self) -> None:
         page: Page[int] = Page(
-            items=[1, 2], page=3, next_page=None,
-            total_pages=3, total=6,
+            items=[1, 2],
+            page=3,
+            next_page=None,
+            total_pages=3,
+            total=6,
         )
         assert page.has_next is False
 

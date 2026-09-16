@@ -8,12 +8,18 @@ from enum import StrEnum
 DEFAULT_GITLAB_URL = "https://gitlab.com"
 
 MAX_PAGES = 50
-MAX_CONCURRENT_PAGE_FETCHES = 10  # cap on simultaneous in-flight page requests in _get_all
-MAX_CONCURRENT_REQUESTS = 10  # cap on simultaneous in-flight requests in core/'s bulk helpers
+MAX_CONCURRENT_PAGE_FETCHES = (
+    10  # cap on simultaneous in-flight page requests in _get_all
+)
+MAX_CONCURRENT_REQUESTS = (
+    10  # cap on simultaneous in-flight requests in core/'s bulk helpers
+)
 
 HTTP_RETRY_ATTEMPTS = 3  # 1 initial + 2 retries, for a single client HTTP call
 HTTP_RETRY_BACKOFF_INITIAL_SECONDS = 0.5  # delay before retry 1
-HTTP_RETRY_BACKOFF_MULTIPLIER = 2.0  # each subsequent retry's delay is multiplied by this
+HTTP_RETRY_BACKOFF_MULTIPLIER = (
+    2.0  # each subsequent retry's delay is multiplied by this
+)
 
 # attach()'s poll loop: give up after this many CONSECUTIVE poll ticks fail
 # (even after the client's own per-call retries are exhausted), rather than
@@ -22,15 +28,15 @@ MAX_CONSECUTIVE_POLL_FAILURES = 5
 
 # Defaults for RetryPolicy (model/attach.py) / --retry-attempts / --retry-total.
 DEFAULT_JOB_RETRY_ATTEMPTS = 2  # per job name, counting the original run; 0 = unlimited
-DEFAULT_JOB_RETRY_TOTAL = 50    # across the whole attach run; 0 = unlimited
+DEFAULT_JOB_RETRY_TOTAL = 50  # across the whole attach run; 0 = unlimited
 
-CACHE_TTL_TOKEN = 3600.0                  # 1 h   — resolved GitLab tokens
-CACHE_TTL_FINISHED_PIPELINE = 604800.0    # 1 w   — finished pipelines don't change
-CACHE_TTL_FINISHED_JOB = 604800.0         # 1 w   — finished jobs don't change
-CACHE_TTL_API_PIPELINE_LIST = 10.0        # 10 s  — pipeline list browse
-CACHE_TTL_API_PIPELINE = 30.0             # 30 s  — single pipeline detail
-CACHE_TTL_API_JOB_LIST = 15.0             # 15 s  — job list (burst dedup for history tab)
-CACHE_TTL_API_JOB = 60.0                  # 60 s  — single job detail
+CACHE_TTL_TOKEN = 3600.0  # 1 h   — resolved GitLab tokens
+CACHE_TTL_FINISHED_PIPELINE = 604800.0  # 1 w   — finished pipelines don't change
+CACHE_TTL_FINISHED_JOB = 604800.0  # 1 w   — finished jobs don't change
+CACHE_TTL_API_PIPELINE_LIST = 10.0  # 10 s  — pipeline list browse
+CACHE_TTL_API_PIPELINE = 30.0  # 30 s  — single pipeline detail
+CACHE_TTL_API_JOB_LIST = 15.0  # 15 s  — job list (burst dedup for history tab)
+CACHE_TTL_API_JOB = 60.0  # 60 s  — single job detail
 
 
 class HttpMethod(StrEnum):

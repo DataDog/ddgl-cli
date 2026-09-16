@@ -182,9 +182,7 @@ class JobDetailScreen(Screen[None]):
                 with TabbedContent(id="job-tabs"):
                     with TabPane("Log", id="tab-log"):
                         yield LoadingIndicator(id="log-loading")
-                        yield RichLog(
-                            id="job-log", markup=False, highlight=False
-                        )
+                        yield RichLog(id="job-log", markup=False, highlight=False)
                         yield FuzzySearchInput(
                             id="log-search", placeholder="Search log…"
                         )
