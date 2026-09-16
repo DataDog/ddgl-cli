@@ -15,18 +15,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # `uv run` provisions the environment from uv.lock on first use, so no
-  # explicit sync step is needed. UV_LOCKED makes it refuse to run at all if
-  # uv.lock has drifted from pyproject.toml, which is the check an explicit
-  # `uv sync --locked` would otherwise provide.
+  # Fail rather than proceed when uv.lock has drifted from pyproject.toml.
   UV_LOCKED: "1"
 
 jobs:
-  # lint, test and build are mutually independent and intentionally carry no
-  # `needs:`, so all six runners start at once. Each job's `if:` blocks fork
-  # pull requests outright; GitHub has no workflow-level equivalent, so the
-  # condition is repeated rather than centralised in a gate job that would
-  # serialise everything behind it.
+  # lint, test and build declare no `needs:` so they start concurrently.
   lint:
     name: Lint
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -40,14 +33,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          # lint, build and the ubuntu/3.12 test leg run concurrently on the
-          # same OS and Python, so they derive an identical cache key and race
-          # to save it. Scoping per job keeps each save uncontended.
-          cache-suffix: ${{ github.job }}
+          # Distinct per job: concurrent jobs sharing a key race to save it.
+          cache-suffix: lint
 
-      # Called directly rather than through pre-commit: --output-format=github
-      # turns findings into inline annotations on the diff, and these
-      # invocations are read-only where the hooks rewrite files.
       - name: ruff check
         run: uv run ruff check --output-format=github .
 
@@ -60,10 +48,7 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # Only the file-hygiene hooks. The ruff hooks are covered above with
-      # better output and without rewriting files, and testmon would select a
-      # subset where the test job already runs everything on every OS. Also
-      # catches anything committed with --no-verify.
+      # Hygiene hooks only; ruff runs above and the test job covers testmon.
       - name: Run the file-hygiene hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
         env:
@@ -87,13 +72,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          cache-suffix: ${{ github.job }}
+          cache-suffix: test
 
       - name: Run tests
         run: uv run pytest -v --cov --cov-report=
 
-      # Renamed per leg so `coverage combine` in the coverage job sees four
-      # distinct data files rather than four artifacts all called .coverage.
+      # Per-leg name so `coverage combine` sees four files, not four collisions.
       - name: Name the coverage data for this leg
         run: mv .coverage ".coverage.${{ matrix.os }}-${{ matrix.python-version }}"
 
@@ -108,11 +92,7 @@ jobs:
 
   coverage:
     name: Coverage
-    # The only job with a dependency: it aggregates what the matrix produced.
     needs: test
-    # Skipping `test` would skip this job anyway, but this job is the one
-    # holding pull-requests: write, so the fork policy is stated explicitly
-    # here rather than inherited from `needs:`.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -130,7 +110,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-suffix: ${{ github.job }}
+          cache-suffix: coverage
 
       - name: Download coverage data from every matrix leg
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -138,9 +118,7 @@ jobs:
           pattern: coverage-data-*
           merge-multiple: true
 
-      # Combining all four legs matters because shell.py, git.py and the
-      # platformdirs paths differ per OS; gating on Linux alone would fail the
-      # build over lines that macOS does cover.
+      # All four legs, because shell.py and git.py execute different code per OS.
       - name: Combine coverage data
         run: uv run coverage combine
 
@@ -148,8 +126,7 @@ jobs:
         run: uv run coverage report
 
       - name: Comment coverage on the pull request
-        # Skipped on pushes to main, where this action would otherwise want to
-        # persist a badge to a dedicated branch.
+        # On main this action wants to persist a badge to a dedicated branch.
         if: github.event_name == 'pull_request'
         uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
         with:
@@ -160,8 +137,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      # hatch-vcs derives the version from `git describe`, which needs the tag
-      # history. A shallow clone yields a bogus version without failing.
+      # hatch-vcs reads `git describe`; a shallow clone yields a bogus version
+      # without failing.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -173,7 +150,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-suffix: ${{ github.job }}
+          cache-suffix: build
 
       - name: Build wheel and sdist
         run: uv build
@@ -181,9 +158,8 @@ jobs:
       - name: Check distribution metadata
         run: uvx twine check dist/*
 
-      # Installs the artifact we just built into a throwaway environment, so a
-      # broken console script or unreadable version metadata fails here rather
-      # than after publishing.
+      # Catches a broken console script or unreadable version metadata here
+      # rather than after publishing.
       - name: Smoke-test the built wheel
         run: |
           set -euo pipefail
