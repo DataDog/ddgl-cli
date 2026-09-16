@@ -2,9 +2,11 @@
 #     uv run pre-commit install --install-hooks
 #
 # CI runs ruff directly instead of through these hooks, so that lint findings
-# arrive as inline annotations on the diff. It runs the hooks below with
-# SKIP=ruff-check,ruff-format to cover the file-hygiene checks, which have no
-# other enforcement point. Keep the two in step when adding a hook.
+# arrive as inline annotations on the diff, and runs the full test suite across
+# four OS/Python combinations rather than a selected subset. It therefore
+# invokes the hooks below with SKIP=ruff-check,ruff-format,testmon, purely to
+# cover the file-hygiene checks, which have no other enforcement point.
+# Keep that SKIP list in step with the hook ids below.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
@@ -36,4 +38,21 @@ repos:
         entry: uv run ruff format --force-exclude
         language: system
         types_or: [python, pyi]
+        require_serial: true
+
+      # testmon decides which tests a change affects, so it needs to see the
+      # whole tree rather than the staged filenames. The first run after a
+      # clone builds .testmondata and costs a full suite (~35 s); afterwards a
+      # no-op commit is under a second.
+      #
+      # A green run here is a fast signal, not a proof: testmon can only
+      # select tests that already execute the changed code, so edits to
+      # thinly covered modules and changes to import-time constants select
+      # nothing. CI runs the full suite on every OS and is the real gate.
+      - id: testmon
+        name: pytest (tests affected by this change)
+        entry: uv run pytest --testmon -q
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/|pyproject\.toml$|uv\.lock$)
         require_serial: true

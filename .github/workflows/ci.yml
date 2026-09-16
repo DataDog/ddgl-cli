@@ -46,13 +46,14 @@ jobs:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      # Only the file-hygiene hooks: the ruff hooks are covered above with
-      # better output, and they rewrite files rather than reporting. Also
+      # Only the file-hygiene hooks. The ruff hooks are covered above with
+      # better output and without rewriting files, and testmon would select a
+      # subset where the test job already runs everything on every OS. Also
       # catches anything committed with --no-verify.
       - name: Run the file-hygiene hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
         env:
-          SKIP: ruff-check,ruff-format
+          SKIP: ruff-check,ruff-format,testmon
 
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
