@@ -34,7 +34,8 @@ jobs:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      # A failed leg cancels the rest; ci.yml deliberately runs them all out
+      # to show every failure at once.
       # Keep the matrix in step with ci.yml.
       matrix:
         os: [ubuntu-latest, macos-latest]

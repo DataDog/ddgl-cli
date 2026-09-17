@@ -56,7 +56,6 @@ jobs:
 
   coverage:
     name: Coverage
-    # The only job with a dependency: it aggregates what the matrix produced.
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -91,7 +90,5 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Shared with release.yml, which builds at the release tag with the
-      # same checks. See .github/actions/build.
       - name: Build distributions
         uses: ./.github/actions/build
