@@ -748,9 +748,20 @@ so the tag *is* the version.
    be a valid [PEP 440](https://peps.python.org/pep-0440/) version — `v0.4.0`,
    or `v0.4.0rc1` for a prerelease. **Not** `v0.4.0-rc1`, which produces a
    version PyPI rejects.
-2. Publish a release on GitHub against that tag, marking prereleases as such.
-   Anything written in the body is kept; generated notes are appended to it.
-3. `release.yml` takes over.
+2. Create the tag locally and push it:
+
+   ```bash
+   git tag -a v0.4.0 -m "v0.4.0"
+   git push origin v0.4.0
+   ```
+
+   The tag is signed by your local key (`tag.gpgsign`); GitHub needs no
+   signing configuration. Pushing the tag alone triggers nothing — `ci.yml`
+   runs only on pushes to `main`.
+3. Publish a GitHub release **on the existing tag**: *Choose a tag* → select
+   it → publish, marking prereleases as such. Anything written in the body
+   is kept; generated notes are appended to it.
+4. `release.yml` takes over.
 
 ```
 verify ──▶ version-gate ──▶ publish ──▶ release-assets
