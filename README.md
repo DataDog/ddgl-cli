@@ -23,10 +23,16 @@ Requires Python ≥ 3.12.
 
 ```bash
 # Recommended — uv
-uv tool install git+https://github.com/DataDog/ddgl-cli
+uv tool install ddgl
 
 # Or pip
-pip install git+https://github.com/DataDog/ddgl-cli
+pip install ddgl
+```
+
+To track `main` instead of the latest release, install from git:
+
+```bash
+uv tool install git+https://github.com/DataDog/ddgl-cli
 ```
 
 ## Authentication & Configuration
