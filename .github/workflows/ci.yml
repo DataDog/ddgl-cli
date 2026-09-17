@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
@@ -133,38 +132,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      # hatch-vcs reads `git describe`; a shallow clone yields a bogus version
-      # without failing.
-      - name: Check out the repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          cache-suffix: build
-
-      - name: Build wheel and sdist
-        run: uv build
-
-      - name: Check distribution metadata
-        run: uvx twine check dist/*
-
-      # Catches a broken console script or unreadable version metadata here
-      # rather than after publishing.
-      - name: Smoke-test the built wheel
-        run: |
-          set -euo pipefail
-          wheel="$(ls dist/*.whl)"
-          uv run --isolated --no-project --with "${wheel}" ddgl --version
-
-      - name: Upload distributions
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
+      # Shared with release.yml, which builds at the release tag with the
+      # same checks. See .github/actions/build.
+      - name: Build distributions
+        uses: ./.github/actions/build
