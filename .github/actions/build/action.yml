@@ -1,0 +1,39 @@
+name: Build distributions
+description: >-
+  Builds the wheel and sdist at the current checkout, checks their metadata,
+  smoke-tests the wheel's console script, and uploads them as the `dist`
+  artifact. Shared by ci.yml and release.yml.
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: "3.12"
+        enable-cache: true
+        cache-suffix: build
+
+    - name: Build wheel and sdist
+      run: uv build
+      shell: bash
+
+    - name: Check distribution metadata
+      run: uvx twine check dist/*
+      shell: bash
+
+    # Catches a broken console script or unreadable version metadata here
+    # rather than after publishing.
+    - name: Smoke-test the built wheel
+      run: |
+        set -euo pipefail
+        wheel="$(ls dist/*.whl)"
+        uv run --isolated --no-project --with "${wheel}" ddgl --version
+      shell: bash
+
+    - name: Upload distributions
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: dist
+        path: dist/
+        if-no-files-found: error

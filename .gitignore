@@ -212,3 +212,7 @@ __marimo__/
 
 # pytest-testmon
 .testmondata
+
+# `build/` above is for packaging artifacts; the shared CI action lives in
+# .github/actions/build/ and must stay tracked.
+!.github/actions/build/
