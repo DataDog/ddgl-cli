@@ -12,11 +12,48 @@ concurrency:
   # Never cancel a release mid-flight; a partial publish is not recoverable.
   cancel-in-progress: false
 
+env:
+  # Fail rather than proceed when uv.lock has drifted from pyproject.toml.
+  UV_LOCKED: "1"
+
 jobs:
-  # Builds at the tag: hatch-vcs derives the version from git describe, so
-  # the distributions must come from the tagged commit. The test matrix is
-  # not re-run here; a release tags a commit on main, and every main push
-  # already runs the full matrix in ci.yml.
+  # The release is held to the same checks as a pull request, through the
+  # same composite actions ci.yml uses, so a commit that reached main with
+  # checks bypassed fails here rather than at PyPI.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lint
+        uses: ./.github/actions/lint
+
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # Keep the matrix in step with ci.yml.
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Test
+        uses: ./.github/actions/test
+        with:
+          os: ${{ matrix.os }}
+          python-version: ${{ matrix.python-version }}
+
+  coverage:
+    name: Coverage
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Combine and report coverage
+        uses: ./.github/actions/coverage-report
+
+  # hatch-vcs derives the version from git describe, so the distributions
+  # must come from the tagged commit; the action checks out with full
+  # history for that.
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -49,7 +86,8 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: version-gate
+    # Gated on every check, not just the version gate.
+    needs: [lint, test, coverage, version-gate]
     runs-on: ubuntu-latest
     environment:
       name: pypi
