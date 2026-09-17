@@ -764,19 +764,25 @@ so the tag *is* the version.
 4. `release.yml` takes over.
 
 ```
-verify ──▶ version-gate ──▶ publish ──▶ release-assets
+lint ──▶┐
+test ──▶ coverage ──▶ publish ──▶ release-assets
+build ──▶ version-gate ──▶┘
 ```
 
 | Job | Does |
 | --- | --- |
-| `verify` | Runs `ci.yml`: lint, the full test matrix, the coverage floor, and the build |
+| `lint`, `test`, `coverage` | The same checks a pull request runs, via the shared actions in `.github/actions/` |
+| `build` | Builds the wheel and sdist at the tag, via the same action as `ci.yml` |
 | `version-gate` | Refuses to continue unless the built artifact's version equals the tag |
 | `publish` | Uploads to PyPI via trusted publishing (OIDC), no stored token |
 | `release-assets` | Appends generated notes to the release body and attaches the wheel and sdist |
 
-The distributions are built **once**, in `verify`, and passed along as an
-artifact. The bits checked against the tag are the same bits published to PyPI
-and attached to the release.
+The release is held to the same checks as a pull request — same actions, same
+matrix, same coverage floor — so a commit that reached `main` with checks
+bypassed fails at the release, not at PyPI. The distributions are built
+**once**, in `build`, and passed along as an artifact. The bits checked
+against the tag are the same bits published to PyPI and attached to the
+release.
 
 ### Why there is a version gate
 

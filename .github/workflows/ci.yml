@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
@@ -20,73 +19,40 @@ env:
 
 jobs:
   # lint, test and build declare no `needs:` so they start concurrently.
+  # The steps live in composite actions under .github/actions so release.yml
+  # can hold a release to the same checks.
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
+      # Local actions resolve from the workspace, so the repository must be
+      # on disk before `uses: ./.github/actions/...`.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          # Distinct per job: concurrent jobs sharing a key race to save it.
-          cache-suffix: lint
-
-      - name: ruff check
-        run: uv run ruff check --output-format=github .
-
-      - name: ruff format
-        run: uv run ruff format --check --diff .
-
-      - name: Restore the pre-commit cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
-
-      # Hygiene hooks only; ruff runs above and the test job covers testmon.
-      - name: Run the file-hygiene hooks
-        run: uv run pre-commit run --all-files --show-diff-on-failure
-        env:
-          SKIP: ruff-check,ruff-format,testmon
+      - name: Lint
+        uses: ./.github/actions/lint
 
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Keep the matrix in step with release.yml.
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13"]
     steps:
+      # Local actions resolve from the workspace, so the repository must be
+      # on disk before `uses: ./.github/actions/...`.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Test
+        uses: ./.github/actions/test
         with:
+          os: ${{ matrix.os }}
           python-version: ${{ matrix.python-version }}
-          enable-cache: true
-          cache-suffix: test
-
-      - name: Run tests
-        run: uv run pytest -v --cov --cov-report=
-
-      # Per-leg name so `coverage combine` sees four files, not four collisions.
-      - name: Name the coverage data for this leg
-        run: mv .coverage ".coverage.${{ matrix.os }}-${{ matrix.python-version }}"
-
-      - name: Upload coverage data
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-data-${{ matrix.os }}-${{ matrix.python-version }}
-          path: .coverage.*
-          # Coverage data files are dotfiles, which this action skips by default.
-          include-hidden-files: true
-          if-no-files-found: error
 
   coverage:
     name: Coverage
@@ -96,31 +62,14 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # Full history so the comment action can diff against the base branch.
+      # Full history so the coverage comment can diff against the base branch.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          cache-suffix: coverage
-
-      - name: Download coverage data from every matrix leg
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: coverage-data-*
-          merge-multiple: true
-
-      # All four legs, because shell.py and git.py execute different code per OS.
-      - name: Combine coverage data
-        run: uv run coverage combine
-
-      - name: Report coverage and enforce the floor
-        run: uv run coverage report
+      - name: Combine and report coverage
+        uses: ./.github/actions/coverage-report
 
       - name: Comment coverage on the pull request
         # On main this action wants to persist a badge to a dedicated branch.
@@ -133,38 +82,13 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      # hatch-vcs reads `git describe`; a shallow clone yields a bogus version
-      # without failing.
+      # hatch-vcs derives the version from `git describe`; a shallow clone
+      # yields a bogus version without failing.
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          cache-suffix: build
-
-      - name: Build wheel and sdist
-        run: uv build
-
-      - name: Check distribution metadata
-        run: uvx twine check dist/*
-
-      # Catches a broken console script or unreadable version metadata here
-      # rather than after publishing.
-      - name: Smoke-test the built wheel
-        run: |
-          set -euo pipefail
-          wheel="$(ls dist/*.whl)"
-          uv run --isolated --no-project --with "${wheel}" ddgl --version
-
-      - name: Upload distributions
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
+      - name: Build distributions
+        uses: ./.github/actions/build
