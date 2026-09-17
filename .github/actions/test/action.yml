@@ -1,0 +1,44 @@
+name: Test
+description: >-
+  Runs the test suite with coverage on one OS/Python combination, and uploads
+  the coverage data for combining. Shared by ci.yml and release.yml; the
+  caller owns the matrix.
+
+inputs:
+  python-version:
+    description: Python version to provision.
+    required: true
+  os:
+    description: Matrix OS label, used to name the coverage data.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true
+        cache-suffix: test
+
+    - name: Run tests
+      run: uv run pytest -v --cov --cov-report=
+      shell: bash
+
+    # Per-leg name so `coverage combine` sees four files, not four collisions.
+    - name: Name the coverage data for this leg
+      run: mv .coverage ".coverage.${{ inputs.os }}-${{ inputs.python-version }}"
+      shell: bash
+
+    - name: Upload coverage data
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-data-${{ inputs.os }}-${{ inputs.python-version }}
+        path: .coverage.*
+        # Coverage data files are dotfiles, which this action skips by default.
+        include-hidden-files: true
+        if-no-files-found: error

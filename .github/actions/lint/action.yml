@@ -1,0 +1,40 @@
+name: Lint
+description: >-
+  Runs ruff lint and format checks plus the pre-commit hygiene hooks. Shared
+  by ci.yml and release.yml.
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      with:
+        python-version: "3.12"
+        enable-cache: true
+        cache-suffix: lint
+
+    # Called directly rather than through pre-commit: --output-format=github
+    # turns findings into inline annotations on the diff.
+    - name: ruff check
+      run: uv run ruff check --output-format=github .
+      shell: bash
+
+    - name: ruff format
+      run: uv run ruff format --check --diff .
+      shell: bash
+
+    - name: Restore the pre-commit cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+    # Hygiene hooks only; ruff ran above and the test job covers testmon.
+    - name: Run the file-hygiene hooks
+      run: uv run pre-commit run --all-files --show-diff-on-failure
+      shell: bash
+      env:
+        SKIP: ruff-check,ruff-format,testmon
