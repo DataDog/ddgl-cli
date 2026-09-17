@@ -24,6 +24,9 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Lint
         uses: ./.github/actions/lint
 
@@ -37,6 +40,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13"]
     steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Test
         uses: ./.github/actions/test
         with:
@@ -48,16 +54,23 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Combine and report coverage
         uses: ./.github/actions/coverage-report
 
-  # hatch-vcs derives the version from git describe, so the distributions
-  # must come from the tagged commit; the action checks out with full
-  # history for that.
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
+      # Full tag history: hatch-vcs derives the version from git describe.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Build distributions
         uses: ./.github/actions/build
 
