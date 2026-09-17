@@ -1,0 +1,50 @@
+# Release notes generated from conventional commit subjects.
+# Preview with: uvx git-cliff --latest --strip header
+
+[changelog]
+header = ""
+body = """
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits -%}
+- {{ commit.message | split(pat="\n") | first | trim }}
+    {%- if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}](https://github.com/DataDog/ddgl-cli/pull/{{ commit.remote.pr_number }})){% endif %}
+    {%- if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}
+{% endfor %}
+{%- endfor -%}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+# Subjects from before the convention was adopted land in Miscellaneous
+# rather than vanishing from the notes.
+filter_unconventional = false
+filter_commits = false
+protect_breaking_commits = true
+sort_commits = "oldest"
+
+commit_preprocessors = [
+  # Squash merges append the pull request number to the subject; the template
+  # renders it as a link instead of leaving it duplicated. (?m) is required
+  # because these messages have bodies, so $ must match end of line.
+  { pattern = '(?m) \(#[0-9]+\)$', replace = "" },
+]
+
+# The <!-- n --> prefixes only order the sections; striptags removes them.
+commit_parsers = [
+  { message = "^Merge", skip = true },
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^test", group = "<!-- 5 -->Testing" },
+  { message = "^chore\\(deps\\)", group = "<!-- 6 -->Dependencies" },
+  { message = "^(ci|build)", group = "<!-- 7 -->CI & Build" },
+  { message = ".*", group = "<!-- 8 -->Miscellaneous" },
+]
+
+[remote.github]
+owner = "DataDog"
+repo = "ddgl-cli"

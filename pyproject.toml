@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
-    { name = "Pierre-Louis Veyrenc", email = "pierrelouis.veyrenc@datadoghq.com" },
+    { name = "Datadog, Inc.", email = "package@datadoghq.com" },
 ]
 keywords = ["gitlab", "tui", "cli", "devops", "ci"]
 classifiers = [
@@ -34,6 +34,7 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://www.datadoghq.com"
 Repository = "https://github.com/DataDog/ddgl-cli"
 Issues = "https://github.com/DataDog/ddgl-cli/issues"
 
@@ -63,6 +64,9 @@ include = ["src/", "LICENSE", "README.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Release tooling under scripts/ is not shipped in the wheel, so it is not
+# importable as part of the package.
+pythonpath = ["scripts"]
 
 [tool.coverage.run]
 source = ["src/ddgl"]

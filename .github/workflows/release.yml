@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  # Never cancel a release mid-flight; a partial publish is not recoverable.
+  cancel-in-progress: false
+
+jobs:
+  # Reuses ci.yml so a release is held to the same lint, test matrix and
+  # coverage floor as a pull request, and produces the dist artifact the
+  # jobs below consume.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  # Publishing to PyPI cannot be undone, only yanked, so the artifact is
+  # checked against the tag before the irreversible step runs.
+  version-gate:
+    name: Version gate
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download the distributions built by CI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      # --no-project: the script is stdlib-only and needs no project env.
+      - name: Check the built version against the tag
+        run: >-
+          uv run --no-project python scripts/check_release_version.py
+          --tag "${{ github.event.release.tag_name }}" dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: version-gate
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ddgl
+    # Trusted publishing exchanges this token for a short-lived PyPI
+    # credential, so no API token is stored. Deliberately the only
+    # permission here, and no checkout: nothing from the repo is executed.
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions built by CI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  release-assets:
+    name: Changelog and assets
+    needs: publish
+    runs-on: ubuntu-latest
+    # Separate from publish so the OIDC job never also holds write access.
+    permissions:
+      contents: write
+    steps:
+      # Full history: git-cliff reads the commits since the previous tag.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Generate the release notes
+        id: changelog
+        uses: orhun/git-cliff-action@3d96a18cc4ec17e9dc69ddcc424ccafaf1f78ce2 # v4.9.0
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          # Resolves pull request numbers and authors for the notes.
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Download the distributions built by CI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      # append_body preserves whatever was written by hand when cutting the
+      # release, rather than replacing it with the generated notes.
+      - name: Attach the notes and the distributions to the release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          body: ${{ steps.changelog.outputs.content }}
+          append_body: true
+          files: dist/*
+          fail_on_unmatched_files: true
