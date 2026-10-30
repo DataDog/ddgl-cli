@@ -17,7 +17,7 @@ from ddgl.config import load_config
 from ddgl.constants import PipelineScope
 from ddgl.core.pipeline import list_pipelines, resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
-from ddgl.render._console import console
+from ddgl.render._console import EnvPager, console
 from ddgl.render.pipeline import render_pipeline_detail, render_pipeline_table
 
 
@@ -78,7 +78,7 @@ def pipelines_list(
     use_pager = (
         not no_pager and console.is_terminal and len(result) + 5 > console.height
     )
-    with console.pager(styles=True) if use_pager else nullcontext():
+    with console.pager(EnvPager(), styles=True) if use_pager else nullcontext():
         render_pipeline_table(result, ref=resolved_ref)
 
 
