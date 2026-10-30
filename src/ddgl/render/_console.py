@@ -17,4 +17,6 @@ class EnvPager(Pager):
     # Rich's default pager defers to pydoc, which prefers $MANPAGER: that is often a man-specific
     # filter (e.g. `col -b`) that strips the escape bytes and leaves garbage like `1;36m...0m`.
     def show(self, content: str) -> None:
+        # Same default as git: keep colors (R), quit if one screen (F), don't clear on exit (X).
+        os.environ.setdefault("LESS", "FRX")
         pydoc.pipepager(content, os.environ.get("PAGER") or "less")
