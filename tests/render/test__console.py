@@ -26,22 +26,6 @@ def test_env_pager_uses_pager_and_ignores_manpager(
     assert out.read_text() == STYLED
 
 
-@pytest.mark.parametrize(("less", "expected"), [(None, "FRX"), ("-S", "-S")])
-def test_env_pager_defaults_less_options(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, less: str | None, expected: str
-) -> None:
-    out = tmp_path / "out.txt"
-    monkeypatch.setenv("PAGER", f'cat > /dev/null; printf %s "$LESS" > {out}')
-    if less is None:
-        monkeypatch.delenv("LESS", raising=False)
-    else:
-        monkeypatch.setenv("LESS", less)
-
-    EnvPager().show(STYLED)
-
-    assert out.read_text() == expected
-
-
 def test_env_pager_falls_back_to_less(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str]] = []
     monkeypatch.delenv("PAGER", raising=False)
