@@ -12,7 +12,7 @@ import rich_click as click
 
 from ddgl.format import TraceOptions, format_trace, to_json
 from ddgl.format._options import trace_format_options
-from ddgl.render._console import console
+from ddgl.render._console import EnvPager, console
 
 
 @click.command()
@@ -57,6 +57,6 @@ def format_cmd(
     renderables = format_trace(text, options)
 
     use_pager = not no_pager and console.is_terminal
-    with console.pager(styles=True) if use_pager else nullcontext():
+    with console.pager(EnvPager(), styles=True) if use_pager else nullcontext():
         for item in renderables:
             console.print(item, highlight=False)

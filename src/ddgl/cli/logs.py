@@ -36,7 +36,7 @@ from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 from ddgl.format import TraceOptions, format_trace, strip_ansi
 from ddgl.format._options import trace_format_options
-from ddgl.render._console import console
+from ddgl.render._console import EnvPager, console
 from ddgl.render.log import render_log_section
 
 
@@ -145,7 +145,7 @@ def logs(
         )
 
     use_pager = not no_pager and console.is_terminal
-    with console.pager(styles=True) if use_pager else nullcontext():
+    with console.pager(EnvPager(), styles=True) if use_pager else nullcontext():
         for name, text in results:
             if raw:
                 render_log_section(name, [Text(text)])

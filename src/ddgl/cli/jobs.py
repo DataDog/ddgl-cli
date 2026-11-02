@@ -25,7 +25,7 @@ from ddgl.core.pipeline import resolve_pipeline
 from ddgl.exceptions import ConfigError, NoPipelineFoundError, NotFoundError
 from ddgl.model.job import Job
 from ddgl.model.pipeline import Pipeline
-from ddgl.render._console import console
+from ddgl.render._console import EnvPager, console
 from ddgl.render.job import render_job_detail, render_job_table
 
 
@@ -91,7 +91,7 @@ def jobs_list(
     # Skip pager when filters are active — result is likely short.
     has_filters = bool(failed_only or stage or name_pattern)
     use_pager = not no_pager and console.is_terminal and not has_filters
-    with console.pager(styles=True) if use_pager else nullcontext():
+    with console.pager(EnvPager(), styles=True) if use_pager else nullcontext():
         render_job_table(result, pipeline=pipeline)
 
 
@@ -213,7 +213,7 @@ def jobs_get(
     # Skip pager when any filter narrows the result.
     has_filters = bool(failed_only or stage or name_pattern or job_id is not None)
     use_pager = not no_pager and console.is_terminal and not has_filters
-    with console.pager(styles=True) if use_pager else nullcontext():
+    with console.pager(EnvPager(), styles=True) if use_pager else nullcontext():
         for j in matched:
             render_job_detail(j)
             click.echo()
