@@ -74,7 +74,7 @@ jobs:
       - name: Comment coverage on the pull request
         # On main this action wants to persist a badge to a dedicated branch.
         if: github.event_name == 'pull_request'
-        uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
+        uses: py-cov-action/python-coverage-comment-action@281cb0dcb5b15d4773037d51873558fddc5a7df8 # v4.7
         with:
           GITHUB_TOKEN: ${{ github.token }}
 
